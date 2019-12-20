@@ -83,10 +83,11 @@ class Batcher:
                         sorter = np.argsort(sorter)
                         for axis_name, axis_i in zip([id_name, 'idx', (f"idx_{i+2}" for i in range(len(col.shape[2:])))], range(len(col.shape))):
                             other_table[axis_name] = (
-                                np.arange(col.shape[axis_i])
-                                    .reshape(tuple(1 for _ in col.shape[:axis_i]) + (-1,) + (1 for _ in col.shape[axis_i + 1]))
-                                    .tile(tuple(n for n in col.shape[:axis_i]) + (1,) + (n for n in col.shape[axis_i + 1]))
-                                    .reshape(-1)
+                                np.tile(
+                                    np.arange(col.shape[axis_i]).reshape(
+                                        tuple(1 for _ in col.shape[:axis_i]) + (-1,) + tuple(1 for _ in col.shape[axis_i + 1:])
+                                    ),
+                                    tuple(n for n in col.shape[:axis_i]) + (1,) + tuple(n for n in col.shape[axis_i + 1:])).reshape(-1)
                             )[sorter]
         if not inplace:
             return self
