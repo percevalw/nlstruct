@@ -625,29 +625,18 @@ def make_base_converter(symbol_from_expr_mapping):
     return apply
 
 
-def encode_with_label_scheme(labels, classifiers, atom_level, label_col_name="label"):
+def preprocess_label_scheme(classifiers):
     """
 
     Parameters
     ----------
-    labels: pd.DataFrame
-        Columns:
-            - label
     classifiers: list of nlp.logic.ClassifierDescription
-    atom_level: str
-        The id name of each unique atom being classified in the scheme (ex: mention_id)
-    label_col_name: str
-        The col name of the labels
 
     Returns
     -------
-    pd.DataFrame, function, function
+    function, function, list, list
     """
     c = classifiers[0].output_spaces[0].any_factory()
-    labels["_id"], inverse_labels_rows = labels.nlp.factorize(subset=atom_level, return_rows=True)
-    # Since we are going to overrwrite the label columnn, drop it from the original rows we're going to concatenate with
-    # the output at the end of the function
-    inverse_labels_rows = inverse_labels_rows.drop(columns=[label_col_name])
 
     source_symbols = set()
     coded_classifiers_outputs = []
@@ -704,6 +693,31 @@ def encode_with_label_scheme(labels, classifiers, atom_level, label_col_name="la
     code_from_source_translator = make_base_converter(code_from_source_mapping)  # function(source_expr_mat) -> codes_mat
     source_from_code_translator = make_base_converter(source_from_code_mapping)  # function(code_expr_mat) -> sources_mat
 
+    return code_from_source_translator, source_from_code_translator, source_symbols, coded_symbols
+
+
+def encode_labels(labels, code_from_source_translator, coded_symbols, source_symbols, atom_level, label_col_name="label"):
+    """
+
+    Parameters
+    ----------
+    labels: pd.DataFrame
+        Columns:
+            - label
+    atom_level: str
+        The id name of each unique atom being classified in the scheme (ex: mention_id)
+    label_col_name: str
+        The col name of the labels
+
+    Returns
+    -------
+
+    """
+    labels["_id"], inverse_labels_rows = labels.nlp.factorize(subset=atom_level, return_rows=True)
+    # Since we are going to overrwrite the label columnn, drop it from the original rows we're going to concatenate with
+    # the output at the end of the function
+    inverse_labels_rows = inverse_labels_rows.drop(columns=[label_col_name])
+
     labels = labels[labels[label_col_name].isin([s.name for s in source_symbols])].copy()
     labels[label_col_name] = labels[label_col_name].astype(pd.CategoricalDtype([s.name for s in source_symbols]))
     csr = df_to_csr(labels["_id"], labels[label_col_name])
@@ -714,7 +728,7 @@ def encode_with_label_scheme(labels, classifiers, atom_level, label_col_name="la
     labels['relative_idx'] = labels[label_col_name].cat.codes.apply(lambda label: coded_symbols[label].relative_idx)
     labels = pd.concat([labels.reset_index(drop=True), inverse_labels_rows.iloc[labels["_id"]].reset_index(drop=True)], axis=1)
     labels = labels.drop(columns=["_id"])
-    return labels, code_from_source_translator, source_from_code_translator, source_symbols, coded_symbols
+    return labels
 
 
 multiclass = Multiclass
