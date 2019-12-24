@@ -8,7 +8,10 @@ from tqdm import tqdm
 from nlstruct.core.cache import cached
 
 
-def mimic_sentencize_(docs, max_sentence_length=70, n_threads=32, with_tqdm=True):
+def newline_sentencize_(docs, max_sentence_length=70, n_threads=1,
+                        reg_split=r"((?:\s*\n)+\s*)",
+                        reg_token=r"[\w*]+|[^\w\s\n*]",
+                        with_tqdm=True):
     """
     Simple split MIMIC docs into sentences:
     - sentences bounds are found when multiple newline occurs
@@ -29,13 +32,13 @@ def mimic_sentencize_(docs, max_sentence_length=70, n_threads=32, with_tqdm=True
         text_chunks = np.array_split(np.arange(len(docs)), n_threads)
         pool = ProcessPool(nodes=n_threads)
         pool.restart(force=True)
-        results = [pool.apipe(mimic_sentencize_, docs.iloc[chunk], max_sentence_length, 1, with_tqdm=False) for chunk in text_chunks]
+        results = [pool.apipe(newline_sentencize_, docs.iloc[chunk], max_sentence_length, 1, with_tqdm=False) for chunk in text_chunks]
         results = [r.get() for r in results]
         pool.close()
         return pd.concat(results, ignore_index=True)
 
-    reg_split = re.compile(r"(\s*\n\s*\n\s*)")
-    reg_token = re.compile(r"[\w*]+|[^\w\s\n*]")
+    reg_split = re.compile(reg_split)
+    reg_token = re.compile(reg_token)
     doc_ids = []
     sentence_ids = []
     begins = []
@@ -78,5 +81,10 @@ def mimic_sentencize_(docs, max_sentence_length=70, n_threads=32, with_tqdm=True
 
 
 @cached(ignore=["n_threads", "with_tqdm"])
-def mimic_sentencize(texts, max_sentence_length=70, n_threads=32, with_tqdm=True):
-    return mimic_sentencize_(texts, max_sentence_length, n_threads, with_tqdm)
+def mimic_sentencize(texts, max_sentence_length=70, n_threads=1, with_tqdm=True):
+    return newline_sentencize_(texts, max_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
+
+
+@cached(ignore=["n_threads", "with_tqdm"])
+def newline_sentencize(texts, max_sentence_length=70, n_threads=1, with_tqdm=True):
+    return newline_sentencize_(texts, max_sentence_length, reg_split=r"((?:\s*\n){2,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
