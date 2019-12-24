@@ -329,7 +329,7 @@ def partition_spans(smalls, large, overlap_policy="merge", new_id_name="sample_i
         has_created_new_id_col = False
         for small in smalls:
             doc_id_cols, small_id_cols, large_id_cols, small_val_cols, large_val_cols = preprocess_ids(large, small)
-            large_id_cols = [c for c in large_id_cols if c != new_id_name]
+            large_id_cols = [c for c in large_id_cols]
             # Merge sentences and mentions
             merged = merge_with_spans(small, large, span_policy=span_policy, how='right', on=[*doc_id_cols, ("begin", "end")])
             # If a mention overlap multiple sentences, assign it to the last sentence
@@ -347,7 +347,7 @@ def partition_spans(smalls, large, overlap_policy="merge", new_id_name="sample_i
             merged["end"] = merged[['end_x', 'end_y']].max(axis=1)
             large = (merged
                      .groupby(new_id_name, as_index=False)
-                     .agg({**{n: 'first' for n in doc_id_cols}, 'begin': 'min', 'end': 'max'})
+                     .agg({**{n: 'first' for n in [*doc_id_cols, *large_id_cols] if n != new_id_name}, 'begin': 'min', 'end': 'max'})
                      .astype({"begin": int, "end": int, **large[doc_id_cols].dtypes}))
             large = large[doc_id_cols + [new_id_name] + ["begin", "end"]]
             old_to_new = large[doc_id_cols + [new_id_name]].drop_duplicates().reset_index(drop=True)
@@ -374,13 +374,14 @@ def partition_spans(smalls, large, overlap_policy="merge", new_id_name="sample_i
                 .astype({"begin": int, "end": int})[[*doc_id_cols, *merged_id_cols, *small_id_cols, *small_val_cols, "begin", "end"]])
         if new_id_name:
             new_small[original_new_id_name] = new_small[list(set((*doc_id_cols, new_id_name)))].apply(
-                lambda x: "/".join([str(x[c]) for c in list(doc_id_cols) + ([new_id_name] if new_id_name not in doc_id_cols else [])]), axis=1).astype("category")
+                lambda x: "/".join([str(x[c]) for c in list(doc_id_cols) + ([new_id_name] if new_id_name not in doc_id_cols else [])]), axis=1)
             new_small = new_small.drop(columns={*doc_id_cols, new_id_name} - {original_new_id_name})
         new_smalls.append(new_small)
     if new_id_name:
         large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category")
         large = large.drop(columns={*doc_id_cols, new_id_name} - {original_new_id_name})
         old_to_new[original_new_id_name] = old_to_new[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category")
+    new_smalls = [small.astype({original_new_id_name: large[original_new_id_name].dtype}) for small in new_smalls]
     return new_smalls, large, old_to_new
 
 
@@ -389,7 +390,7 @@ def split_into_spans(large, small, pos_col=None):
         pos_col = next(iter(c for c in small.columns if c.endswith("_pos")))
     small = small.nlp.partition(large)
     doc_id_cols, small_id_cols, large_id_cols, small_val_cols, large_val_cols = preprocess_ids(large, small)
-    return large[[*doc_id_cols, *large_id_cols, *large_val_cols]].merge(
+    res = large[[*doc_id_cols, *large_id_cols, *large_val_cols]].merge(
         small
             .eval(f"""
             begin={pos_col}
@@ -397,4 +398,5 @@ def split_into_spans(large, small, pos_col=None):
             .groupby(doc_id_cols, as_index=False)
             .agg({"begin": "min", "end": "max"})
     )
+    return res
     # .sort_values([*doc_id_cols, "begin", *large_id_cols]))

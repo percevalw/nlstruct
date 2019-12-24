@@ -7,7 +7,7 @@ from nlstruct.core.pandas import merge_with_spans
 def merge_pred_and_gold(
       pred, gold,
       on=('doc_id', ('begin', 'end'), 'label'), span_policy='partial_strict',
-      atom_pred_level='pred_label_id', atom_gold_level='gold_label_id', suffixes=('_pred', '_gold')):
+      atom_pred_level=None, atom_gold_level=None, suffixes=('_pred', '_gold')):
     """
     Performs an outer merge between pred and gold that can be in 3 configurations:
     - (pred == nan, gold != nan) => pred_count = 0, gold_count = 1, tp = 0
@@ -34,8 +34,16 @@ def merge_pred_and_gold(
         pred = pred.assign(_pred_id=pred[atom_pred_level].nlp.factorize())
         atom_pred_level = '_pred_id'
         delete_atom_pred_level = True
+    elif atom_pred_level is None:
+        pred = pred.assign(_pred_id=np.arange(len(pred)))
+        atom_pred_level = '_pred_id'
+        delete_atom_pred_level = True
     if isinstance(atom_gold_level, (list, tuple)):
         gold = gold.assign(_gold_id=gold[atom_gold_level].nlp.factorize())
+        atom_gold_level = '_gold_id'
+        delete_atom_gold_level = True
+    elif atom_gold_level is None:
+        gold = gold.assign(_gold_id=np.arange(len(gold)))
         atom_gold_level = '_gold_id'
         delete_atom_gold_level = True
 
