@@ -13,7 +13,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/perceval/nlstruct",
     packages=setuptools.find_packages(),
-    package_data={'': ['LICENSE', 'README', 'example.env']},
+    package_data={'': ['example.env']},
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
