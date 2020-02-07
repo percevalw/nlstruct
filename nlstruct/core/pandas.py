@@ -9,37 +9,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph._traversal import connected_components
 
 
-def get_constructor(X):
-    """When applying StackSequences(estimator=...), and not aggregating/grouping in the given
-    estimator, we automatically return a frame with sequences and we want to have the same
-    collection type in the output as in the input
-    (tuple->tuple, list->list, np.ndarray->np.ndarray)
-    With numpy arrays, we cannot construct an instance using the object type ndarray, but instead
-    using np.array. This function handles this special case
-    """
-    if isinstance(X, np.ndarray):
-        return np.array
-    else:
-        return type(X)
-
-
 def get_sequence_length(obj):
-    """
-    Get the "sequence length", even for object that are not sequences !
-    If the object is a scalar, it returns -1 (a code we will use later to compute rationales)
-    Also, if the object is a list of None, it counts as None, count it as so we mark it as -1
-    Else, give the object length
-    Parameters
-    ----------
-    obj: typing.Iterable or typing.Sized or Any
-    Returns
-    -------
-    int
-        - the length if it is a normal non-null sequence not full of None
-        - -1 if it is not a sequence
-        - -2 if it is a sequence full of None
-    """
-    # noinspection PyTypeChecker
     if isinstance(obj, str) or not isinstance(obj, Sized):
         return -1
     elif isinstance(obj, Sized) and all(not isinstance(i, Sized) and pd.isnull(i) for i in obj):
@@ -48,12 +18,12 @@ def get_sequence_length(obj):
         return len(obj)
 
 
-def stack_sequences_frame(frame,
-                          index_name=None,
-                          as_index=False,
-                          keep_na=False,
-                          columns=None,
-                          tile_index=False):
+def flatten(frame,
+            index_name=None,
+            as_index=False,
+            keep_na=False,
+            columns=None,
+            tile_index=False):
     """
     Flatten the input before the transformation
     Parameters
@@ -89,7 +59,7 @@ def stack_sequences_frame(frame,
         raise Exception("as_index must be str or bool, and if str, index_name must be None")
 
     if isinstance(frame, pd.Series):
-        res = stack_sequences_frame(pd.DataFrame({"X": frame}), index_name, as_column, keep_na, columns, tile_index)
+        res = flatten(pd.DataFrame({"X": frame}), index_name, as_column, keep_na, columns, tile_index)
         new_frame = res[0]["X"]
         new_frame.name = frame.name
         return (new_frame, *res[1:])
@@ -101,7 +71,6 @@ def stack_sequences_frame(frame,
     assert keep_na in ('null_index', 'as_single_item', 'remove')
 
     assert isinstance(frame, pd.DataFrame), "Can only flatten DataFrame"
-    sequence_constructor = None
     if columns is None:
         columns = frame.columns
     elif not isinstance(columns, (tuple, list)):
@@ -142,8 +111,6 @@ def stack_sequences_frame(frame,
     for col_name, col in frame.iteritems():
         for obj, res_length, length in zip(col.values, result_lengths, selected_lengths[col_name]):
             if length >= 0:  # we have a normal sequence
-                if sequence_constructor is None:
-                    sequence_constructor = get_constructor(obj)
                 flattened[col_name].append(obj if isinstance(obj, pd.Series) else pd.Series(obj))
 
             # Otherwise it a non sequence, create as many rows as needed for it
@@ -196,15 +163,7 @@ def stack_sequences_frame(frame,
             flattened.reset_index(inplace=True, drop=True)
     # flattened.index = flattened.index.remove_unused_levels()
 
-    return (
-        flattened,
-        lengths,
-        sequence_constructor,
-    )
-
-
-def flatten(X, *args, **kwargs):
-    return stack_sequences_frame(X, *args, **kwargs)[0]
+    return flattened
 
 
 def make_merged_names(left_span_names, right_span_names, left_on, right_on, left_columns, right_columns,
@@ -342,6 +301,8 @@ def merge_with_spans(
                         results.append(merged.iloc[chunk_i:chunk_i + chunk_size].query(f'({right_end} >= {left_begin} and {left_end} >= {right_begin})'))
                     elif span_policy == "exact":
                         results.append(merged.iloc[chunk_i:chunk_i + chunk_size].query(f'({left_begin} == {right_begin} and {left_end} == {right_end})'))
+                    else:
+                        results.append(merged.iloc[chunk_i:chunk_i + chunk_size].query(span_policy))
                 if len(results):
                     merged = pd.concat(results, sort=False, ignore_index=True)
                 else:
@@ -394,7 +355,7 @@ def make_id_from_merged(*indices_arrays, same_ids=False, apply_on=None):
     Compute new ids from connected components by looking at `indices_arrays`
     Parameters
     ----------
-    indices_arrays: any
+    indices_arrays: collections.Sequence
         1d array of positive integers
     same_ids: bool
         Do the multiple arrays represent the same ids ? (a 3 in one column should therefore be
@@ -435,173 +396,6 @@ def make_id_from_merged(*indices_arrays, same_ids=False, apply_on=None):
         ]
 
 
-def aggregate_on(frame, on, **kwargs):
-    """
-    Same as groupby but selected levels for grouping are all levels except `on`
-    Parameters
-    ----------
-    frame: pd.DataFrame or pd.Series
-    on: list of (str or int)
-        Level not to group on
-    Returns
-    -------
-    pd.DataFrame or pd.Series
-    """
-    if not isinstance(on, (tuple, list)):
-        on = [on]
-    levels = [i if n is None else n for i, n in enumerate(frame.index.names) if n not in on]
-    return frame.groupby(level=levels, **kwargs)
-
-
-def get_explicit_index_names(index, prefix="_level_"):
-    if isinstance(index, pd.MultiIndex):
-        return np.array([prefix + str(i) if n is None else n for i, n in enumerate(index.names)])
-    elif index.name is None:
-        return np.array([prefix + '0'])
-    else:
-        return index.names
-
-
-def align_frames(frame1, frame2, how="left", keep_order=True):
-    """
-    Aligns a pandas frame, (Sparse)Series/DataFrame on a new index
-    /!\ You must not have duplicated index values, each row must be uniquely identifiable
-        otherwise the result is undefined
-    Think of this operation like frame being a corrupted version of the data with missing rows
-    or two many rows for example, an index being the clean reference we want to align on
-    Multiple cases can happen:
-    - if an index level is in `frame` but not `index`, it is kept
-    - if an index level is not in `frame` but in `index`, it is added
-    - if an index level exists in `frame` and `index`, the kept values depend on the join policy
-    Pandas already has a method .align() to perform this kind of operation but
-    1. it does not work with MultiIndex
-    2. it index values where lost (ex a sample) in frame, align does not recover it
-    Parameters
-    ----------
-    frame1: pandas.DataFrame or pandas.Series
-    frame2: pandas.DataFrame or pandas.Series
-    how: str
-        "inner", "outer", "left", "right"
-        How to perform merge between the two frames' indexes
-    keep_order: bool
-        Should we ensure to keep the row order during merge
-        For example, if you merge a dataframe containing all the samples and an index with a type
-        like sample_type, with a dataframe containing whose index contains only the sample_type
-        You should lose the order of the sample when performing "inner"/"outer" joins since
-        sample_id is not part of the merged index.
-        You do not have to worry about this when the index you don't want to mess up is part of
-        the merged indexes
-    Returns
-    -------
-    pandas.DataFrame or pandas.Series
-    """
-
-    # We are going to perform inplace ops on `frame1` and `frame2` so copy it now
-    new_frame1 = frame1.copy()
-    new_frame2 = frame2.copy()
-
-    # We will need to change names used in `index` because
-    # performing reset_index with names like None have unpredictable results
-    # ex: None -> "0"
-    # So we decide now a new explicit name for each index level
-    index_name_map = {}
-
-    frame1_index_names = get_explicit_index_names(new_frame1.index)
-    index_name_map.update(dict(zip(frame1_index_names, new_frame1.index.names)))
-    if isinstance(new_frame1.index, pd.MultiIndex):
-        new_frame1.index.names = frame1_index_names
-    else:
-        new_frame1.index.name = frame1_index_names[0]
-    if isinstance(new_frame1, pd.DataFrame):
-        new_frame1.columns = ["_col1_" + c for c in new_frame1.columns]
-    else:
-        new_frame1 = pd.DataFrame({"_col1_": new_frame1})
-
-    # Idem from levels of frame2's index
-    frame2_index_names = get_explicit_index_names(new_frame2.index)
-    index_name_map.update(dict(zip(frame2_index_names, new_frame2.index.names)))
-    if isinstance(new_frame2.index, pd.MultiIndex):
-        new_frame2.index.names = frame2_index_names
-    elif new_frame2.index.name is None:
-        new_frame2.index.name = frame2_index_names[0]
-    if isinstance(new_frame2, pd.DataFrame):
-        new_frame2.columns = ["_col2_" + c for c in new_frame2.columns]
-    else:
-        new_frame2 = pd.DataFrame({"_col2_": new_frame2})
-
-    # Now we pass every index of the `index` and `frame` in the columns with reset_index
-    new_frame2 = new_frame2.reset_index()
-    new_frame1 = new_frame1.reset_index()
-
-    # We will merge our new two dataframe, on overlapping index names
-    # Default behavior of merge but it is better to explicit it
-    merge_on = list(np.intersect1d(frame1_index_names, frame2_index_names))
-
-    # + we reorder levels to have the ref index level first, and the frame new levels after
-    index_by = list(pd.unique([*frame1_index_names, *frame2_index_names]))
-
-    # When the first index level is not in the merged indexes, how = "inner" / "outer" lose the
-    # rows order: ie our samples can be completely shuffled after aligning the two frames together
-    # If however the first index level is in the merged index, then order will be kept and
-    # no further computation is needed around pd.merge
-    if merge_on[0] == frame1_index_names[0]:
-        # It will be kept
-        keep_order = False
-
-    # If we want inner merge between indexes, then we perform left merge and remove
-    # rows of the second frame that did not exist before (_original_position2 is NaN)
-    # If we want outer merge between indexes, then let pandas perform outer merge and
-    # reorder rows
-    # https://stackoverflow.com/a/28334396/6067181
-    merge_how = how
-    if keep_order and how == "outer":
-        new_frame1["_original_position1"] = np.arange(len(new_frame1))
-        new_frame2["_original_position2"] = np.arange(len(new_frame2))
-    elif keep_order and how == "inner":
-        new_frame2["_original_position2"] = np.arange(len(new_frame2))
-        merge_how = "left"
-
-    # Perform the merge between indexes
-    new_frame = new_frame1.merge(
-        new_frame2,
-        how=merge_how,
-        on=merge_on)
-
-    if keep_order and how == "inner":
-        # as planned, remove rows that had no match in frame2
-        new_frame = new_frame[~pd.isnull(new_frame["_original_position2"])]
-        del new_frame["_original_position2"]
-    elif keep_order and how == "outer":
-        # as planned, remove rows that had no match in frame2
-        new_frame.sort_values(by=["_original_position1", "_original_position2"])
-        del new_frame["_original_position1"]
-        del new_frame["_original_position2"]
-
-    # Move the index values from the columns to the index and rename name like before
-    new_frame.set_index(index_by, inplace=True)
-    new_frame.index.names = [index_name_map[n] for n in index_by]
-
-    # Separate the two aligned dataframe and recover their indexes
-    new_frame1 = new_frame[[c for c in new_frame.columns if c.startswith("_col1_")]]
-    new_frame2 = new_frame[[c for c in new_frame.columns if c.startswith("_col2_")]]
-    new_frame1.columns = [c[6:] for c in new_frame1.columns]
-    new_frame2.columns = [c[6:] for c in new_frame2.columns]
-
-    if isinstance(frame1, pd.Series):
-        new_frame1 = new_frame1.iloc[:, 0]
-        new_frame1.name = frame1.name
-    if isinstance(frame2, pd.Series):
-        new_frame2 = new_frame2.iloc[:, 0]
-        new_frame2.name = frame2.name
-    return new_frame1, new_frame2
-
-
-def align_frame(frame, ref):
-    if isinstance(ref, pd.Index):
-        ref = pd.DataFrame({}, index=ref)
-    return align_frames(ref, frame)[1]
-
-
 def df_to_csr(rows, cols, data=None, n_rows=None, n_cols=None):
     """
     Transforms a dataframe into a csr_matrix
@@ -633,6 +427,31 @@ def df_to_csr(rows, cols, data=None, n_rows=None, n_cols=None):
     else:
         n_cols = n_cols or (cols.max() + 1)
     return csr_matrix((np.asarray(data), (np.asarray(rows), np.asarray(cols))), shape=(n_rows, n_cols))
+
+
+def df_to_flatarray(rows, data, n_rows=None):
+    """
+    Transforms a dataframe into a flat array
+
+    Parameters
+    ----------
+    data: pd.Series
+        Data column (column full one True will be used if None)
+    rows: pd.Series
+        Column containing row indices (can be Categorical and then codes will be used)
+    n_rows: int
+    Returns
+    -------
+    np.ndarray
+    """
+    if hasattr(rows, 'cat'):
+        n_rows = len(rows.cat.categories)
+        rows, rows_cat = rows.cat.codes, rows.cat.categories
+    else:
+        n_rows = n_rows or (rows.max() + 1)
+    res = np.zeros(n_rows, dtype=data.dtype)
+    res[rows] = np.asarray(data)
+    return res
 
 
 def csr_to_df(csr, row_categories=None, col_categories=None, row_name=None, col_name=None, value_name=None):
@@ -682,176 +501,65 @@ def csr_to_df(csr, row_categories=None, col_categories=None, row_name=None, col_
     return pd.concat(res, axis=1)
 
 
-def group_as_sequences(data, by=None, on=None, sequence_constructor=None, as_index=False):
-    if isinstance(data, pd.Series):
-        res = group_as_sequences(pd.DataFrame({"data": data}), by, sequence_constructor)
-        return res["data"]
-    if on is not None and not isinstance(on, (list, tuple)):
-        on = [on]
-    if by is None:
-        by = list(set(data.columns) - set(on))
-    data = data.set_index(by)
-    groups = pd.Series(np.arange(len(data)), index=data.index)
-    if by is None:
-        sizes = aggregate_on(groups, on, observed=True).size()
-        nulls = aggregate_on(groups, on, observed=True).first().isnull()
+def factorize_rows(rows, categories=None, group_nans=True, subset=None, freeze_categories=True, return_categories=True):
+    if not isinstance(rows, list):
+        was_list = False
+        all_rows = [rows]
     else:
-        sizes = groups.groupby(level=by, observed=True).size()
-        nulls = groups.groupby(level=by, observed=True).first().isnull()
+        all_rows = rows
+        was_list = True
+    del rows
+    not_null_subset = (subset if subset is not None else all_rows[0].columns if hasattr(all_rows[0], 'columns') else [all_rows[0].name])
+    cat_arrays = [[] for _ in not_null_subset]
+    for rows in (categories, *all_rows) if categories is not None else all_rows:
+        for (col_name, col), dest in zip(([(0, rows)] if len(rows.shape) == 1 else rows[subset].items() if subset is not None else rows.items()), cat_arrays):
+            dest.append(np.asarray(col))
+    cat_arrays = [np.concatenate(arrays) for arrays in cat_arrays]
+    is_not_nan = None
+    if not group_nans:
+        is_not_nan = ~pd.isna(np.stack(cat_arrays, axis=1)).any(1)
+        cat_arrays = [arrays[is_not_nan] for arrays in cat_arrays]
+    if len(cat_arrays) > 1:
+        relative_values, unique_values = pd.factorize(fast_zip(cat_arrays))
+    else:
+        relative_values, unique_values = pd.factorize(cat_arrays[0])
+    if freeze_categories and categories is not None:
+        relative_values[relative_values > len(categories)] = -1
+    if not group_nans:
+        new_relative_values = np.full(is_not_nan.shape, fill_value=-1, dtype=relative_values.dtype)
+        new_relative_values[is_not_nan] = relative_values
+        new_relative_values[~is_not_nan] = len(unique_values) + np.arange((~is_not_nan).sum())
+        relative_values = new_relative_values
 
-    # Gather the rows of the same group (ie all their index labels are the same except the
-    # one of index_name, to be able to construct a partition using numpy split
-    data = align_frame(data, sizes.index)
+    offset = len(categories) if categories is not None else 0
+    res = []
+    for rows in all_rows:
+        new_rows = relative_values[offset:offset + len(rows)]
+        if isinstance(rows, (pd.DataFrame, pd.Series)):
+            new_rows = pd.Series(new_rows)
+            new_rows.index = rows.index
+            new_rows.name = "+".join(not_null_subset)
 
-    # Compute the indices at which we should split to make our partition
-    split_indices = np.cumsum(sizes.values)[:-1]
-
-    # Split the sequences according to the previously computed partition indices
-    result = {
-        col: (
-            [pd.Categorical.from_codes(subset, dtype=data[col].dtype) for subset in np.split(data[col].cat.codes.values, split_indices)]
-            if hasattr(data[col], 'cat') else
-            [pd.Series(subset, dtype=data[col].dtype) for subset in np.split(data[col].values, split_indices)])
-        for col in data.columns
-    }
-
-    # Restore the sequences type used in the input
-    if sequence_constructor is None:
-        sequence_constructor = lambda x: x  # list
-
-    result = {
-        col_name: [(None if np.isscalar(a[0]) and pd.isnull(a[0])
-                    else sequence_constructor([a[0]])) if isnull
-                   else sequence_constructor(a)
-                   for a, isnull in zip(col, nulls)]
-        for col_name, col in result.items()
-    }
-    result = pd.DataFrame(result, index=sizes.index)
-    if not as_index:
-        result = result.reset_index()
-    return result
-
-
-unflatten = group_as_sequences
-
-
-class InvisibleCounter:
-    __slots__ = ['value']
-
-    def __init__(self, value):
-        self.value = value
-
-    def __eq__(self, other):
-        return True
-
-    def __hash__(self):
-        return hash(0)
-
-
-def sizes_to_slices(sizes):
-    cumsum = np.cumsum(sizes)
-    return [slice(a, b) for a, b in zip((0, *cumsum[:-1]), cumsum)]
-
-
-def replace_index_inplace(df, index):
-    df.index = index
-    return df
-
-
-def factorize(self, group_nans=False, subset=slice(None), categories=None,
-              return_categories=False,
-              return_rows=False):
-    """
-
-    Parameters
-    ----------
-    self: pd.DataFrame or list of pd.DataFrame
-    group_nans: ??
-    subset: list of columns to factorize on
-    categories: pd.Series of (tuple of any or any)
-        Unique combinations of the column values allowed, (-1 will be given for the row otherwise)
-    return_categories:
-        Return the new categories if `categories` is None
-    return_rows: pd.DataFrame
-        Return the rows
-
-    Returns
-    -------
-    any
-    """
-
-    if isinstance(subset, str):
-        subset = [subset]
-    if isinstance(self, list):
-        concat = pd.concat([df[subset] for df in self], axis=0, ignore_index=True)
-        sizes = [len(part) for part in self]
-        res = factorize(concat, group_nans, subset=subset, categories=categories, return_categories=return_categories, return_rows=return_rows)
-        slices = sizes_to_slices(sizes)
-        if return_rows and return_categories:
-            codes, rows, out_categories = res
-            return (
-                [replace_index_inplace(codes.iloc[s], part.index) for s, part in zip(slices, self)],
-                [replace_index_inplace(rows.iloc[s], part.index) for s, part in zip(slices, self)],
-                out_categories)
-        elif return_rows:
-            codes, rows = res
-            return (
-                [replace_index_inplace(codes.iloc[s], part.index) for s, part in zip(slices, self)],
-                [replace_index_inplace(rows.iloc[s], part.index) for s, part in zip(slices, self)])
-        elif return_categories:
-            codes, out_categories = res
-            return ([replace_index_inplace(codes.iloc[s], part.index) for s, part in zip(slices, self)],
-                    out_categories)
-        else:
-            return [replace_index_inplace(res.iloc[s], part.index) for s, part in zip(slices, self)]
-    if isinstance(self, pd.DataFrame):
-        dedup_df = self[subset].copy()
-        was_cat = {name: isinstance(dtype, pd.CategoricalDtype) for name, dtype in dedup_df.dtypes.items()}
-        for name in dedup_df.columns:
-            if hasattr(dedup_df[name], 'cat'):
-                dedup_df[name] = dedup_df[name].cat.codes
-        if not group_nans:
-            for c_i, c_name in enumerate(dedup_df.columns):
-                if was_cat:
-                    col = dedup_df.iloc[:, c_i]
-                    nulls = np.flatnonzero(col == -1)
-                    if len(nulls):
-                        dedup_df.iloc[nulls, c_i] = (-np.arange(len(nulls)) - 1).astype(int)
-        if return_rows:
-            items = pd.Series(fast_zip([*[dedup_df[c].values for c in dedup_df.columns],
-                                        np.asarray([InvisibleCounter(i) for i in range(len(dedup_df))])]))
-        else:
-            items = pd.Series(fast_zip([dedup_df[c].values for c in dedup_df.columns]))
-        items = replace_index_inplace(items.astype("category" if categories is None else pd.CategoricalDtype(categories=categories)), self.index)
-        rows = out_categories = None
-        if return_categories:
-            if return_rows:
-                out_categories = pd.Index(np.asarray([cat[:-1] for cat in items.cat.categories]))
+        res.append(new_rows)
+        offset += len(rows)
+    if categories is None and return_categories:
+        if isinstance(all_rows[0], pd.DataFrame):
+            if len(cat_arrays) > 1:
+                categories = pd.DataFrame(dict(zip(not_null_subset, [np.asarray(l) for l in zip(*unique_values)])))
             else:
-                out_categories = items.cat.categories
-        if return_rows:
-            rows = self.iloc[[zipped[-1].value for zipped in items.cat.categories]]
-        if return_rows and return_categories:
-            return items.cat.codes, rows, out_categories
-        elif return_rows:
-            return items.cat.codes, rows
-        elif return_categories:
-            return items.cat.codes, out_categories
+                categories = pd.DataFrame({not_null_subset[0]: unique_values})
+            categories = categories.astype({k: dtype for k, dtype in next(rows for rows in all_rows if len(rows)).dtypes.items() if k in not_null_subset})
+        elif isinstance(all_rows[0], pd.Series):
+            categories = pd.Series(unique_values)
+            categories.name = all_rows[0].name
+            categories = categories.astype(next(rows.dtype for rows in all_rows if len(rows)))
         else:
-            return items.cat.codes
-    elif isinstance(self, pd.Series):
-        assert subset == slice(None)
-        if not group_nans:
-            dedup_series = self.copy().astype("category").cat.codes
-            nulls = np.flatnonzero(dedup_series == -1)
-            dedup_series.iloc[nulls] = np.arange(len(nulls)) + dedup_series.max() + 1
-            indices, uniques = dedup_series.factorize()
-            uniques = self.iloc[uniques]
-        else:
-            indices, uniques = self.factorize()
-        return indices, pd.Series(uniques, name=self.name)
-    else:
-        raise NotImplementedError()
+            categories = np.asarray([l for l in zip(*unique_values)])
+    if not was_list:
+        res = res[0]
+    if not return_categories:
+        return res
+    return res, categories
 
 
 def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=None, verbose=0):
@@ -864,7 +572,7 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
     ----------
     dfs: list of pd.DataFrame
         DataFrame whose columns will be categorized
-    vocabularies: dict
+    vocabularies: dict or None
         Existing vocabulary to use if any
     train_vocabularies: bool or dict of (str, bool)
         Which category to extend/create in the voc ?
@@ -954,56 +662,28 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
     return dfs, vocabularies
 
 
-class NLPAccessor(object):
+class NLStructAccessor(object):
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
-    def as_factorized(self, fn):
-        # return the geographic center point of this DataFrame
-        index, subset = factorize(self._obj)
-        res = fn(subset)
-        res = res.iloc[index]
-        res.index = self._obj.index
-        return res
-
-    def factorize(self, group_nans=False, subset=slice(None), categories=None,
-                  return_categories=False,
-                  return_rows=False):
-        return factorize(self._obj,
-                         group_nans=group_nans,
-                         subset=subset,
-                         categories=categories,
-                         return_categories=return_categories,
-                         return_rows=return_rows)
-
-    def unflatten(self, *args, **kwargs):
-        return unflatten(self._obj, *args, **kwargs)
+    def factorize(self, group_nans=False, subset=None, categories=None,
+                  return_categories=False, freeze_categories=True):
+        return factorize_rows(self._obj,
+                              subset=subset,
+                              categories=categories,
+                              group_nans=group_nans,
+                              return_categories=return_categories, freeze_categories=freeze_categories)
 
     def flatten(self, *args, **kwargs):
         return flatten(self._obj, *args, **kwargs)
 
-    def aggregate_on(self, on, **kwargs):
-        """
-        Same as groupby but selected levels for grouping are all levels except `on`
-        Parameters
-        ----------
-        frame: pd.DataFrame or pd.Series
-        on: list of (str or int)
-            Level not to group on
-        Returns
-        -------
-        pd.DataFrame or pd.Series
-        """
-        if not isinstance(on, (tuple, list)):
-            on = [on]
-        levels = [i if n is None else n for i, n in enumerate(self._obj.columns) if n not in on]
-        return self._obj.groupby(levels, **kwargs)
+    def to_flatarray(self, row_column, data_column, n_rows=None):
+        return df_to_flatarray(self._obj[row_column], self._obj[data_column], n_rows=n_rows)
 
-    def partition(self, large, overlap_policy="none", new_id_name="sample_id", span_policy="partial_strict"):
-        from nlstruct.core.text import partition_spans
-
-        return partition_spans([self._obj], large, overlap_policy=overlap_policy, new_id_name=new_id_name, span_policy=span_policy)[0][0]
+    def to_csr(self, row_column, col_column, data_column=None, n_rows=None, n_cols=None):
+        return df_to_csr(self._obj[row_column], self._obj[col_column], self._obj[data_column] if data_column is not None else None,
+                         n_rows=n_rows, n_cols=n_cols)
 
 
-pd.api.extensions.register_dataframe_accessor("nlp")(NLPAccessor)
-pd.api.extensions.register_series_accessor("nlp")(NLPAccessor)
+pd.api.extensions.register_dataframe_accessor("nlstruct")(NLStructAccessor)
+pd.api.extensions.register_series_accessor("nlstruct")(NLStructAccessor)

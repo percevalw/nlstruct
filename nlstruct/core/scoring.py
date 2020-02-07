@@ -31,7 +31,7 @@ def merge_pred_and_gold(
     """
     delete_atom_pred_level = delete_atom_gold_level = False
     if isinstance(atom_pred_level, (list, tuple)):
-        pred = pred.assign(_pred_id=pred[atom_pred_level].nlp.factorize())
+        pred = pred.assign(_pred_id=pred[atom_pred_level].nlstruct.factorize())
         atom_pred_level = '_pred_id'
         delete_atom_pred_level = True
     elif atom_pred_level is None:
@@ -39,7 +39,7 @@ def merge_pred_and_gold(
         atom_pred_level = '_pred_id'
         delete_atom_pred_level = True
     if isinstance(atom_gold_level, (list, tuple)):
-        gold = gold.assign(_gold_id=gold[atom_gold_level].nlp.factorize())
+        gold = gold.assign(_gold_id=gold[atom_gold_level].nlstruct.factorize())
         atom_gold_level = '_gold_id'
         delete_atom_gold_level = True
     elif atom_gold_level is None:

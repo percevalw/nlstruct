@@ -5,16 +5,12 @@ import pandas as pd
 import pyeda.boolalg
 import pyeda.boolalg.expr
 import pyeda.inter
-import sympy
 import z3
 from pyeda.boolalg.minimization import espresso_exprs
 from scipy.sparse import csr_matrix
-from sympy import to_cnf as sympy_to_cnf
-from sympy import to_dnf as sympy_to_dnf
-from sympy.logic.boolalg import BooleanFalse as sympy_BooleanFalse, BooleanTrue as sympy_BooleanTrue
 
 from nlstruct.core.cache import hash_object
-from nlstruct.core.pandas import df_to_csr, csr_to_df
+from nlstruct.core.pandas import df_to_csr, csr_to_df, factorize_rows
 
 
 class LabelSubspace(object):
@@ -64,45 +60,24 @@ class LabelSubspace(object):
             if factory:
                 return factory
 
-    def to_sympy(self):
-        global_constraints = []
-        expr = self.to_sympy_(global_constraints)
-        if len(global_constraints) > 0:
-            return sympy.And(expr, *global_constraints)
-        return expr
-
     def to_pyeda(self):
-        global_constraints = []
-        expr = self.to_pyeda_(global_constraints)
-        if len(global_constraints) > 0:
-            return pyeda.inter.And(expr, *global_constraints)
-        return expr
+        return self.to_pyeda_()
 
     def to_z3(self):
-        global_constraints = []
-        expr = self.to_z3_(global_constraints)
-        if len(global_constraints) > 0:
-            return z3.And(expr, *global_constraints)
-        return expr
+        return self.to_z3_()
 
-    def to_cnf(self, factory=None, simplify=True, use="pyeda"):
+    def to_cnf(self, factory=None, simplify=True):
         factory = factory or self.any_factory()
-        if use == "sympy":
-            res = factory.from_sympy(sympy_to_cnf(self.to_sympy(), simplify=simplify))
-        else:
-            res = factory.from_pyeda(self.to_pyeda().to_cnf())
+        res = factory.from_pyeda(self.to_pyeda().to_cnf())
         if not isinstance(res, And):
             if not isinstance(res, Or):
                 return And(Or(res))
             return And(res)
         return res
 
-    def to_dnf(self, factory=None, simplify=True, use="pyeda"):
+    def to_dnf(self, factory=None, simplify=True):
         factory = factory or self.any_factory()
-        if use == "sympy":
-            res = factory.from_sympy(sympy_to_dnf(self.to_sympy(), simplify=simplify))
-        else:
-            res = factory.from_pyeda(self.to_pyeda().to_dnf())
+        res = factory.from_pyeda(self.to_pyeda().to_dnf())
         if not isinstance(res, Or):
             if not isinstance(res, And):
                 return Or(And(res))
@@ -115,11 +90,6 @@ class LabelSubspace(object):
             solver.add(self.to_z3())
             res = solver.check()
             return res == z3.sat
-        elif lib == "sympy":
-            factory = factory or self.any_factory()
-            all_res = sympy.satisfiable(self.to_sympy(), all_models=True)
-            return ({factory[c.name]: v for c, v in res.items()}
-                    for res in all_res)
         elif lib == "pyeda":
             factory = factory or self.any_factory()
             all_res = self.to_pyeda().satisfy_all()
@@ -129,36 +99,26 @@ class LabelSubspace(object):
             raise Exception()
 
     def to_python_string(self):
-        global_constraints = []
-        expr = self.to_python_(global_constraints)
-        if len(global_constraints) > 0:
-            return "(all(({})))".format(", ".join([expr, *global_constraints]))
-        return expr
+        return self.to_python_()
 
     def vectorize(self):
-        global_constraints = []
-        expr = self.vectorize_(global_constraints)
-        if len(global_constraints) > 0:
-            expr = "(np.all(({}), axis=0))".format(", ".join([expr, *global_constraints]))
+        expr = self.vectorize_()
         return eval("lambda c: {}".format(expr))
 
     def to_python(self):
         expr = self.to_python_string()
         return eval("lambda c: {}".format(expr))
 
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         raise NotImplementedError()
 
-    def to_python_(self, global_constraints):
+    def to_python_(self):
         raise NotImplementedError()
 
-    def to_sympy_(self, global_constraints):
+    def to_pyeda_(self):
         raise NotImplementedError()
 
-    def to_pyeda_(self, global_constraints):
-        raise NotImplementedError()
-
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         raise NotImplementedError()
 
     @property
@@ -187,170 +147,132 @@ class LabelSubspace(object):
         else:
             raise Exception(f"Unrecognized pyeda object {type(expr)}")
 
-    @classmethod
-    def from_sympy(cls, expr, factory):
-        if isinstance(expr, sympy.And):
-            return And(*(cls.from_sympy(c, factory) for c in expr.args))
-        elif isinstance(expr, sympy.Or):
-            return Or(*(cls.from_sympy(c, factory) for c in expr.args))
-        elif isinstance(expr, sympy.Not):
-            return Not(cls.from_sympy(expr.args[0], factory))
-        elif isinstance(expr, sympy.Equivalent):
-            return Equivalent(*(cls.from_sympy(c, factory) for c in expr.args))
-        elif isinstance(expr, sympy.Symbol):
-            return factory[expr.name]
-        elif isinstance(expr, sympy_BooleanFalse):
-            return empty
-        elif isinstance(expr, sympy_BooleanTrue):
-            return full_space
-        else:
-            raise Exception(f"Unrecognized sympy object {type(expr)}")
-
 
 class And(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        if len(self.children) > 1:
-            return sympy.And(*(c.to_sympy_(global_constraints) for c in self.children))
-        else:
-            return self.children[0].to_sympy_(global_constraints)
 
-    def to_pyeda_(self, global_constraints):
+    def to_pyeda_(self):
         if len(self.children) > 1:
-            return pyeda.inter.And(*(c.to_pyeda_(global_constraints) for c in self.children))
+            return pyeda.inter.And(*(c.to_pyeda_() for c in self.children))
         else:
-            return self.children[0].to_pyeda_(global_constraints)
+            return self.children[0].to_pyeda_()
 
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         if len(self.children) > 1:
-            return z3.And(*(c.to_z3_(global_constraints) for c in self.children))
+            return z3.And(*(c.to_z3_() for c in self.children))
         else:
-            return self.children[0].to_z3_(global_constraints)
+            return self.children[0].to_z3_()
 
-    def to_python_(self, global_constraints):
+    def to_python_(self):
         if len(self.children) > 2:
-            return "(all(({})))".format(", ".join(c.to_python_(global_constraints) for c in self.children))
+            return "(all(({})))".format(", ".join(c.to_python_() for c in self.children))
         elif len(self.children) == 2:
-            return "({} & {})".format(self.children[0].to_python_(global_constraints), self.children[1].to_python_(global_constraints))
+            return "({} & {})".format(self.children[0].to_python_(), self.children[1].to_python_())
         else:
-            return self.children[0].to_python_(global_constraints)
+            return self.children[0].to_python_()
 
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         if len(self.children) > 2:
-            return "(np.all(({}), axis=0))".format(", ".join(c.vectorize_(global_constraints) for c in self.children))
+            return "(np.all(({}), axis=0))".format(", ".join(c.vectorize_() for c in self.children))
         elif len(self.children) == 2:
-            return "({} & {})".format(self.children[0].vectorize_(global_constraints), self.children[1].vectorize_(global_constraints))
+            return "({} & {})".format(self.children[0].vectorize_(), self.children[1].vectorize_())
         else:
-            return self.children[0].vectorize_(global_constraints)
+            return self.children[0].vectorize_()
 
 
 class Or(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        if len(self.children) > 1:
-            return sympy.Or(*(c.to_sympy_(global_constraints) for c in self.children))
-        else:
-            return self.children[0].to_sympy_(global_constraints)
 
-    def to_pyeda_(self, global_constraints):
+    def to_pyeda_(self):
         if len(self.children) > 1:
-            return pyeda.inter.Or(*(c.to_pyeda_(global_constraints) for c in self.children))
+            return pyeda.inter.Or(*(c.to_pyeda_() for c in self.children))
         else:
-            return self.children[0].to_pyeda_(global_constraints)
+            return self.children[0].to_pyeda_()
 
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         if len(self.children) > 1:
-            return z3.Or(*(c.to_z3_(global_constraints) for c in self.children))
+            return z3.Or(*(c.to_z3_() for c in self.children))
         else:
-            return self.children[0].to_z3_(global_constraints)
+            return self.children[0].to_z3_()
 
-    def to_python_(self, global_constraints):
+    def to_python_(self):
         if len(self.children) > 2:
-            return "(any(({})))".format(", ".join(c.to_python_(global_constraints) for c in self.children))
+            return "(any(({})))".format(", ".join(c.to_python_() for c in self.children))
         elif len(self.children) == 2:
-            return "({} | {})".format(self.children[0].to_python_(global_constraints), self.children[1].to_python_(global_constraints))
+            return "({} | {})".format(self.children[0].to_python_(), self.children[1].to_python_())
         else:
-            return self.children[0].to_python_(global_constraints)
+            return self.children[0].to_python_()
 
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         if len(self.children) > 2:
-            return "(np.any(({}), axis=0))".format(", ".join(c.vectorize_(global_constraints) for c in self.children))
+            return "(np.any(({}), axis=0))".format(", ".join(c.vectorize_() for c in self.children))
         elif len(self.children) == 2:
-            return "({} | {})".format(self.children[0].vectorize_(global_constraints), self.children[1].vectorize_(global_constraints))
+            return "({} | {})".format(self.children[0].vectorize_(), self.children[1].vectorize_())
         else:
-            return self.children[0].vectorize_(global_constraints)
+            return self.children[0].vectorize_()
 
 
 class Not(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        return sympy.Not(*(c.to_sympy_(global_constraints) for c in self.children))
 
-    def to_pyeda_(self, global_constraints):
-        return pyeda.inter.Not(*(c.to_pyeda_(global_constraints) for c in self.children))
+    def to_pyeda_(self):
+        return pyeda.inter.Not(*(c.to_pyeda_() for c in self.children))
 
-    def to_z3_(self, global_constraints):
-        return z3.Not(*(c.to_z3_(global_constraints) for c in self.children))
+    def to_z3_(self):
+        return z3.Not(*(c.to_z3_() for c in self.children))
 
-    def to_python_(self, global_constraints):
-        return "(~{})".format(self.children[0].to_python_(global_constraints))
+    def to_python_(self):
+        return "(~{})".format(self.children[0].to_python_())
 
-    def vectorize_(self, global_constraints):
-        return "(~{})".format(self.children[0].vectorize_(global_constraints))
+    def vectorize_(self):
+        return "(~{})".format(self.children[0].vectorize_())
 
 
 class Implies(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        return sympy.Implies(*(c.to_sympy_(global_constraints) for c in self.children))
 
-    def to_pyeda_(self, global_constraints):
-        return pyeda.inter.Implies(*(c.to_pyeda_(global_constraints) for c in self.children))
+    def to_pyeda_(self):
+        return pyeda.inter.Implies(*(c.to_pyeda_() for c in self.children))
 
-    def to_z3_(self, global_constraints):
-        return z3.Implies(*(c.to_z3_(global_constraints) for c in self.children))
+    def to_z3_(self):
+        return z3.Implies(*(c.to_z3_() for c in self.children))
 
-    def to_python_(self, global_constraints):
-        return "(~{} | {})".format(self.children[0].to_python_(global_constraints), self.children[1].to_python_(global_constraints))
+    def to_python_(self):
+        return "(~{} | {})".format(self.children[0].to_python_(), self.children[1].to_python_())
 
-    def vectorize_(self, global_constraints):
-        return "(~{} | {})".format(self.children[0].vectorize_(global_constraints), self.children[1].vectorize_(global_constraints))
+    def vectorize_(self):
+        return "(~{} | {})".format(self.children[0].vectorize_(), self.children[1].vectorize_())
 
 
 class Equivalent(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        return sympy.Equivalent(*(c.to_sympy_(global_constraints) for c in self.children))
 
-    def to_pyeda_(self, global_constraints):
-        return pyeda.inter.Equal(*(c.to_pyeda_(global_constraints) for c in self.children))
+    def to_pyeda_(self):
+        return pyeda.inter.Equal(*(c.to_pyeda_() for c in self.children))
 
-    def to_z3_(self, global_constraints):
-        return self.children[0].to_z3_(global_constraints) == self.children[1].to_z3_(global_constraints)
+    def to_z3_(self):
+        return self.children[0].to_z3_() == self.children[1].to_z3_()
 
-    def to_python_(self, global_constraints):
-        return "({} == {})".format(self.children[0].to_python_(global_constraints), self.children[1].to_python_(global_constraints))
+    def to_python_(self):
+        return "({} == {})".format(self.children[0].to_python_(), self.children[1].to_python_())
 
-    def vectorize_(self, global_constraints):
-        return "({} == {})".format(self.children[0].vectorize_(global_constraints), self.children[1].vectorize_(global_constraints))
+    def vectorize_(self):
+        return "({} == {})".format(self.children[0].vectorize_(), self.children[1].vectorize_())
 
 
 class ITE(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        return sympy.ITE(*(c.to_sympy_(global_constraints) for c in self.children))
+    def to_pyeda_(self):
+        return pyeda.inter.ITE(*(c.to_pyeda_() for c in self.children))
 
-    def to_pyeda_(self, global_constraints):
-        return pyeda.inter.ITE(*(c.to_pyeda_(global_constraints) for c in self.children))
+    def to_z3_(self):
+        return z3.If(self.children[0].to_z3_(), self.children[1].to_z3_(), self.children[2].to_z3_())
 
-    def to_z3_(self, global_constraints):
-        return z3.If(self.children[0].to_z3_(global_constraints), self.children[1].to_z3_(global_constraints), self.children[2].to_z3_(global_constraints))
+    def to_python_(self):
+        return "(({} & {}) | (~{} & {}))".format(self.children[0].to_python_(),
+                                                 self.children[1].to_python_(),
+                                                 self.children[0].to_python_(),
+                                                 self.children[2].to_python_())
 
-    def to_python_(self, global_constraints):
-        return "(({} & {}) | (~{} & {}))".format(self.children[0].to_python_(global_constraints),
-                                                 self.children[1].to_python_(global_constraints),
-                                                 self.children[0].to_python_(global_constraints),
-                                                 self.children[2].to_python_(global_constraints))
-
-    def vectorize_(self, global_constraints):
-        return "(({} & {}) | (~{} & {}))".format(self.children[0].vectorize_(global_constraints),
-                                                 self.children[1].vectorize_(global_constraints),
-                                                 self.children[0].vectorize_(global_constraints),
-                                                 self.children[2].vectorize_(global_constraints))
+    def vectorize_(self):
+        return "(({} & {}) | (~{} & {}))".format(self.children[0].vectorize_(),
+                                                 self.children[1].vectorize_(),
+                                                 self.children[0].vectorize_(),
+                                                 self.children[2].vectorize_())
 
 
 class AtomLabelSubspace(LabelSubspace):
@@ -375,52 +297,45 @@ class AtomLabelSubspace(LabelSubspace):
     def name(self):
         return self.uid
 
-    def to_sympy_(self, global_constraints):
-        return sympy.symbols(self.uid)
-
-    def to_pyeda_(self, global_constraints):
+    def to_pyeda_(self):
         return pyeda.inter.exprvar(self.uid)
 
-    def to_python_(self, global_constraints):
-        return f"c['{self.uid}']"
+    def to_python_(self):
+        return f"c.get('{self.uid}', False)"
 
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         return z3.Bool(self.uid)
 
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         return f"c[:, {self.index}]"
 
 
-class Partition(LabelSubspace):
-    def to_sympy_(self, global_constraints):
-        if len(self.children) > 2:
-            # for all combinations of [one expr, rest of exprs]
-            # we don't want expr & one_of(res)
-            # ie not more than one expr at a time
-            global_constraint = sympy.And(*[
-                (sympy.Equivalent(sympy.false, self.children[i].to_sympy_(global_constraints) & sympy.Or(*[a.to_sympy_(global_constraints) for a in self.children[:i] + self.children[i + 1:]])))
-                for i in range(len(self.children))
-            ])
-        else:
-            global_constraint = sympy.Nand(*[a.to_sympy_(global_constraints) for a in self.children])
-        global_constraints.append(global_constraint)
-        return sympy.Or(*[a.to_sympy_(global_constraints) for a in self.children])
+class ExactlyOne(LabelSubspace):
+    def to_pyeda_(self):
+        return pyeda.inter.OneHot(*[a.to_pyeda_() for a in self.children])
 
-    def to_pyeda_(self, global_constraints):
-        global_constraints.append(pyeda.inter.OneHot0(*[a.to_pyeda_(global_constraints) for a in self.children]))
-        return pyeda.inter.Or(*[a.to_pyeda_(global_constraints) for a in self.children])
+    def to_python_(self):
+        return "(sum(({})) == 1)".format(", ".join(c.to_python_() for c in self.children))
 
-    def to_python_(self, global_constraints):
-        global_constraints.append("(sum(({})) <= 1)".format(", ".join(c.to_python_(global_constraints) for c in self.children)))
-        return "(any(({})))".format(", ".join(c.to_python_(global_constraints) for c in self.children))
+    def to_z3_(self):
+        return z3.PbEq(*[a.to_z3_() for a in self.children], 1)
 
-    def to_z3_(self, global_constraints):
-        global_constraints.append(z3.AtMost(*[a.to_z3_(global_constraints) for a in self.children], 1))
-        return z3.Or(*[a.to_z3_(global_constraints) for a in self.children])
+    def vectorize_(self):
+        return "(np.sum(({}), axis=0) == 1)".format(", ".join(c.vectorize_() for c in self.children))
 
-    def vectorize_(self, global_constraints):
-        global_constraints.append("(np.sum(({}), axis=0) <= 1)".format(", ".join(c.vectorize_(global_constraints) for c in self.children)))
-        return "(np.any(({}), axis=0))".format(", ".join(c.vectorize_(global_constraints) for c in self.children))
+
+class AtMostOne(LabelSubspace):
+    def to_pyeda_(self):
+        return pyeda.inter.OneHot0(*[a.to_pyeda_() for a in self.children])
+
+    def to_python_(self):
+        return "(sum(({})) <= 1)".format(", ".join(c.to_python_() for c in self.children))
+
+    def to_z3_(self):
+        return z3.AtMost(*[a.to_z3_() for a in self.children], 1)
+
+    def vectorize_(self):
+        return "(np.sum(({}), axis=0) <= 1)".format(", ".join(c.vectorize_() for c in self.children))
 
 
 class ClassifierDescription(object):
@@ -443,19 +358,16 @@ class Binary(ClassifierDescription):
 
 
 class FullSpace(LabelSubspace):
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         return "True"
 
-    def to_sympy_(self, global_constraints):
-        return sympy.true
-
-    def to_pyeda_(self, global_constraints):
+    def to_pyeda_(self):
         return pyeda.inter.expr(True)
 
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         return True
 
-    def to_python_(self, global_constraints):
+    def to_python_(self):
         return "True"
 
     def __repr__(self):
@@ -463,19 +375,16 @@ class FullSpace(LabelSubspace):
 
 
 class Empty(LabelSubspace):
-    def vectorize_(self, global_constraints):
+    def vectorize_(self):
         return "False"
 
-    def to_sympy_(self, global_constraints):
-        return sympy.false
-
-    def to_pyeda_(self, global_constraints):
+    def to_pyeda_(self):
         return pyeda.inter.expr(False)
 
-    def to_z3_(self, global_constraints):
+    def to_z3_(self):
         return False
 
-    def to_python_(self, global_constraints):
+    def to_python_(self):
         return "False"
 
     def __repr__(self):
@@ -531,9 +440,6 @@ class LabelFactory(object):
     def from_pyeda(self, expr):
         return LabelSubspace.from_pyeda(expr, self)
 
-    def from_sympy(self, expr):
-        return LabelSubspace.from_sympy(expr, self)
-
     def __getitem__(self, name):
         return self.get_atom(name)
 
@@ -552,7 +458,7 @@ class LabelFactory(object):
 def rebase(expr, label_space, bases, factory=None):
     if factory is None:
         factory = expr.any_factory()
-    cnf = (label_space & expr).to_cnf(use="pyeda", simplify=False)
+    cnf = (label_space & expr).to_cnf(simplify=False)
     bases = set((var for base in bases for var in base.support))
 
     # Propagate target through clauses to eliminate untouched ones
@@ -578,19 +484,19 @@ def rebase(expr, label_space, bases, factory=None):
         simplified = And(*clauses_to_keep)
 
         clauses = []
-        for ass in simplified.satisfy_all(lib="sympy"):
+        for ass in simplified.satisfy_all(lib="pyeda"):
             clauses.append(And(*(symbol for symbol, val in ass.items() if val)))
         simplified = Or(*clauses)
         # Convert to dnf, and remove non _ literals, and then simplify with espresso
         clauses = []
-        for clause in simplified.to_dnf(use="pyeda", simplify=False).children:
+        for clause in simplified.to_dnf(simplify=False).children:
             new_clause = []
             for clause_var in clause.children:
                 if clause_var.support & bases:
                     new_clause.append(clause_var)
             if new_clause:
                 clauses.append(And(*new_clause))
-        simplified = factory.from_pyeda(espresso_exprs(Or(*clauses).to_pyeda())[0]).to_cnf(use="pyeda")
+        simplified = factory.from_pyeda(espresso_exprs(Or(*clauses).to_pyeda())[0]).to_cnf()
 
         # Check whether clauses are equivalent or just sufficient
         sufficients = np.ones((len(simplified.children)), dtype=bool)
@@ -692,8 +598,9 @@ def preprocess_label_scheme(classifiers):
 
     code_from_source_translator = make_base_converter(code_from_source_mapping)  # function(source_expr_mat) -> codes_mat
     source_from_code_translator = make_base_converter(source_from_code_mapping)  # function(code_expr_mat) -> sources_mat
-
-    return code_from_source_translator, source_from_code_translator, source_symbols, coded_symbols
+    code_from_code_translator = make_base_converter([(symbol, symbol) for symbol in coded_symbols])  # function(code_expr_mat) -> sources_mat
+    # TODO code from noisy source et inv
+    return code_from_source_translator, source_from_code_translator, code_from_code_translator, source_symbols, coded_symbols
 
 
 def encode_labels(labels, code_from_source_translator, coded_symbols, source_symbols, atom_level, label_col_name="label"):
@@ -704,7 +611,7 @@ def encode_labels(labels, code_from_source_translator, coded_symbols, source_sym
     labels: pd.DataFrame
         Columns:
             - label
-    atom_level: str
+    atom_level: str or list of str
         The id name of each unique atom being classified in the scheme (ex: mention_id)
     label_col_name: str
         The col name of the labels
@@ -713,26 +620,27 @@ def encode_labels(labels, code_from_source_translator, coded_symbols, source_sym
     -------
 
     """
-    labels["_id"], inverse_labels_rows = labels.nlp.factorize(subset=atom_level, return_rows=True)
+    labels["_id"], unique_rows = factorize_rows(labels, subset=atom_level, return_categories=True)
     # Since we are going to overrwrite the label columnn, drop it from the original rows we're going to concatenate with
     # the output at the end of the function
-    inverse_labels_rows = inverse_labels_rows.drop(columns=[label_col_name])
+    # unique_rows = unique_rows.drop(columns=[label_col_name])
 
     labels = labels[labels[label_col_name].isin([s.name for s in source_symbols])].copy()
     labels[label_col_name] = labels[label_col_name].astype(pd.CategoricalDtype([s.name for s in source_symbols]))
-    csr = df_to_csr(labels["_id"], labels[label_col_name])
-    labels = csr_matrix(code_from_source_translator(csr.toarray()))
-    labels = csr_to_df(labels, row_name="_id", col_name=label_col_name)
-    labels[label_col_name] = pd.Categorical.from_codes(labels[label_col_name], categories=[s.name for s in coded_symbols])
-    labels['classifier_idx'] = labels[label_col_name].cat.codes.apply(lambda label: coded_symbols[label].classifier_idx)
-    labels['relative_idx'] = labels[label_col_name].cat.codes.apply(lambda label: coded_symbols[label].relative_idx)
-    labels = pd.concat([labels.reset_index(drop=True), inverse_labels_rows.iloc[labels["_id"]].reset_index(drop=True)], axis=1)
-    labels = labels.drop(columns=["_id"])
-    return labels
+    new_labels = df_to_csr(labels["_id"], labels[label_col_name])
+    new_labels = csr_matrix(code_from_source_translator(new_labels.toarray()))
+    new_labels = csr_to_df(new_labels, row_name="_id", col_name=label_col_name)
+    new_labels[label_col_name] = pd.Categorical.from_codes(new_labels[label_col_name], categories=[s.name for s in coded_symbols])
+    new_labels['classifier_idx'] = new_labels[label_col_name].cat.codes.apply(lambda label: coded_symbols[label].classifier_idx)
+    new_labels['relative_idx'] = new_labels[label_col_name].cat.codes.apply(lambda label: coded_symbols[label].relative_idx)
+    new_labels = pd.merge(
+        new_labels.reset_index(drop=True),
+        unique_rows.assign(_id=np.arange(len(unique_rows)))
+    ).drop(columns=["_id"])
+    return new_labels
 
 
 multiclass = Multiclass
 binary = Binary
 full_space = FullSpace()
 empty = Empty()
-partition = Partition
