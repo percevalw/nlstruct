@@ -261,7 +261,7 @@ def preprocess_ids(large, small, large_id_cols=None, small_id_cols=None):
         [c for c in large.columns if c not in large_id_cols and c not in ("begin", "end") and c not in doc_id_cols])
 
 
-def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx=False):
+def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx=False, verbose=0):
     """
 
     Parameters
@@ -272,6 +272,8 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     large_id_cols: mention id cols (doc_id, mention_id, mention_part_id)
     label_cols: "label"
     use_token_idx: Use token pos instead of char spans, defaults to False
+    verbose: int
+        If verbose > 0, make progress bar
 
     Returns
     -------
@@ -302,12 +304,25 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     tags = (merged[merged_id_cols + large_val_cols]
             .sort_values(merged_id_cols))
     if tag_scheme != "raw":
-        tags = (
-            tags.groupby(doc_id_cols + large_id_cols + large_val_cols, as_index=False)
-            .apply(lambda group: group.assign(**{
-                label_col: make_tag_scheme(len(group[small_id_cols[0]]), group[label_col].iloc[0], tag_scheme)
-                for label_col in label_cols
-            })))
+        if verbose > 0:
+            n_groups = len(tags.groupby(doc_id_cols + large_id_cols + large_val_cols, as_index=False))
+            bar = tqdm(total=n_groups)
+        else:
+            bar = memoryview(b'')  # no-op context for next instruction
+        with bar:
+            keep_cols = list(set(doc_id_cols + large_id_cols + large_val_cols) - set(label_cols))
+            tags = (
+                # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
+                # to accelerate concatenation inside the groupby
+                tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
+                .groupby(doc_id_cols + large_id_cols + large_val_cols, as_index=False)
+                .apply(lambda group: (bar.update(1) if verbose > 0 else False) or group.assign(**{
+                    label_col: make_tag_scheme(len(group[small_id_cols[0]]), group[label_col].iloc[0], tag_scheme)
+                    for label_col in label_cols
+                }))
+                # convert back each group column dtype to its origial categorical dtype
+                .astype(tags.dtypes[keep_cols])
+            )
 
     merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
     merged = small.merge(merged, how="left")
