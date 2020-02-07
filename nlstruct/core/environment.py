@@ -3,6 +3,7 @@ import importlib
 import inspect
 import os
 import tempfile
+from os.path import expanduser
 from pathlib import Path, PureWindowsPath, PurePosixPath
 
 import yaml
@@ -72,20 +73,42 @@ yaml.SafeDumper.add_multi_representer(RelativePath, RelativePath.to_yaml)
 yaml.Dumper.add_multi_representer(RelativePath, RelativePath.to_yaml)
 
 
+def create_config_if_not_exist():
+    home = expanduser("~")
+    config_path = home + "/.nlstruct.env"
+    if os.path.exists(config_path):
+        return config_path
+    with open(config_path, "w") as file:
+        default_config_file_path = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../example.env'))
+        with open(default_config_file_path, "r") as default_file:
+            file.write(default_file.read())
+            print(f"Config file was created at")
+            print("    ", config_path)
+            print("please modify it and change values to your prefered paths.")
+            print("""Once you're done, execute the following lines:
+from nlstruct.core.environment import load_dotenv
+load_dotenv({})""".format(repr(config_path)))
+    return config_path
+
+
 class Environment(object):
-    def __init__(self, config_file_path="local"):
-        if 'NLP_CONFIG_PATH' in os.environ:
-            self.config_file_path = os.environ['NLP_CONFIG_PATH']
+    def __init__(self, config_file_path=None):
+        if 'NLSTRUCT_CONFIG_PATH' in os.environ:
+            self.config_file_path = os.environ['NLSTRUCT_CONFIG_PATH']
         else:
-            if config_file_path.startswith('/'):
+            if config_file_path is None:
+                self.config_file_path = create_config_if_not_exist()
+            elif config_file_path.startswith('/'):
                 self.config_file_path = config_file_path
             elif "/" in config_file_path:
                 self.config_file_path = os.path.realpath(
                     os.path.join(os.path.dirname(os.path.realpath(__file__)), config_file_path))
             else:
-                self.config_file_path = os.path.realpath(
-                    os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                 '../../configs/{}.env'.format(config_file_path)))
+                raise Exception("Cannot process config file path '{}'".format(config_file_path))
+            # else:
+            #     self.config_file_path = os.path.realpath(
+            #         os.path.join(os.path.dirname(os.path.realpath(__file__)),
+            #                      '../../configs/{}.env'.format(config_file_path)))
         load_dotenv(self.config_file_path)
 
     def load_config(self):

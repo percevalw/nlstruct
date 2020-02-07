@@ -1,19 +1,14 @@
-# Install
+# Development
 
-Those actions will be replaced in the future by a proper python package installation
 
-Clone
 ```bash
+# Clone it
 git clone https://github.com/percevalw/nlstruct.git
-```
 
-Add to python path
-```
-echo 'export PYTHONPATH=$PYTHONPATH:'$pwd'/nlstruct' >> .bashrc
-```
+# Install it locally
+cd nlstruct
+pip install . --user
 
-Install requirements
-```bash
-for req in nlstruct/requirements.txt do; pip install $req; done
+# Install requirements
+for req in requirements.txt do; pip install $req; done
 ```
-
