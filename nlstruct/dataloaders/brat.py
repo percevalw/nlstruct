@@ -10,6 +10,7 @@ from nlstruct.core.dataset import Dataset
 def load_from_brat(path, validation_split=0.2, random_state=42):
     path = RelativePath(path)
     mentions = []
+    fragments = []
     attributes = []
     relations = []
 
@@ -43,10 +44,16 @@ def load_from_brat(path, validation_split=0.2, random_state=42):
                             "doc_id": doc_id,
                             "mention_id": ann_id,
                             "label": mention,
-                            "begin": tuple(int(s.split()[0]) for s in span.split(";")),
-                            "end": tuple(int(s.split()[1]) for s in span.split(";")),
                             "text": text,
                         })
+                        for fragment_i, s in enumerate(span.split(';')):
+                            fragments.append({
+                                "doc_id": doc_id,
+                                "mention_id": ann_id,
+                                "fragment_id": "{}-{}".format(ann_id, fragment_i),
+                                "begin": int(s.split()[0]),
+                                "end": int(s.split()[1]),
+                            })
                     elif ann_id.startswith('A'):
                         parts = remaining.split(" ")
                         if len(parts) >= 3:
@@ -66,18 +73,20 @@ def load_from_brat(path, validation_split=0.2, random_state=42):
                         relations.append({
                             "doc_id": doc_id,
                             "relation_id": ann_id,
-                            "label": ann_name,
-                            "from": parts[0].split(":")[1],
-                            "to": parts[1].split(":")[1],
+                            "relation_label": ann_name,
+                            "from_mention_id": parts[0].split(":")[1],
+                            "to_mention_id": parts[1].split(":")[1],
                         })
     mentions = pd.DataFrame(mentions).astype({
         "doc_id": docs["doc_id"].dtype,
         "mention_id": "category",
         "label": "category",
     })
-    fragments = mentions[["doc_id", "mention_id", "begin", "end"]].nlp.flatten("fragment_id").astype({
+    fragments = pd.DataFrame(fragments).astype({
+        "doc_id": docs["doc_id"].dtype,
+        "mention_id": mentions["mention_id"].dtype,
         "fragment_id": "category",
-    })[["doc_id", "mention_id", "fragment_id", "begin", "end"]]
+    })
     mentions = mentions[["doc_id", "mention_id", "label", "text"]]
     attributes = pd.DataFrame(attributes).astype({
         "doc_id": docs["doc_id"].dtype,
@@ -89,9 +98,9 @@ def load_from_brat(path, validation_split=0.2, random_state=42):
     relations = pd.DataFrame(relations).astype({
         "doc_id": docs["doc_id"].dtype,
         "relation_id": "category",
-        "label": "category",
-        "from": mentions.dtypes["mention_id"],
-        "to": mentions.dtypes["mention_id"],
-    })[["doc_id", "relation_id", "label", "from", "to"]]
+        "relation_label": "category",
+        "from_mention_id": mentions.dtypes["mention_id"],
+        "to_mention_id": mentions.dtypes["mention_id"],
+    })[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
 
     return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations)

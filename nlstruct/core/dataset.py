@@ -1,12 +1,12 @@
-from collections import Iterable, Sequence
+from collections import Iterable, Sequence, Mapping
+from logging import warn, warning
 
 import pandas as pd
 from pandas.core.computation.ops import UndefinedVariableError
 
 from nlstruct.core.pandas import merge_with_spans
 
-
-class Dataset(object):
+class Dataset(Mapping):
     def __init__(self, **dfs):
         self.dfs = {k: v for k, v in dfs.items()}
         self.main = next(iter(self.dfs.keys())) if len(self.dfs) else None
@@ -16,6 +16,25 @@ class Dataset(object):
 
     def values(self):
         return self.dfs.values()
+
+    def items(self):
+        return self.dfs.items()
+
+    def update(self, other):
+        self.dfs.update(other)
+
+    def groupby(self, cols):
+        if isinstance(cols, str):
+            cols = [cols]
+        tables_to_groupby = [df for key, df in self.dfs.items() if all(col in df.columns for col in cols)]
+        for col_ids, group in tables_to_groupby[0].groupby(cols):
+            for other_table in tables_to_groupby[1:]:
+                querier = None
+                for col, col_id in zip(cols, col_ids):
+                    querier = querier & (other_table[col] == col_id)
+                other_group = other_table[querier]
+        pass
+
 
     def query(self, query, names=None, propagate=False, keyerror='ignore'):
         if names is None:
@@ -94,9 +113,26 @@ class Dataset(object):
         return list(self.dfs.values())[item] if isinstance(item, int) else self.dfs.get(item, None)
 
     def __setitem__(self, item, val):
-        if len(self.dfs) == 0:
-            self.main = item
-        self.dfs[item] = val
+        if isinstance(item, (tuple, list)):
+            if isinstance(val, Dataset):
+                assert len(val.keys()) == len(item), "Passed keys and dataset frames must have the same number of elements"
+                if not all(name in val for name in item):
+                    warning(f"Some of the keys in could not be found in the passed dataset during assignment (passed keys are {item}), no alignment will be done.")
+                    for key, v in zip(item, val.values()):
+                        self.dfs[key] = v
+                else:
+                    for key in item:
+                        self.dfs[key] = val[key]
+            else:
+                for key, v in zip(item, val):
+                    self.dfs[key] = v
+            if len(self.dfs) == 0:
+                self.main = item[0]
+        else:
+            assert isinstance(val, pd.DataFrame)
+            if len(self.dfs) == 0:
+                self.main = item
+            self.dfs[item] = val
 
     @classmethod
     def concat(cls, batches):

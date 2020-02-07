@@ -1,3 +1,4 @@
+import logging
 import pprint
 
 import numpy as np
@@ -7,346 +8,220 @@ from scipy.sparse import issparse, vstack, csr_matrix
 from torch.utils.data import DataLoader, BatchSampler
 
 
-class Batcher:
-    def __init__(self, tables, main_table=None, masks=None, column_names=None):
-        self.tables = {table_name: {col_name: col for col_name, col in table.items() if col is not None}
-                       for table_name, table in tables.items() if table is not None}
-        self.main_table = main_table or next(iter(tables.keys()))
-        self.masks = masks or {}
-        self.column_names = column_names or {}
+def flatten_array(array, mask=None):
+    """
+    Flatten array to get the list of active entries
+    If not mask is provided, it's just array.view(-1)
+    If a mask is given, then it is array[mask]
+    If the array or the mask are sparse, some optimizations are possible, justifying this function
 
-    def __len__(self):
-        return next(iter(self.tables[self.main_table].values())).shape[0]
+    Parameters
+    ----------
+    array: scipy.sparse.spmatrix or np.ndarray or torch.Tensor
+    mask: scipy.sparse.spmatrix or np.ndarray or torch.Tensor
 
-    @property
-    def shape(self):
-        return next(iter(self.tables[self.main_table].values())).shape
-
-    def keys(self):
-        return self.tables[self.main_table].keys()
-
-    def values(self):
-        return self.tables[self.main_table].values()
-
-    def items(self):
-        return self.tables[self.main_table].items()
-
-    def copy(self):
-        return Batcher(
-            {key: dict(table) for key, table in self.tables.items()},
-            main_table=self.main_table,
-            masks=self.masks,
-            column_names=self.column_names,
-        )
-
-    def complete_ids(self, inplace=False):
-        """
-        Sort all tables against their main id if given, and put reversed ids in each table if it is
-        accessible from another table
-        """
-        if not inplace:
-            self = self.copy()
-        for table_name, table in list(self.tables.items()):
-            id_name = self.get_id_name(table_name)
-            if id_name in table:
-                sorter = np.argsort(table[id_name])
-                self.tables[table_name] = self.query_table(table, sorter)
-            else:
-                self.tables[table_name][id_name] = np.arange(next(iter(self.tables[table_name].values())).shape[0])
-        for table_name, table in list(self.tables.items()):
-            id_name = self.get_id_name(table_name)
-            for col_name, col in table.items():
-                other_table_name = self.get_table_of_id(col_name)
-                mask_name = self.masks.get(table_name, {}).get(col_name, None)
-                if other_table_name:
-                    other_table = self.tables[other_table_name]
-                    other_id_col = other_table.get(id_name, None)
-                    if other_id_col is not None:
-                        continue
-
-                    if mask_name:
-                        sorter = factorize_ids(flatten_ids(col, table[mask_name]), None, other_table[col_name])[0]
-                        sorter = np.argsort(sorter)
-                        if issparse(table[mask_name]):
-                            indices = table[mask_name].nonzero()
-                            other_table[id_name], other_table['idx'] = indices[0][sorter], indices[1][sorter]
-                        elif isinstance(table[mask_name], np.ndarray):
-                            for axis_name, idx in zip(
-                                  [id_name, 'idx', (f"idx_{i+2}" for i in range(len(col.shape[2:])))], range(len(col.shape)),
-                                  table[mask_name].nonzero()
-                            ):
-                                other_table[axis_name] = idx[sorter]
-                        else:
-                            raise Exception(f"Unrecognized mask format for {mask_name}: {table[mask_name].__class__}")
-                    else:
-                        sorter = factorize_ids(flatten_ids(col), None, other_table[col_name])[0]
-                        sorter = np.argsort(sorter)
-                        for axis_name, axis_i in zip([id_name, 'idx', (f"idx_{i+2}" for i in range(len(col.shape[2:])))], range(len(col.shape))):
-                            other_table[axis_name] = (
-                                np.tile(
-                                    np.arange(col.shape[axis_i]).reshape(
-                                        tuple(1 for _ in col.shape[:axis_i]) + (-1,) + tuple(1 for _ in col.shape[axis_i + 1:])
-                                    ),
-                                    tuple(n for n in col.shape[:axis_i]) + (1,) + tuple(n for n in col.shape[axis_i + 1:])).reshape(-1)
-                            )[sorter]
-        if not inplace:
-            return self
-
-    @classmethod
-    def query_table(cls, table, ids):
-        new_table = {}
-        for col_name, col in list(table.items()):
-            new_table[col_name] = col.iloc[ids] if hasattr(col, 'iloc') else col[ids]
-        return new_table
-
-    def get_id_name(self, name):
-        """Maybe override this if the user needs it"""
-        return f"{name}_id"
-
-    def get_table_of_id(self, name):
-        table_name = name[:-3] if name.endswith('_id') else None
-        if table_name in self.tables:
-            return table_name
-
-    def set_main_table(self, name, inplace=False):
-        if not inplace:
-            return Batcher(
-                self.tables,
-                main_table=name,
-                masks=self.masks,
-                column_names=self.column_names,
-            )
+    Returns
+    -------
+    np.ndarray or torch.Tensor
+    """
+    if issparse(array):
+        array = array.tocsr()
+        col_bis = array.copy()
+        col_bis.data = np.ones(len(array.data), dtype=bool)
+        if mask is not None and issparse(mask):
+            res = array[mask]
+            # If empty mask, scipy returns a sparse matrix: we use toarray to densify
+            if hasattr(res, 'toarray'):
+                return res.toarray().reshape(-1)
+            # else, scipy returns a 2d matrix, we use asarray to densify
+            return np.asarray(res).reshape(-1)
+        array = array.toarray()
+        if mask is not None:
+            mask = as_numpy_array(mask)
+    if isinstance(array, (list, tuple)):
+        if mask is None:
+            return array
+        array = np.asarray(array)
+    if isinstance(array, np.ndarray):
+        if mask is not None:
+            if not isinstance(array, np.ndarray):
+                raise Exception(f"Mask type {repr(type(mask))} should be the same as array type {repr(type(array))}")
+            return array[mask]
         else:
-            self.main_table = name
-
-    def densify(self, device=None, dtypes=None):
-        new_tables = dict(self.tables)
-        new_column_names = {}
-        dtypes = dtypes or {}
-
-        col_to_resize = {}
-        masks_length = {}
-        for table_name, table_masks in self.masks.items():
-            for col_name, mask_name in table_masks.items():
-                if mask_name not in masks_length:
-                    if issparse(new_tables[table_name][mask_name]):
-                        if hasattr(new_tables[table_name][mask_name], 'indices'):
-                            if len(new_tables[table_name][mask_name].indices):
-                                max_length = new_tables[table_name][mask_name].indices.max() + 1
-                            else:
-                                max_length = 0
-                        elif hasattr(new_tables[table_name][mask_name], 'rows'):
-                            max_length = max((max(r, default=-1) + 1 for r in new_tables[table_name][mask_name].rows), default=0)
-                        else:
-                            raise Exception(f"Unrecognized mask format for {mask_name}: {new_tables[table_name][mask_name].__class__}")
-                        masks_length[mask_name] = max_length
-                        new_tables[table_name][mask_name].resize(new_tables[table_name][mask_name].shape[0], masks_length[mask_name])
-                    else:
-                        max_length = new_tables[table_name][mask_name].sum(-1).max()
-                        masks_length[mask_name] = max_length
-                        new_tables[table_name][mask_name] = new_tables[table_name][mask_name][:, masks_length[mask_name]]
-                if issparse(new_tables[table_name][col_name]):
-                    new_tables[table_name][col_name].resize(new_tables[table_name][col_name].shape[0], masks_length[mask_name])
-                else:
-                    new_tables[table_name][col_name] = new_tables[table_name][col_name][:, masks_length[mask_name]]
-
-        for table_name, table in self.tables.items():
-            new_table = {}
-            for col_name, col in table.items():
-                if issparse(col):
-                    col = col.toarray()
-                if isinstance(col, pd.DataFrame):
-                    new_column_names.setdefault(table_name, {}).setdefault(col_name, list(col.columns))
-                    if device is not None:
-                        col = col.values
-                elif isinstance(col, pd.Series):
-                    if device is not None:
-                        col = col.values
-                if device is not None:
-                    col = torch.as_tensor(col, device=device, dtype=dtypes.get(table_name, {}).get(col_name, torch.long if col_name.endswith('_id') else None))
-                new_table[col_name] = col
-            new_tables[table_name] = new_table
-        return Batcher(new_tables, main_table=self.main_table, masks=self.masks, column_names=new_column_names)
-
-    def query_ids(self, ids, densify=False, **densify_kwargs):
-        selected_ids = {self.get_id_name(self.main_table): ids}
-        queried_tables = {}
-        queue = {self.main_table}
-        while len(queue):
-            table_name = queue.pop()
-            table = self.tables[table_name]
-            queried_table = self.query_table(table, selected_ids[self.get_id_name(table_name)])
-            for col_name, col in queried_table.items():
-                new_table_name = self.get_table_of_id(col_name)
-                # We don't want to reindex the token_id column in the token table: it's useless and we will
-                # moreover need it intact for when we rebuild the original data
-                if new_table_name and new_table_name != table_name:
-                    mask_name = self.masks.get(table_name, {}).get(col_name, None)
-                    new_col, new_mask, unique_ids = factorize_ids(
-                        col=col,
-                        mask=queried_table.get(mask_name, None),
-                        prefered_unique_ids=selected_ids.get(col_name, None),
-                    )
-                    if mask_name is not None:
-                        queried_table[mask_name] = new_mask
-                    selected_ids[col_name] = unique_ids
-                    queried_table[col_name] = new_col
-                    if new_table_name not in queried_tables:
-                        queue.add(new_table_name)
-            queried_tables[table_name] = queried_table
-
-        # for id_name in selected_ids:
-        #     table_name = self.get_table_of_id(id_name)
-        #     queried_tables[table_name][id_name] = np.asarray(selected_ids[id_name])
-        new_tables = dict(self.tables)
-        new_tables.update(queried_tables)
-
-        res = Batcher(new_tables, main_table=self.main_table, masks=self.masks, column_names=self.column_names)
-        if densify:
-            res = res.densify(**densify_kwargs)
-        return res
-
-    def __getitem__(self, name):
-        if isinstance(name, str):
-            name = (name,)
-        if isinstance(name, slice):
-            name = np.arange(name.start or 0, name.stop, name.step or 1)
-        if isinstance(name, tuple):
-            if name[0] not in self.tables:
-                name = (self.main_table, *name)
-            current = self.tables[name[0]]
-            if len(name) == 1:
-                return self.set_main_table(name[0])
-            if len(name) > 1:
-                current = current[name[1]]
-            if len(name) > 2:
-                if isinstance(current, pd.DataFrame):
-                    return current[name[2]]
-                else:
-                    current_column_names = self.column_names.get(name[0], {}).get(name[1], {})
-                    if isinstance(name[2], str):
-                        if name[2] in current_column_names:
-                            current = current[:, current_column_names.index(name[2])]
-                        else:
-                            raise KeyError(name)
-                    elif isinstance(name[2], int):
-                        current = current[:, name[2]]
-                    elif isinstance(name[2], (list, tuple)):
-                        parts_idx = []
-                        for part in name[2]:
-                            if part in current_column_names:
-                                parts_idx.append(current_column_names.index(part))
-                            else:
-                                raise KeyError((name[0], name[1], part))
-                        current = current[:, parts_idx]
-                    else:
-                        raise KeyError(name)
-            return current
-        elif isinstance(name, (list, np.ndarray)):
-            return self.query_ids(name)
+            return array.reshape(-1)
+    elif torch.is_tensor(array):
+        if mask is not None:
+            if not torch.is_tensor(mask):
+                raise Exception(f"Mask type {repr(type(mask))} should be the same as array type {repr(type(array))}")
+            return array[mask]
         else:
-            if hasattr(name, 'toarray'):
-                name = name.toarray()
-            else:
-                name = np.asarray(name)
-            if name.dtype == np.bool:
-                return self.query_ids(np.flatnonzero(name))
-            else:
-                return self.query_ids(name)
+            return array.reshape(-1)
+    else:
+        raise Exception(f"Unrecognized array type {repr(type(array))} during array flattening (mask type is {repr(type(mask))}')")
 
-    def dataloader(self,
-                   batch_size=32,
-                   sparse_sort_on=None,
-                   shuffle=False,
-                   device=None,
-                   dtypes=None,
-                   **kwargs):
-        batch_sampler = kwargs.pop("batch_sampler", None)
-        if sparse_sort_on is not None:
-            batch_sampler = SparseBatchSampler(self, on=sparse_sort_on, batch_size=batch_size, shuffle=shuffle, drop_last=False)
+
+def factorize(values, mask=None, reference_values=None, freeze_reference=True, keep_old_values=False):
+    """
+    Express values in "col" as row numbers in a reference list of values
+    The reference values list is the deduplicated concatenation of preferred_unique_values (if not None) and col
+
+    Ex:
+    >>> factorize(["A", "B", "C", "D"], None, ["D", "B", "C", "A", "E"])
+    ... [3, 2, 1, 0], None, ["D", "B", "C", "A", "E"]
+    >>> factorize(["A", "B", "C", "D"], None, None)
+    ... [0, 1, 2, 3], None, ["A", "B", "C", "D"]
+
+    Parameters
+    ----------
+    col: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list of (np.ndarray or scipy.sparse.spmatrix or torch.Tensor)
+        values to factorize
+    mask: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list of (np.ndarray or scipy.sparse.spmatrix or torch.Tensor) or None
+        optional mask on col, useful for multiple dimension values arrays
+    freeze_reference: bool
+        Should we throw out values out of reference values (if given).
+        Then we need a mask to mark those rows as disabled
+        TODO: handle cases when a mask is not given
+    reference_values: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list or None
+        If given, any value in col that is not in prefered_unique_values will be thrown out
+        and the mask will be updated to be False for this value
+
+    Returns
+    -------
+    col, updated mask, reference values
+    """
+    if isinstance(values, list) and not hasattr(values[0], '__len__'):
+        values = np.asarray(values)
+    return_as_list = isinstance(values, list)
+    all_values = values if isinstance(values, list) else [values]
+    del values
+    all_masks = mask if isinstance(mask, list) else [None for _ in all_values] if mask is None else [mask]
+    del mask
+
+    assert len(all_values) == len(all_masks), "Mask and values lists must have the same length"
+
+    if reference_values is None:
+        freeze_reference = False
+
+    all_flat_values = []
+    for values, mask in zip(all_values, all_masks):
+        assert (
+              (isinstance(mask, np.ndarray) and isinstance(values, np.ndarray)) or
+              (issparse(mask) and issparse(values)) or
+              (torch.is_tensor(mask) and torch.is_tensor(values)) or
+              (mask is None and (isinstance(values, (list, tuple, np.ndarray)) or issparse(values) or torch.is_tensor(values)))), (
+            f"values and (optional mask) should be of same type torch.tensor, numpy.ndarray or scipy.sparse.spmatrix. Given types are values: {repr(type(values))} and mask: {repr(type(mask))}")
+        all_flat_values.append(flatten_array(values, mask))
+        # return all_values[0], all_masks[0], all_values[0].tocsr().data if hasattr(all_values[0], 'tocsr') else all_values#col.tocsr().data if hasattr(col, 'tocsr')
+    if torch.is_tensor(all_flat_values[0]):
+        if reference_values is None:
+            unique_values, relative_values = torch.unique(torch.cat(all_flat_values), return_inverse=True)
         else:
-            kwargs['batch_size'] = batch_size
-            kwargs['shuffle'] = shuffle
-        return DataLoader(range(len(self)),  # if self._idx is None else self._idx,
-                          collate_fn=lambda ids: self.query_ids(ids).densify(device, dtypes),
-                          batch_sampler=batch_sampler,
-                          **kwargs)
+            relative_values, unique_values = torch.unique(torch.cat((reference_values, *all_flat_values)), return_inverse=True)[1], reference_values
+    else:
+        if reference_values is None:
+            relative_values, unique_values = pd.factorize(np.concatenate(all_flat_values))
+        else:
+            relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))[0], reference_values
+    if freeze_reference:
+        all_unk_masks = relative_values < len(reference_values)
+    else:
+        all_unk_masks = None
 
-    @classmethod
-    def concat(cls, batches):
-        struct = batches[0]
-        batches = [b.tables for b in batches]
-        res = {}
+    offset = len(reference_values) if reference_values is not None else 0
+    new_flat_values = []
+    new_flat_values = []
+    unk_masks = []
+    for flat_values in all_flat_values:
+        indexer = slice(offset, offset + len(flat_values))
+        new_flat_values.append(relative_values[indexer])
+        unk_masks.append(all_unk_masks[indexer] if all_unk_masks is not None else None)
+        offset = indexer.stop
+    all_flat_values = new_flat_values
+    del new_flat_values
 
-        for table_name, table0 in struct.tables.items():
-            res[table_name] = {}
-            for col_name, col0 in table0.items():
-                if col_name in res[table_name]:
-                    continue
-                mask_name = struct.masks.get(table_name, {}).get(col_name, None)
-
-                # Convert to sparse if needed
-                if issparse(col0):
-                    shape1 = max([dic[table_name][col_name].shape[1] for dic in batches])
-                    for dic in batches:
-                        dic[table_name][col_name].resize(dic[table_name][col_name].shape[0], shape1)
-                    res[table_name][col_name] = [dic[table_name][col_name].tocsr() for dic in batches]
-                elif mask_name is not None:
-                    res[table_name][col_name] = [csr_matrix(
-                        (dic[table_name][col_name][dic[table_name][mask_name]], dic[table_name][mask_name].nonzero()),
-                        shape=dic[table_name][mask_name].shape,
-                    ) for dic in batches]
-                    shape1 = max([sps.shape[1] for sps in res[table_name][col_name]])
-                    for sps in res[table_name][col_name]:
-                        sps.resize(sps.shape[0], shape1)
-                # If col_name IS a mask
-                elif col_name in struct.masks.get(table_name, {}).values():
-                    res[table_name][col_name] = [csr_matrix(
-                        (np.ones(dic[table_name][col_name].sum(), dtype=bool), dic[table_name][col_name].nonzero()),
-                        shape=dic[table_name][col_name].shape,
-                    ) for dic in batches]
-                    shape1 = max([sps.shape[1] for sps in res[table_name][col_name]])
-                    for sps in res[table_name][col_name]:
-                        sps.resize(sps.shape[0], shape1)
+    if freeze_reference:
+        unique_values = unique_values[:len(reference_values)]
+    new_values = []
+    new_masks = []
+    for values, mask, flat_relative_values, unk_mask in zip(all_values, all_masks, all_flat_values, unk_masks):
+        if issparse(values):
+            new_mask = mask.tocsr()
+            values = values.tocsr()
+            if freeze_reference:
+                if mask is None:
+                    new_mask = values.copy()
+                    new_mask.data = unk_mask
                 else:
-                    res[table_name][col_name] = [dic[table_name][col_name] for dic in batches]
-                # Check if we need to align ids between two or more matrices
-                other_table_name = struct.get_table_of_id(col_name)
-                if other_table_name and other_table_name != table_name:
-                    # If fragment_id doesn't exist in fragment table, (for ex: new fragments), create it
-                    if col_name not in struct.tables[other_table_name]:
-                        i = 0
-                        for dic in batches:
-                            dic_size = next(iter(dic[other_table_name].values())).shape[0]
-                            dic[other_table_name][col_name] = np.arange(i, i + dic_size)
-                            i += dic_size
-                    # print(table_name, col_name, "lookup absolute ids: ", other_table_name, col_name)
-                    if issparse(res[table_name][col_name][0]):
-                        for sps, dic in zip(res[table_name][col_name], batches):
-                            # print("rel", sps.data, "abs", dic[other_table_name][col_name])
-                            sps.data = dic[other_table_name][col_name][sps.data]
-                    else:
-                        res[table_name][col_name] = [
-                            dic[other_table_name][col_name][x]
-                            for x, dic in zip(res[table_name][col_name], batches)]
-
-                # Finally concatenate the matrices, sparse or dense
-                if issparse(res[table_name][col_name][0]):
-                    res[table_name][col_name] = vstack(res[table_name][col_name]).tolil()
+                    new_mask.data = new_mask.data & unk_mask
+            if mask is not None:
+                values = new_mask.copy()
+                values.data = flat_relative_values
+                new_col = new_mask.copy()
+                new_col.data = flatten_array(values, new_mask)
+                new_values.append(new_col.tolil())
+                new_masks.append(new_mask.tolil())
+            else:
+                values.data = flat_relative_values
+                new_values.append(values.tolil())
+                new_masks.append(new_mask)
+        elif isinstance(values, (list, tuple)):
+            mask = unk_mask
+            if mask is not None:
+                values = [v for v, valid in zip(flat_relative_values, mask) if valid]
+                new_values.append(values)
+                new_masks.append(None)
+            else:
+                values = list(flat_relative_values)
+                new_values.append(values)
+                new_masks.append(None)
+        elif isinstance(values, np.ndarray):
+            new_mask = mask
+            if freeze_reference:
+                if mask is None:
+                    new_mask = unk_mask.reshape(values.shape)
                 else:
-                    res[table_name][col_name] = np.concatenate(res[table_name][col_name])
+                    new_mask = mask.copy()
+                    mask[mask] = unk_mask
+            if mask is not None:
+                values = np.zeros(values.shape, dtype=int)
+                values[mask] = flat_relative_values
+                new_values.append(values)
+                new_masks.append(new_mask)
+            else:
+                values = flat_relative_values.reshape(values.shape)
+                new_values.append(values)
+                new_masks.append(new_mask)
+        else:  # torch
+            new_mask = mask
+            if freeze_reference:
+                if mask is None:
+                    new_mask = unk_mask.view(*values.shape)
+                else:
+                    new_mask = mask.clone()
+                    mask[mask] = unk_mask
+            if mask is not None:
+                values = torch.zeros(values.shape, dtype=torch.long)
+                values[mask] = flat_relative_values
+                new_values.append(values)
+                new_masks.append(mask)
+            else:
+                values = flat_relative_values.view(*values.shape)
+                new_values.append(values)
+                new_masks.append(new_mask)
+    if return_as_list:
+        return new_values, new_masks, unique_values
+    return new_values[0], new_masks[0], unique_values
 
-        res = Batcher(res, main_table=struct.main_table, masks=struct.masks, column_names=struct.column_names)
-        for table_name, table in list(res.tables.items()):
-            id_name = res.get_id_name(table_name)
-            if id_name in table:
-                sorter = np.unique(table[id_name], return_index=True)[1]  # sort and unifies
-                res.tables[table_name] = res.query_table(table, sorter)
-        return res
 
-    def __repr__(self):
-        # return "Batcher(\n  {}\n)".format("\n  ".join(f"({k}): {v.dtype}{v.shape}" for k, v in self.arrays.items() if v is not None))
-        return BatcherPrinter(indent=2, depth=2).pformat(self)
+def as_numpy_array(array):
+    if isinstance(array, np.ndarray):
+        return array
+    elif hasattr(array, 'toarray'):
+        return array.toarray()
+    elif torch.is_tensor(array):
+        return array.cpu().numpy()
+    else:
+        return np.asarray(array)
 
 
 class BatcherPrinter(pprint.PrettyPrinter):
@@ -364,7 +239,10 @@ class BatcherPrinter(pprint.PrettyPrinter):
         write('\n' + ' ' * indent + ')')
 
     def format_array(self, obj, stream, indent, allowance, context, level):
-        dtype_str = (str(obj.dtype) if hasattr(obj, 'dtype') else str(obj.dtypes.values[0]) if len(set(obj.dtypes.values)) == 1 else 'multiple')
+        dtype_str = (
+            ("ndarray" if isinstance(obj, np.ndarray) else "tensor" if torch.is_tensor(obj) else str(obj.__class__.__name__)) +
+            "[{}]".format(str(obj.dtype) if hasattr(obj, 'dtype') else str(obj.dtypes.values[0]) if len(set(obj.dtypes.values)) == 1 else 'multiple')
+        )
         stream.write(dtype_str + str(tuple(obj.shape)))
 
     def format_columns(self, items, stream, indent, allowance, context, level, inline=False):
@@ -443,11 +321,11 @@ class SparseBatchSampler(BatchSampler):
         if self.shuffle:
             init_permut = np.random.permutation(length)
             sorter = np.argsort(
-                (self.batcher[self.on].getnnz(1) + np.random.poisson(1, size=length))[init_permut])
+                (getattr(self.batcher[self.on], "getnnz", self.batcher[self.on].sum)(1) + np.random.poisson(1, size=length))[init_permut])
             for i in np.random.permutation(len(block_begins)):
                 yield init_permut[sorter[block_begins[i]:block_ends[i]]]
         else:
-            sorter = np.argsort(self.batcher[self.on].getnnz(1))
+            sorter = np.argsort(getattr(self.batcher[self.on], "getnnz", self.batcher[self.on].sum)(1))
             for i in range(len(block_begins)):
                 yield sorter[block_begins[i]:block_ends[i]]
 
@@ -458,75 +336,652 @@ class SparseBatchSampler(BatchSampler):
             return (len(self.batcher) + self.batch_size - 1) // self.batch_size
 
 
-def flatten_ids(col, mask=None):
-    if issparse(col):
-        col = col.tocsr()
-        col_bis = col.copy()
-        col_bis.data = np.ones(len(col.data), dtype=bool)
-        if mask is not None and issparse(mask):
-            res = col[mask]
-            # If empty mask, scipy returns a sparse matrix: we use toarray to densify
-            if hasattr(res, 'toarray'):
-                return res.toarray().reshape(-1)
-            # else, scipy returns a 2dmatrix, we use asarray to densify
-            return np.asarray(res).reshape(-1)
-        col = col.toarray()
-        if mask is not None:
-            mask = densify(mask)
-    if isinstance(col, np.ndarray):
-        if mask is not None:
-            return col[mask]
+class Batcher:
+    def __init__(self, tables, main_table=None, masks=None, subcolumn_names=None, foreign_ids=None, primary_ids=None):
+        self.tables = {}
+        self.subcolumn_names = subcolumn_names or {}
+        for table_name, table in tables.items():
+            for col_name, col in table.items():
+                if isinstance(col, pd.DataFrame):
+                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
+                    self.subcolumn_names.setdefault(table_name, {}).setdefault(col_name, list(col.columns))
+                elif isinstance(col, pd.Series):
+                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
+                elif isinstance(col, pd.Categorical):
+                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.codes)
+                else:
+                    self.tables.setdefault(table_name, {}).setdefault(col_name, col)
+        self.main_table = main_table or next(iter(tables.keys()))
+        self.masks = masks or {}
+        if primary_ids is not None:
+            self.primary_ids = primary_ids
         else:
-            return col.reshape(-1)
-    else:
-        raise Exception()
-
-
-def factorize_ids(col, mask, prefered_unique_ids=None):
-    if prefered_unique_ids is None:
-        prefered_unique_ids = np.zeros(0, dtype=col.dtype)
-    if mask is not None:
-        mask = mask.tocsr()
-    flat_ids = flatten_ids(col, mask)
-    relative_ids, unique_ids = pd.factorize(np.concatenate((prefered_unique_ids, flat_ids)))
-    unique_ids = prefered_unique_ids if len(prefered_unique_ids) else unique_ids
-    relative_ids = relative_ids[len(prefered_unique_ids):]
-    if mask is None and (relative_ids > len(unique_ids)).any():
-        raise Exception("Cannot handle out of vocabulary labels/ids for array if not given a mask")
-    if issparse(col):
-        col = col.tocsr()
-        if mask is not None:
-            mask = mask.copy()
-            col = mask.copy()
-            col.data = relative_ids
-            mask.data = relative_ids < len(unique_ids)
-            mask.eliminate_zeros()
-            new_col = mask.copy()
-            new_col.data = flatten_ids(col, mask)
-            return new_col.tolil(), mask.tolil(), unique_ids
+            self.primary_ids = {table_name: f"{table_name}_id" for table_name in self.tables if f"{table_name}_id" in self.tables[table_name]}
+        if isinstance(foreign_ids, dict):
+            self.foreign_ids = foreign_ids
         else:
-            col.data = relative_ids
-            return col.tolil(), None, unique_ids
-    if isinstance(col, np.ndarray):
-        if mask is not None:
-            col = col.copy()
-            col[mask] = relative_ids
-            unique_ids = prefered_unique_ids if len(prefered_unique_ids) else unique_ids
-            mask = mask & (col < len(unique_ids))
-            col[~mask] = 0
-            return col, mask, unique_ids
+            if foreign_ids == "relative":
+                mode = "relative"
+            elif foreign_ids == "absolute":
+                mode = "absolute"
+            else:
+                mode = "absolute"
+                assert foreign_ids is None, f"Unrecognized format for foreign_ids: {type(foreign_ids)}"
+            self.foreign_ids = {}
+            for table_name, table_columns in self.tables.items():
+                # ex: table_name = "mention", table_columns = ["sample_id", "begin", "end", "idx_in_sample"]
+                for col_name in table_columns:
+                    if col_name.endswith('_id') and col_name != self.primary_ids.get(table_name, None):
+                        prefix = col_name[:-3]
+                        foreign_table_name = next((table_name for table_name in self.tables if prefix.endswith(table_name)), None)
+                        # foreign_table_id = f"{table_name}_id"
+                        if foreign_table_name is not None:
+                            self.foreign_ids.setdefault(table_name, {})[col_name] = (foreign_table_name, mode)
+        if masks is not None:
+            self.masks = masks
         else:
-            col = relative_ids.reshape(col.shape)
-            unique_ids = prefered_unique_ids if len(prefered_unique_ids) else unique_ids
-            return col, None, unique_ids
-    else:
-        raise Exception(f"Data format {col.__class__} was not recognized during factorization")
+            self.masks = {}
+            for table_name, table_columns in self.tables.items():
+                # ex: table_name = "mention", table_columns = ["sample_id", "begin", "end", "idx_in_sample"]
+                for col_name in table_columns:
+                    if col_name.endswith('_mask') and col_name != self.primary_ids.get(table_name, None):
+                        id_name = col_name[:-5]+'_id'
+                        # foreign_table_id = f"{table_name}_id"
+                        if id_name in table_columns:
+                            self.masks.setdefault(table_name, {})[id_name] = col_name
 
+    def __len__(self):
+        return next(iter(self.tables[self.main_table].values())).shape[0]
 
-def densify(array):
-    if isinstance(array, np.ndarray):
-        return array
-    elif hasattr(array, 'toarray'):
-        return array.toarray()
-    else:
-        return np.asarray(array)
+    @property
+    def device(self):
+        return getattr(next(iter(self.tables[self.main_table].values())), 'device', None)
+
+    @property
+    def shape(self):
+        return next(iter(self.tables[self.main_table].values())).shape
+
+    def keys(self):
+        return self.tables[self.main_table].keys()
+
+    def values(self):
+        return self.tables[self.main_table].values()
+
+    def items(self):
+        return self.tables[self.main_table].items()
+
+    def copy(self):
+        return Batcher(
+            {key: dict(table) for key, table in self.tables.items()},
+            main_table=self.main_table,
+            masks=dict(self.masks),
+            subcolumn_names=dict(self.subcolumn_names),
+            foreign_ids={table_name: dict(vals) for table_name, vals in self.foreign_ids.items()},
+            primary_ids=dict(self.primary_ids),
+        )
+
+    def set_main_table(self, name, inplace=False):
+        if not inplace:
+            self = self.copy()
+        self.main_table = name
+        if not inplace:
+            return self
+
+    def __getitem__(self, indexer):
+        if isinstance(indexer, str):
+            indexer = (indexer,)
+        if isinstance(indexer, slice):
+            device = self.device
+            if device is None:
+                indexer = np.arange(indexer.start or 0, indexer.stop, indexer.step or 1)
+            else:
+                indexer = torch.arange(indexer.start or 0, indexer.stop, indexer.step or 1, device=device)
+        if isinstance(indexer, tuple):
+            if indexer[0] not in self.tables:
+                indexer = (self.main_table, *indexer)
+            current = self.tables[indexer[0]]
+            if len(indexer) == 1:
+                return self.slice_tables({indexer[0]: slice(None)})
+            if len(indexer) > 1:
+                if isinstance(indexer[1], list):
+                    current = [current[name] for name in indexer[1]]
+                else:
+                    current = current[indexer[1]]
+            if len(indexer) > 2:
+                if isinstance(current, pd.DataFrame):
+                    return current[indexer[2]]
+                else:
+                    current_column_names = self.subcolumn_names.get(indexer[0], {}).get(indexer[1], {})
+                    if isinstance(indexer[2], str):
+                        if indexer[2] in current_column_names:
+                            current = current[:, current_column_names.index(indexer[2])]
+                        else:
+                            raise KeyError(indexer)
+                    elif isinstance(indexer[2], int):
+                        current = current[:, indexer[2]]
+                    elif isinstance(indexer[2], (list, tuple)):
+                        parts_idx = []
+                        for part in indexer[2]:
+                            if part in current_column_names:
+                                parts_idx.append(current_column_names.index(part))
+                            else:
+                                raise KeyError((indexer[0], indexer[1], part))
+                        current = current[:, parts_idx]
+                    else:
+                        raise KeyError(indexer)
+            return current
+        elif isinstance(indexer, list):
+            if isinstance(indexer[0], str):
+                return self.slice_tables({table_name: slice(None) for table_name in indexer})
+            else:
+                return self.query_ids(indexer)
+        elif isinstance(indexer, dict):
+            return self.slice_tables(indexer)
+        else:
+            if not (isinstance(indexer, np.ndarray) or torch.is_tensor(indexer)):
+                if hasattr(indexer, 'toarray'):
+                    indexer = indexer.toarray()
+                else:
+                    indexer = np.asarray(indexer)
+            if len(indexer.shape) == 1 and indexer.dtype == np.bool:
+                return self.query_ids(np.flatnonzero(indexer))
+            elif len(indexer.shape) == 1 and  torch.is_tensor(indexer) and indexer.dtype == torch.bool:
+                return self.query_ids(torch.nonzero(indexer, as_tuple=True)[0])
+            else:
+                return self.query_ids(indexer)
+
+    def __setitem__(self, key, value):
+        assert isinstance(key, tuple)
+        table = self.tables[key[0]]
+        if isinstance(key[1], str):
+            table[key[1]] = value
+        elif isinstance(key[1], list):
+            assert len(key[1]) == len(value)
+            for name, val in zip(key[1], value):
+                table[name] = val
+        else:
+            raise Exception("Can only assign array or list of arrays to either (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
+
+    def __repr__(self):
+        return BatcherPrinter(indent=2, depth=2).pformat(self)
+
+    def dataloader(self,
+                   batch_size=32,
+                   sparse_sort_on=None,
+                   shuffle=False,
+                   device=None,
+                   dtypes=None,
+                   **kwargs):
+        batch_sampler = kwargs.pop("batch_sampler", None)
+        if sparse_sort_on is not None:
+            batch_sampler = SparseBatchSampler(self, on=sparse_sort_on, batch_size=batch_size, shuffle=shuffle, drop_last=False)
+        else:
+            kwargs['batch_size'] = batch_size
+            kwargs['shuffle'] = shuffle
+        #self = self.switch_foreign_ids_mode("relative")
+        return DataLoader(range(len(self)),  # if self._idx is None else self._idx,
+                          collate_fn=lambda ids: self.query_ids(ids, device=device, dtypes=dtypes),
+                          batch_sampler=batch_sampler,
+                          **kwargs)
+
+    @classmethod
+    def query_table(cls, table, ids):
+        new_table = {}
+        for col_name, col in list(table.items()):
+            new_table[col_name] = col[ids]
+        return new_table
+
+    def prepare_for_indexing(self, inplace=False):
+        if not inplace:
+            self = self.copy()
+
+        self.fill_primary_ids(inplace=True)
+        self.switch_foreign_ids_mode("relative", inplace=True)
+
+        if not inplace:
+            return self
+
+    def fill_primary_ids(self, subset=None, offsets=None, inplace=False):
+        if not inplace:
+            self = self.copy()
+
+        if isinstance(subset, str):
+            subset = [subset]
+
+        if offsets is None:
+            offsets = {}
+
+        device = self.device
+        for sample_table_name, sample_columns in list(self.tables.items()):
+            sample_id_name = self.primary_ids.get(sample_table_name, f"{sample_table_name}_id")
+            if (subset is None or sample_table_name in subset) and sample_id_name not in sample_columns:
+                self.primary_ids[sample_table_name] = sample_id_name
+                offset = offsets.get(sample_table_name, 0)
+                if device is None:
+                    self.tables[sample_table_name][sample_id_name] = np.arange(offset, offset+next(iter(self.tables[sample_table_name].values())).shape[0])
+                else:
+                    self.tables[sample_table_name][sample_id_name] = torch.arange(offset, offset+next(iter(self.tables[sample_table_name].values())).shape[0], device=device)
+
+        if not inplace:
+            return self
+
+    def switch_foreign_ids_mode(self, mode="relative", inplace=False):
+        """
+        Sort all tables against their main id if given, and put reversed ids in each table if it is
+        accessible from another table
+        """
+        if not inplace:
+            self = self.copy()
+        # for sample_table_name, sample_columns in list(self.tables.items()):
+        #     sample_id_name = self.get_id_of_table(sample_table_name)
+        #     if sample_id_name in sample_columns:
+        #         sample_fragment_row_numbers = sample_columns[sample_id_name].argsort()
+        #         self.tables[sample_table_name] = self.query_table(sample_columns, sample_fragment_row_numbers)
+
+        # Given a batcher
+        # >>> Batcher(
+        #   [sample]:
+        #     (sample_id): ...
+        #     (fragment_id): ...
+        #     (fragment_mask): ...
+        #   [fragment]:
+        #     (fragment_id): ...
+        #     (label): ...
+        # We want to add the columns "sample_id", and "idx" to each fragment, so we know
+        # for each fragment what is its position in the sample and which sample it belongs to
+
+        # The variables in the following code have been named in order to improve readability as to their role
+        if mode == "relative":
+            table_name_to_others_referencing_it = {}
+            for table_name, table_foreign_ids in self.foreign_ids.items():
+                for table_foreign_id_col, (foreign_table_name, old_mode) in table_foreign_ids.items():
+                    if old_mode == "absolute":
+                        # If the table has a primary id
+                        if foreign_table_name in self.primary_ids:
+                            logging.debug(f"Switching {table_name}/{table_foreign_id_col} from absolute to relative mode")
+                            table_name_to_others_referencing_it.setdefault(foreign_table_name, []).append((table_name, table_foreign_id_col))
+                        table_foreign_ids[table_foreign_id_col] = (foreign_table_name, "relative")  # inplace modification
+            for table_name, others in table_name_to_others_referencing_it.items():
+                new_relative_ids, new_masks = factorize(
+                    values=[self.tables[other_table_referencing_it][other_table_foreign_id]
+                            for other_table_referencing_it, other_table_foreign_id in others],
+                    mask=[self.tables[other_table_referencing_it].get(self.masks.get(other_table_referencing_it, {}).get(other_table_foreign_id, None), None)
+                          for other_table_referencing_it, other_table_foreign_id in others],
+                    reference_values=self.tables[table_name][self.primary_ids[table_name]],
+                    freeze_reference=True
+                )[:2]
+                for (table_name, table_col_name), table_foreign_ids, table_foreign_mask in zip(others, new_relative_ids, new_masks):
+                    self.tables[table_name][table_col_name] = table_foreign_ids
+                    if table_foreign_mask is not None and self.masks.get(table_name, {}).get(table_col_name, None):
+                        self.tables[table_name][self.masks[table_name][table_col_name]] = table_foreign_mask
+        elif mode == "absolute":
+            for table_name, table_foreign_ids in self.foreign_ids.items():
+                for table_foreign_id_col, (foreign_table_name, old_mode) in table_foreign_ids.items():
+                    if old_mode == "relative":
+                        logging.debug(f"Switching {table_name}/{table_foreign_id_col} from relative to absolute mode")
+                        table_foreign_ids[table_foreign_id_col] = (foreign_table_name, "absolute")  # inplace modification
+                        array_to_change = self.tables[table_name][table_foreign_id_col]
+                        if foreign_table_name not in self.primary_ids:
+                            raise Exception(f"Table {foreign_table_name} is missing its primary id in order to switch {table_name}/{table_foreign_id_col} to absolute mode")
+                        if issparse(array_to_change):
+                            array_to_change = self.tables[table_name][table_foreign_id_col] = array_to_change.tocsr()
+                            array_to_change.data = self.tables[foreign_table_name][self.primary_ids[foreign_table_name]][array_to_change.data]
+                        else:
+                            self.tables[table_name][table_foreign_id_col] = self.tables[foreign_table_name][self.primary_ids[foreign_table_name]][array_to_change]
+
+        if not inplace:
+            return self
+
+    def old(self):
+        for sample_table_name, sample_columns in list(self.tables.items()):
+            # Ex: sample_table_name: doc
+            #     sample_columns: [doc_id, mention_id, mention_mask]
+            sample_id_name = self.primary_ids[sample_table_name]
+            for sample_col_name, sample_column in sample_columns.items():
+                # Ex: sample_col_name: mention_id
+                #     fragment_table_name: mention
+                #     sample_fragment_mask_name: mention_mask
+                fragment_table_name = self.foreign_ids[sample_table_name][sample_col_name][0]
+                sample_fragment_mask_name = self.masks.get(sample_table_name, {}).get(sample_col_name, None)
+                if fragment_table_name and fragment_table_name != sample_table_name:
+                    fragment_id_name = self.primary_ids[fragment_table_name]
+                    try:
+                        fragment_columns = self.tables[fragment_table_name]
+
+                        if sample_id_name not in fragment_columns:
+                            continue
+
+                        if sample_fragment_mask_name:
+                            sample_fragment_mask = sample_columns[sample_fragment_mask_name]  # = batcher["sample"]["fragment_mask"]
+                            # Transform batcher["sample"]["fragment_id"] into batcher["fragment"] row numbers
+                            # If batcher["fragment_id"] is sorted with no missing id (=arange(...)), then
+                            sample_fragment_row_numbers = np.argsort(factorize(flatten_array(sample_column, sample_fragment_mask), None, fragment_columns[fragment_id_name])[0])
+                            if issparse(sample_fragment_mask):
+                                indices = sample_fragment_mask.nonzero()
+                                fragment_columns[sample_id_name], fragment_columns['idx'] = indices[0][sample_fragment_row_numbers], indices[1][sample_fragment_row_numbers]
+                            elif isinstance(sample_fragment_mask, np.ndarray):
+                                for axis_name, idx in zip(
+                                      [sample_id_name, 'idx', (f"idx_{i+2}" for i in range(len(sample_column.shape[2:])))],
+                                      sample_fragment_mask.nonzero()):
+                                    fragment_columns[axis_name] = idx[sample_fragment_row_numbers]
+                            elif torch.is_tensor(sample_fragment_mask):
+                                for axis_name, idx in zip(
+                                      [sample_id_name, 'idx', (f"idx_{i+2}" for i in range(len(sample_column.shape[2:])))],
+                                      sample_fragment_mask.nonzero()[sample_fragment_row_numbers].t()):
+                                    fragment_columns[axis_name] = idx
+                            else:
+                                raise Exception(f"Unrecognized mask format for {sample_fragment_mask_name}: {sample_fragment_mask.__class__}")
+                        else:
+                            sample_fragment_row_numbers = factorize(flatten_array(sample_column), None, fragment_columns[fragment_id_name])[0]
+                            sample_fragment_row_numbers = np.argsort(sample_fragment_row_numbers)
+                            for axis_name, axis_i in zip([sample_id_name, 'idx', (f"idx_{i+2}" for i in range(len(sample_column.shape[2:])))], range(len(sample_column.shape))):
+                                fragment_columns[axis_name] = (
+                                    np.tile(
+                                        np.arange(sample_column.shape[axis_i]).reshape(
+                                            tuple(1 for _ in sample_column.shape[:axis_i]) + (-1,) + tuple(1 for _ in sample_column.shape[axis_i + 1:])
+                                        ),
+                                        tuple(n for n in sample_column.shape[:axis_i]) + (1,) + tuple(n for n in sample_column.shape[axis_i + 1:])).reshape(-1)
+                                )[sample_fragment_row_numbers]
+                    except:
+                        raise Exception(f"Error occurred during ids completion from table {repr(sample_table_name)} to table {repr(fragment_table_name)}")
+
+        self.sorted = True
+
+        if not inplace:
+            return self
+
+    set_main = set_main_table
+
+    def densify(self, device=None, dtypes=None):
+        new_tables = dict(self.tables)
+        new_column_names = {}
+        dtypes = dtypes or {}
+
+        for table_name, table in self.tables.items():
+            new_table = {}
+            for col_name, col in table.items():
+                if issparse(col):
+                    col = col.toarray()
+                if isinstance(col, pd.DataFrame):
+                    new_column_names.setdefault(table_name, {}).setdefault(col_name, list(col.columns))
+                    if device is not None:
+                        col = col.values
+                elif isinstance(col, pd.Series):
+                    if device is not None:
+                        col = col.values
+                if device is not None:
+                    col = torch.as_tensor(col, device=device, dtype=dtypes.get(table_name, {}).get(col_name, torch.long if col_name.endswith('_id') else None))
+                new_table[col_name] = col
+            new_tables[table_name] = new_table
+        return Batcher(new_tables,
+                       main_table=self.main_table,
+                       masks=self.masks,
+                       subcolumn_names=new_column_names,
+                       foreign_ids=self.foreign_ids,
+                       primary_ids=self.primary_ids)
+
+    def sparsify(self):
+        """
+        Converts the columns into numpy arrays and scipy sparse arrays
+
+        Returns
+        -------
+        Batcher
+        """
+
+        new_tables = {}
+        densified_masks = {}
+        sparsified_masks = {}
+
+        # First sparsify column that have masks
+        for table_name, table_masks in self.masks.items():
+            for col_name, mask_name in table_masks.items():
+                mask = self.tables[table_name][mask_name]
+                col = self.tables[table_name][col_name]
+                if issparse(mask) and not issparse(col):
+                    if mask_name not in densified_masks:
+                        densified_masks[mask_name] = mask.toarray()
+                    col = as_numpy_array(col)
+                    data = col[densified_masks[mask_name]]
+                    col = mask.copy()
+                    col.data = data
+                elif issparse(col) and not issparse(mask):
+                    if mask_name not in sparsified_masks:
+                        sparsified_masks[mask_name] = mask = csr_matrix(as_numpy_array(mask))
+                    else:
+                        mask = sparsified_masks[mask_name]
+                elif not issparse(col) and not issparse(mask):
+                    data = as_numpy_array(col)[mask]
+                    if mask_name not in sparsified_masks:
+                        sparsified_masks[mask_name] = mask = csr_matrix(as_numpy_array(mask))
+                    else:
+                        mask = sparsified_masks[mask_name]
+                    col = mask.copy()
+                    col.data = data
+                new_tables.setdefault(table_name, {}).setdefault(mask_name, mask.tolil())
+                new_tables.setdefault(table_name, {}).setdefault(col_name, col.tolil())
+
+        # Then convert the other columns as numpy arrays
+        for table_name, table in self.tables.items():
+            for col_name, col in table.items():
+                if new_tables.get(table_name, {}).get(col_name, None) is None:
+                    new_tables.setdefault(table_name, {})[col_name] = as_numpy_array(col) if not issparse(col) else col
+
+        return Batcher(new_tables,
+                       main_table=self.main_table,
+                       masks=self.masks,
+                       subcolumn_names=self.subcolumn_names,
+                       foreign_ids=self.foreign_ids,
+                       primary_ids=self.primary_ids)
+
+    def slice_tables(self, tables_and_columns):
+        tables_and_columns = {
+            table_name: ([col_name for col_name in self.tables[table_name]] if col_names == slice(None) else col_names)
+            for table_name, col_names in tables_and_columns.items()
+        }
+        res = Batcher({
+            table_name: {
+                col_name: self.tables[table_name][col_name]
+                for col_name in col_names
+            }
+            for table_name, col_names in tables_and_columns.items()},
+            subcolumn_names={table_name: {col_name: sub_col_name
+                                          for col_name, sub_col_name in col_name_to_subcol_name.items() if col_name in tables_and_columns[table_name]}
+                             for table_name, col_name_to_subcol_name in self.subcolumn_names.items() if table_name in tables_and_columns},
+            masks={table_name: {col_name: mask_name for col_name, mask_name in col_name_to_mask_name.items() if col_name in tables_and_columns[table_name]}
+                   for table_name, col_name_to_mask_name in self.masks.items() if table_name in tables_and_columns},
+            foreign_ids={table_name: {col_name: (foreign_table, mode) for col_name, (foreign_table, mode) in col_name_to_foreign_table.items() if col_name in tables_and_columns[table_name] and foreign_table in tables_and_columns}
+                         for table_name, col_name_to_foreign_table in self.foreign_ids.items() if table_name in tables_and_columns},
+            primary_ids={table_name: primary_id for table_name, primary_id in self.primary_ids.items() if table_name in tables_and_columns})
+        return res
+
+    def query_ids(self, ids, **densify_kwargs):
+        if not all(mode == "relative"
+                   for table_name, col_to_modes in self.foreign_ids.items()
+                   for col_name, (_, mode) in col_to_modes.items()):
+            self = self.switch_foreign_ids_mode("relative")
+        selected_ids = {self.main_table: ids}
+        queried_tables = {}
+        queue = {self.main_table}
+        while len(queue):
+            table_name = queue.pop()
+            # Ex: table_name = relations
+            table = self.tables[table_name]
+            queried_table = self.query_table(table, selected_ids[table_name])
+            for col_name, col in queried_table.items():
+                # Ex: col_name = from_mention_id
+                #     foreign_table_name = mention
+                #     foreign_table_id = mention_id
+                foreign_table_name, mode = self.foreign_ids.get(table_name, {}).get(col_name, (None, None))
+                # We don't want to reindex the token_id column in the token table: it's useless and we will
+                # moreover need it intact for when we rebuild the original data
+                if foreign_table_name and foreign_table_name != table_name:
+                    # assert mode == "relative", "You must first switch the mode of the {}/{} column to 'relative' using the method switch_foreign_ids_mode"
+                    mask_name = self.masks.get(table_name, {}).get(col_name, None)
+                    new_col, new_mask, unique_ids = factorize(
+                        values=col,
+                        mask=queried_table.get(mask_name, None),
+                        reference_values=selected_ids.get(foreign_table_name, None),
+                        freeze_reference=False,
+                    )
+                    # new_col, new_mask, unique_ids = col, queried_table.get(mask_name, None), col.tocsr().data if hasattr(col, 'tocsr') else col#selected_ids.get(foreign_table_name, None)
+                    if mask_name is not None:
+                        queried_table[mask_name] = new_mask
+                    selected_ids[foreign_table_name] = unique_ids
+                    queried_table[col_name] = new_col
+                    if foreign_table_name not in queried_tables:
+                        queue.add(foreign_table_name)
+            queried_tables[table_name] = queried_table
+
+        masks_length = {}
+        for table_name, table_masks in self.masks.items():
+            for col_name, mask_name in table_masks.items():
+                if mask_name not in masks_length:
+                    if issparse(queried_tables[table_name][mask_name]):
+                        if hasattr(queried_tables[table_name][mask_name], 'indices'):
+                            if len(queried_tables[table_name][mask_name].indices):
+                                max_length = queried_tables[table_name][mask_name].indices.max() + 1
+                            else:
+                                max_length = 0
+                        elif hasattr(queried_tables[table_name][mask_name], 'rows'):
+                            max_length = max((max(r, default=-1) + 1 for r in queried_tables[table_name][mask_name].rows), default=0)
+                        else:
+                            raise Exception(f"Unrecognized mask format for {mask_name}: {queried_tables[table_name][mask_name].__class__}")
+                        masks_length[mask_name] = max_length
+                        queried_tables[table_name][mask_name].resize(queried_tables[table_name][mask_name].shape[0], masks_length[mask_name])
+                    else:
+                        max_length = queried_tables[table_name][mask_name].sum(-1).max()
+                        masks_length[mask_name] = max_length
+                        queried_tables[table_name][mask_name] = queried_tables[table_name][mask_name][:, :masks_length[mask_name]]
+                if issparse(queried_tables[table_name][col_name]):
+                    queried_tables[table_name][col_name].resize(queried_tables[table_name][col_name].shape[0], masks_length[mask_name])
+                else:
+                    queried_tables[table_name][col_name] = queried_tables[table_name][col_name][:, :masks_length[mask_name]]
+
+        new_tables = dict(self.tables)
+        new_tables.update(queried_tables)
+
+        res = Batcher(new_tables,
+                      main_table=self.main_table,
+                      masks=self.masks,
+                      subcolumn_names=self.subcolumn_names,
+                      foreign_ids=self.foreign_ids,
+                      primary_ids=self.primary_ids)
+        if densify_kwargs:
+            res = res.densify(**densify_kwargs)
+        return res
+
+    @classmethod
+    def concat(cls, batches, sparsify=True):
+        """
+
+        Parameters
+        ----------
+        batches: list of Batcher
+            All those batches must have the same structure
+
+        Returns
+        -------
+        Batcher
+        """
+
+        struct = batches[0]
+        new_tables = {}
+
+        new_batches = []
+        offsets = {table_name: 0 for table_name in struct.tables}
+        for batch in batches:
+            new_batches.append(batch.fill_primary_ids(offsets=offsets).switch_foreign_ids_mode("absolute"))
+            for table_name, table in batch.tables.items():
+                offsets[table_name] += next(iter(table.values())).shape[0]
+            if sparsify:
+                new_batches[-1] = new_batches[-1].sparsify()
+        batches = new_batches
+        del new_batches
+
+        struct = batches[0]
+
+        batches = [b.tables for b in batches]
+
+        for sample_table_name, sample_table in struct.tables.items():
+            new_tables[sample_table_name] = {}
+            for sample_col_name, sample_column in sample_table.items():
+                if sample_col_name in new_tables[sample_table_name]:
+                    continue
+                mask_name = struct.masks.get(sample_table_name, {}).get(sample_col_name, None)
+
+                # Convert to sparse if needed
+                if issparse(sample_column):
+                    if mask_name is None:
+                        shape1 = max([dic[sample_table_name][sample_col_name].shape[1] for dic in batches])
+                        for batch in batches:
+                            batch[sample_table_name][sample_col_name].resize(batch[sample_table_name][sample_col_name].shape[0], shape1)
+                        new_tables[sample_table_name][sample_col_name] = [dic[sample_table_name][sample_col_name] for dic in batches]
+                    else:
+                        shape1 = max([dic[sample_table_name][mask_name].shape[1] for dic in batches])
+                        for batch in batches:
+                            batch[sample_table_name][sample_col_name].resize(batch[sample_table_name][sample_col_name].shape[0], shape1)
+                        new_tables[sample_table_name][sample_col_name] = [dic[sample_table_name][sample_col_name] for dic in batches]
+                elif isinstance(sample_column, np.ndarray):
+                    new_shape = np.asarray([dic[sample_table_name][sample_col_name].shape for dic in batches]).max(0)[1:]
+                    new_tables[sample_table_name][sample_col_name] = [
+                        np.pad(dic[sample_table_name][sample_col_name],
+                               [(0, 0), *((0, p) for p in new_shape - np.asarray(dic[sample_table_name][sample_col_name].shape[1:]))])
+                        for dic in batches]
+                elif torch.is_tensor(sample_column):
+                    new_shape = torch.as_tensor([dic[sample_table_name][sample_col_name].shape for dic in batches]).max(0)[0][1:]
+                    new_tables[sample_table_name][sample_col_name] = [
+                        torch.nn.functional.pad(dic[sample_table_name][sample_col_name],
+                                                [a for p in reversed(new_shape - torch.tensor(dic[sample_table_name][sample_col_name].shape[1:])) for a in (0, p)],
+                                                mode="constant", value=0)
+                        for dic in batches]
+
+                # Check if we need to align ids between two or more matrices
+                # fragment_table_name = struct.foreign_ids[sample_col_name][0]
+                # if fragment_table_name and fragment_table_name != sample_table_name:
+                #     # If fragment_id doesn't exist in fragment table, (for ex: new fragments), create it
+                #     fragment_table_id_name = struct.primary_ids[fragment_table_name]
+                #     if fragment_table_id_name not in struct.tables[fragment_table_name]:
+                #         i = 0
+                #         for batch in batches:
+                #             dic_size = next(iter(batch[fragment_table_name].values())).shape[0]
+                #             batch[fragment_table_name][fragment_table_id_name] = np.arange(i, i + dic_size)
+                #             i += dic_size
+                #     # Until now new_tables["sample"]["fragment_id"] was row numbers to each batch in the given batches
+                #     # Here we transform those row numbers into the actual ids batches["fragment"]["fragment_id"]
+                #     if issparse(new_tables[sample_table_name][sample_col_name][0]):
+                #         for sps, batch in zip(new_tables[sample_table_name][sample_col_name], batches):
+                #             sps.data = batch[fragment_table_name][fragment_table_id_name][sps.data]
+                #     else:
+                #         new_tables[sample_table_name][sample_col_name] = [
+                #             dic[fragment_table_name][fragment_table_id_name][x]
+                #             for x, dic in zip(new_tables[sample_table_name][sample_col_name], batches)]
+
+                # Finally concatenate the matrices, sparse or dense
+                if issparse(new_tables[sample_table_name][sample_col_name][0]):
+                    new_tables[sample_table_name][sample_col_name] = vstack(new_tables[sample_table_name][sample_col_name]).tolil()
+                elif isinstance(new_tables[sample_table_name][sample_col_name][0], np.ndarray):
+                    new_tables[sample_table_name][sample_col_name] = np.concatenate(new_tables[sample_table_name][sample_col_name])
+                else:
+                    new_tables[sample_table_name][sample_col_name] = torch.cat(new_tables[sample_table_name][sample_col_name])
+
+        new_tables = Batcher(new_tables,
+                             main_table=struct.main_table,
+                             masks=struct.masks,
+                             subcolumn_names=struct.subcolumn_names,
+                             foreign_ids=struct.foreign_ids,
+                             primary_ids=struct.primary_ids)
+        for sample_table_name, table in list(new_tables.tables.items()):
+            id_name = struct.primary_ids[sample_table_name]
+            if id_name in table:
+                if torch.is_tensor(table[id_name]):
+                    inverse = torch.unique(table[id_name], return_inverse=True)[1]  # sort and unifies
+                    uniquifier = inverse.argsort()[:len(table[id_name])]
+                elif isinstance(table[id_name], np.ndarray):
+                    inverse = pd.factorize(table[id_name])[0]  # sort and unifies
+                    uniquifier = inverse.argsort()[:len(table[id_name])]
+                else:
+                    raise Exception(f"Primary id {id_name} of table {sample_table_name} should be a torch tensor or a numpy ndarray")
+                new_tables.tables[sample_table_name] = new_tables.query_table(table, uniquifier)
+        return new_tables
+
