@@ -87,8 +87,8 @@ def create_config_if_not_exist():
             print("please modify it and change values to your prefered paths.")
             print("You can change the config file location by setting the NLSTRUCT_CONFIG_PATH environment variable.")
             print("""Once you're done, execute the following lines:
-from nlstruct.core.environment import load_dotenv
-load_dotenv({})""".format(repr(config_path)))
+from os import load_dotenv
+load_dotenv({}, override=True)""".format(repr(config_path)))
     return config_path
 
 
