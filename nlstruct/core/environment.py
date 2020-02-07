@@ -75,7 +75,7 @@ yaml.Dumper.add_multi_representer(RelativePath, RelativePath.to_yaml)
 
 def create_config_if_not_exist():
     home = expanduser("~")
-    config_path = home + "/.nlstruct.env"
+    config_path = home + "/nlstruct.env"
     if os.path.exists(config_path):
         return config_path
     with open(config_path, "w") as file:
@@ -85,6 +85,7 @@ def create_config_if_not_exist():
             print(f"Config file was created at")
             print("    ", config_path)
             print("please modify it and change values to your prefered paths.")
+            print("You can change the config file location by setting the NLSTRUCT_CONFIG_PATH environment variable.")
             print("""Once you're done, execute the following lines:
 from nlstruct.core.environment import load_dotenv
 load_dotenv({})""".format(repr(config_path)))
