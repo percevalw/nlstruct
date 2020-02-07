@@ -10,5 +10,5 @@ cd nlstruct
 pip install . --user
 
 # Install requirements
-for req in requirements.txt do; pip install $req; done
+pip install -r requirements.txt
 ```

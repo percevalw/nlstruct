@@ -79,7 +79,7 @@ def create_config_if_not_exist():
     if os.path.exists(config_path):
         return config_path
     with open(config_path, "w") as file:
-        default_config_file_path = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../example.env'))
+        default_config_file_path = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../example.env'))
         with open(default_config_file_path, "r") as default_file:
             file.write(default_file.read())
             print(f"Config file was created at")
