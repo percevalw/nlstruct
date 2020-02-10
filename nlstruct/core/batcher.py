@@ -115,19 +115,23 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True, k
     if torch.is_tensor(all_flat_values[0]):
         if reference_values is None:
             unique_values, relative_values = torch.unique(torch.cat(all_flat_values), return_inverse=True)
-        else:
+        elif freeze_reference:
             relative_values, unique_values = torch.unique(torch.cat((reference_values, *all_flat_values)), return_inverse=True)[1], reference_values
+        else:
+            unique_values, relative_values = torch.unique(torch.cat((reference_values, *all_flat_values)), return_inverse=True)
     else:
         if reference_values is None:
             relative_values, unique_values = pd.factorize(np.concatenate(all_flat_values))
-        else:
+        elif freeze_reference:
             relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))[0], reference_values
+        else:
+            relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))
     if freeze_reference:
         all_unk_masks = relative_values < len(reference_values)
     else:
         all_unk_masks = None
 
-    offset = len(reference_values) if reference_values is not None else 0
+    offset = 0 if reference_values is None else len(reference_values)
     new_flat_values = []
     new_flat_values = []
     unk_masks = []
@@ -518,7 +522,7 @@ class Batcher:
         else:
             kwargs['batch_size'] = batch_size
             kwargs['shuffle'] = shuffle
-        #self = self.switch_foreign_ids_mode("relative")
+        self = self.switch_foreign_ids_mode("relative")
         return DataLoader(range(len(self)),  # if self._idx is None else self._idx,
                           collate_fn=lambda ids: self.query_ids(ids, device=device, dtypes=dtypes),
                           batch_sampler=batch_sampler,
@@ -800,6 +804,9 @@ class Batcher:
                    for table_name, col_to_modes in self.foreign_ids.items()
                    for col_name, (_, mode) in col_to_modes.items()):
             self = self.switch_foreign_ids_mode("relative")
+        device = self.device
+        if device is not None:
+            ids = torch.as_tensor(ids, device=device)
         selected_ids = {self.main_table: ids}
         queried_tables = {}
         queue = {self.main_table}

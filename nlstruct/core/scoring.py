@@ -63,7 +63,7 @@ def merge_pred_and_gold(
     merged = merge_with_spans(pred, gold, on=on, how='inner', span_policy=span_policy, suffixes=suffixes)
 
     overlap_size_names = [c for c in merged.columns if c.startswith("overlap_size_")]
-    merged = merged.groupby([atom_pred_level, atom_gold_level], as_index=False).agg({
+    merged = merged.groupby([atom_pred_level, atom_gold_level], as_index=False, observed=True).agg({
         **{n: 'sum' for n in overlap_size_names},
         **{n: 'first' for n in merged.columns if n not in (*overlap_size_names, atom_pred_level, atom_gold_level)}})
     if overlap_size_names:
@@ -73,14 +73,14 @@ def merge_pred_and_gold(
         res = merged.iloc[:0]
     while len(merged):
         tmp = merged
-        tmp = tmp.groupby(atom_gold_level, as_index=False).last()
-        tmp = tmp.groupby(atom_pred_level, as_index=False).last()
+        tmp = tmp.groupby(atom_gold_level, as_index=False, observed=True).last()
+        tmp = tmp.groupby(atom_pred_level, as_index=False, observed=True).last()
         res = res.append(tmp) if res is not None else tmp
         merged = merged[np.logical_and(~merged[atom_pred_level].isin(res[atom_pred_level]),
                                        ~merged[atom_gold_level].isin(res[atom_gold_level]))]
 
-    pred = pred.groupby([atom_pred_level], as_index=False).last()
-    gold = gold.groupby([atom_gold_level], as_index=False).last()
+    pred = pred.groupby([atom_pred_level], as_index=False, observed=True).last()
+    gold = gold.groupby([atom_gold_level], as_index=False, observed=True).last()
     res = pd.concat((res,
                      pred[~pred[atom_pred_level].isin(res[atom_pred_level])][list(set(res.columns) & set(pred.columns))],
                      gold[~gold[atom_gold_level].isin(res[atom_gold_level])][list(set(res.columns) & set(gold.columns))]), sort=False)

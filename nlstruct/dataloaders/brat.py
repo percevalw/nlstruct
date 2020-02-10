@@ -77,30 +77,10 @@ def load_from_brat(path, validation_split=0.2, random_state=42):
                             "from_mention_id": parts[0].split(":")[1],
                             "to_mention_id": parts[1].split(":")[1],
                         })
-    mentions = pd.DataFrame(mentions).astype({
-        "doc_id": docs["doc_id"].dtype,
-        "mention_id": "category",
-        "label": "category",
-    })
-    fragments = pd.DataFrame(fragments).astype({
-        "doc_id": docs["doc_id"].dtype,
-        "mention_id": mentions["mention_id"].dtype,
-        "fragment_id": "category",
-    })
+    mentions = pd.DataFrame(mentions)
+    fragments = pd.DataFrame(fragments)
     mentions = mentions[["doc_id", "mention_id", "label", "text"]]
-    attributes = pd.DataFrame(attributes).astype({
-        "doc_id": docs["doc_id"].dtype,
-        "mention_id": mentions.dtypes["mention_id"],
-        "attribute_id": "category",
-        "label": "category",
-        "value": "category",
-    })[["doc_id", "mention_id", "attribute_id", "label", "value"]]
-    relations = pd.DataFrame(relations).astype({
-        "doc_id": docs["doc_id"].dtype,
-        "relation_id": "category",
-        "relation_label": "category",
-        "from_mention_id": mentions.dtypes["mention_id"],
-        "to_mention_id": mentions.dtypes["mention_id"],
-    })[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
+    attributes = pd.DataFrame(attributes)[["doc_id", "mention_id", "attribute_id", "label", "value"]]
+    relations = pd.DataFrame(relations)[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
 
     return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations)

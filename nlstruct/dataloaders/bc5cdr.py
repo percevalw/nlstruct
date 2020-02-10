@@ -1,42 +1,37 @@
-import zipfile
-
 import pandas as pd
-from sklearn.datasets._base import RemoteFileMetadata
 
 from nlstruct.core.cache import cached
-from nlstruct.core.network import ensure_files, NetworkLoadMode
 from nlstruct.core.dataset import Dataset
+from nlstruct.core.environment import env
 
-remote_files = [
-    RemoteFileMetadata(
-        url="https://www.ncbi.nlm.nih.gov/CBBresearch/Dogan/DISEASE/NCBItrainset_corpus.zip",
-        checksum="26157233d70aeda0b2ac1dda4fc9369b0717bd888f5afe511d0c1c6a5ad307a0",
-        filename="NCBItrainset_corpus.zip"),
-    RemoteFileMetadata(
-        url="https://www.ncbi.nlm.nih.gov/CBBresearch/Dogan/DISEASE/NCBItestset_corpus.zip",
-        checksum="b978442f39c739deb6619c70e7b07327d9eb1b71aff64996c02a592435583f46",
-        filename="NCBItestset_corpus.zip"),
-    RemoteFileMetadata(
-        url="https://www.ncbi.nlm.nih.gov/CBBresearch/Dogan/DISEASE/NCBIdevelopset_corpus.zip",
-        checksum="61681ad09356619c8f4f3e1738663dd007ad0135720fdc90195120fea944cbe9",
-        filename="NCBIdevelopset_corpus.zip"),
-]
+
+# remote_files = [
+#     RemoteFileMetadata(
+#         url="https://raw.githubusercontent.com/openbiocorpora/biocreative-v-cdr/master/original-data/train/"
+#             "CDR_TrainingSet.PubTator.PubTator.txt",
+#         checksum="a37e416daf5b3042ff98a1f3110e1efdb4454ee76ebc0dd7f5f4c2c77c4adb75",
+#         filename="CDR_TrainingSet.PubTator.PubTator.txt"),
+#     RemoteFileMetadata(
+#         url="https://raw.githubusercontent.com/openbiocorpora/biocreative-v-cdr/master/original-data/devel/"
+#             "CDR_DevelopmentSet.PubTator.txt",
+#         checksum="9e18d8e700168887a7919e62f67ac2ce2357e3f409a48ee992906abdd80fe3e5",
+#         filename="CDR_DevelopmentSet.PubTator.txt"),
+# ]
 
 
 @cached
-def load_ncbi_disease(_cache=None):
-    download_path = _cache.entry("raw")
-    train_file, test_file, dev_file = ensure_files(download_path, remote_files, mode=NetworkLoadMode.AUTO)
+def load_bc5cdr():
+
+    train_file = env.resource(env['BC5CDR_TRAIN_PATH'])
+    dev_file = env.resource(env['BC5CDR_DEV_PATH'])
+    test_file = env.resource(env['BC5CDR_TEST_PATH'])
 
     entries = []
     # Load full datasets with concept annotations
     for split, file in [("train", train_file),
                         ("test", test_file),
                         ("dev", dev_file)]:
-        zip_ref = zipfile.ZipFile(file, "r")
-        zip_ref.extractall(download_path)
-        zip_ref.close()
-        with open(str(file).replace(".zip", ".txt"), "r") as cursor:
+        with open(str(file), "r") as cursor:
             entry = {"doc_id": None,
                      "begin": [],
                      "end": [],
@@ -77,11 +72,11 @@ def load_ncbi_disease(_cache=None):
                     entry["synonym"].append(synonym)
                     entry["category"].append(category)
                     labels = [c2.strip() for c1 in cui_set.split("|") for c2 in c1.split('+')]
-                    entry["source"].append(['OMIM' if l.startswith('OMIM:') else "MSH"
+                    entry["source"].append(['OMIM' if l.startswith('OMIM:') else "MSH" if l != "-1" else ""
                                             for l in labels])
-                    entry["code"].append([l.split(":")[-1]
+                    entry["code"].append([l.split(":")[-1] if l != "-1" else ""
                                           for l in labels])
-                    entry["label"].append([":".join((source, code))
+                    entry["label"].append([":".join((source, code)) if code != "" else ""
                                            for source, code in zip(entry["source"][-1], entry["code"][-1])])
             entries.append(entry)
     res = pd.DataFrame(entries)
@@ -94,6 +89,7 @@ def load_ncbi_disease(_cache=None):
     mentions["mention_id"] = (mentions["doc_id"].astype("str") + "-" + mentions["mention_id"].astype(str))
     mentions_label = mentions[["doc_id", "mention_id", "label"]].nlstruct.flatten("label_id", tile_index=True).astype({"label_id": object})
     mentions_label["label_id"] = (mentions_label["mention_id"].astype("str") + "-" + mentions_label["label_id"].astype(str))
+    mentions_label.loc[mentions_label["label"] == "", "label"] = None
     fragments = mentions[["doc_id", "mention_id", "begin", "end"]].copy()
     fragments["fragment_id"] = fragments["mention_id"]
     return Dataset(
