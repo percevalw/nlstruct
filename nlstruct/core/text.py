@@ -292,7 +292,7 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     # Map mentions to small as a tag
     large = large.sort_values([*doc_id_cols, "begin", "end"])
     if use_token_idx:
-        merged = merge_with_spans(large, small, on=doc_id_cols, suffixes=('_large', '')).query("begin_large <= token_idx and token_idx < end_large")
+        merged = merge_with_spans(large, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query("begin <= token_idx and token_idx < end")
     else:
         merged = merge_with_spans(large, small, span_policy='partial_strict', on=[*doc_id_cols, ("begin", "end")], suffixes=('_large', ''))
 
@@ -301,27 +301,27 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     merged_id_cols = doc_id_cols + large_id_cols + small_id_cols
 
     # Encode mention labels as a tag
-    tags = (merged[merged_id_cols + large_val_cols]
+    tags = (merged[merged_id_cols + label_cols]
             .sort_values(merged_id_cols))
     if tag_scheme != "raw":
         if verbose > 0:
-            n_groups = len(tags.groupby(doc_id_cols + large_id_cols + large_val_cols, as_index=False))
+            n_groups = len(tags.groupby(doc_id_cols + large_id_cols + label_cols, as_index=False, observed=True))
             bar = tqdm(total=n_groups)
         else:
             bar = memoryview(b'')  # no-op context for next instruction
         with bar:
-            keep_cols = list(set(doc_id_cols + large_id_cols + large_val_cols) - set(label_cols))
+            keep_cols = list(set(doc_id_cols + large_id_cols) - set(label_cols))
             tags = (
                 # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
                 # to accelerate concatenation inside the groupby
                 tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
-                .groupby(doc_id_cols + large_id_cols + large_val_cols, as_index=False)
-                .apply(lambda group: (bar.update(1) if verbose > 0 else False) or group.assign(**{
+                    .groupby(doc_id_cols + large_id_cols + label_cols, as_index=False, observed=True)
+                    .apply(lambda group: (bar.update(1) if verbose > 0 else False) or group.assign(**{
                     label_col: make_tag_scheme(len(group[small_id_cols[0]]), group[label_col].iloc[0], tag_scheme)
                     for label_col in label_cols
                 }))
-                # convert back each group column dtype to its origial categorical dtype
-                .astype(tags.dtypes[keep_cols])
+                    # convert back each group column dtype to its origial categorical dtype
+                    .astype(tags.dtypes[keep_cols])
             )
 
     merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
@@ -329,14 +329,15 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     if tag_scheme != "raw":
         try:
             for label_col in label_cols:
-                merged[label_col] = merged[label_col].fillna("O")
-                merged[label_col] = merged[label_col].astype(pd.CategoricalDtype(
-                    ["O", *(tag for label in large[label_col].cat.categories for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
-                    ["O", *(tag for label in large[label_col].cat.categories for tag in ("B-" + str(label), "I-" + str(label), "U-" + str(label), "L-" + str(label)))]
+                unique_labels = list(set(large[label_col]))
+                merged[label_col] = merged[label_col].fillna("O").astype(pd.CategoricalDtype(
+                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
+                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "U-" + str(label), "L-" + str(label)))]
                 ))
         except Exception:
             raise Exception(f"Error occured during the encoding of label columns '{label_col}'")
-    return merged.sort_values([*doc_id_cols, "begin", "end"])
+    # return small[doc_id_cols + small_id_cols].merge(merged, how='left')
+    return merged
 
 
 def partition_spans(smalls, large,
@@ -412,7 +413,7 @@ def partition_spans(smalls, large,
             merged["begin"] = merged[['begin_x', 'begin_y']].min(axis=1)
             merged["end"] = merged[['end_x', 'end_y']].max(axis=1)
             large = (merged
-                     .groupby(new_id_name, as_index=False)
+                     .groupby(new_id_name, as_index=False, observed=True)
                      .agg({**{n: 'first' for n in [*doc_id_cols, *large_id_cols] if n != new_id_name}, 'begin': 'min', 'end': 'max'})
                      .astype({"begin": int, "end": int, **large[doc_id_cols].dtypes}))
             large = large[doc_id_cols + [new_id_name] + ["begin", "end"]]
@@ -498,7 +499,7 @@ def split_into_spans(large, small, overlap_policy="split_small", pos_col=None):
             .eval(f"""
             begin={pos_col}
             end={pos_col} + 1""")
-            .groupby(doc_id_cols, as_index=False)
+            .groupby(doc_id_cols, as_index=False, observed=True)
             .agg({"begin": "min", "end": "max"})
     )
-    return res, small
+    return res

@@ -149,7 +149,7 @@ def flatten(frame,
             else:
                 new_index_values = np.arange(len(flattened))
                 flattened[index_name] = new_index_values
-                flattened[index_name] = flattened[index_name].astype("category")
+                flattened[index_name] = flattened[index_name]
 
             flattened.set_index(index_name, append=True, inplace=True)
             if keep_na == 'null_index' and nulls is not None:
@@ -190,7 +190,7 @@ def merge_with_spans(
       left_on=None,
       right_on=None,
       suffixes=('_x', '_y'),
-      span_policy='partial',
+      span_policy='partial_strict',
       placeholder_columns=(),
       **kwargs):
     """
@@ -285,7 +285,6 @@ def merge_with_spans(
             right['_right_index'] = np.arange(len(right))
 
         merged = pd.merge(left, right, left_on=left_on, right_on=right_on, suffixes=suffixes, how='inner', **kwargs)
-
         for i, (left_span_names, right_span_names) in enumerate(zip(left_on_spans, right_on_spans)):
             (left_begin, left_end), (right_begin, right_end) = make_merged_names(
                 left_span_names, right_span_names, left_on=left_on, right_on=right_on,
@@ -370,6 +369,12 @@ def make_id_from_merged(*indices_arrays, same_ids=False, apply_on=None):
     -------
     list of np.ndarray
     """
+    if not same_ids:
+        indices_arrays, unique_objects = zip(*(factorize_rows(array, return_categories=True) for array in indices_arrays))
+    else:
+        indices_arrays, unique_objects = factorize_rows(indices_arrays, return_categories=True)
+        unique_objects = [unique_objects] * len(indices_arrays)
+
     offset = max(indices_array.max() for indices_array in indices_arrays) + 1
     N = offset * (len(indices_arrays) + 1)
     if same_ids:
@@ -391,7 +396,7 @@ def make_id_from_merged(*indices_arrays, same_ids=False, apply_on=None):
         ]
     else:
         return [
-            matches[s + i * offset]
+            matches[factorize_rows(s, categories=unique_objects[i], return_categories=False) + i * offset]
             for i, s in apply_on
         ]
 
@@ -524,7 +529,7 @@ def factorize_rows(rows, categories=None, group_nans=True, subset=None, freeze_c
     else:
         relative_values, unique_values = pd.factorize(cat_arrays[0])
     if freeze_categories and categories is not None:
-        relative_values[relative_values > len(categories)] = -1
+        relative_values[relative_values >= len(categories)] = -1
     if not group_nans:
         new_relative_values = np.full(is_not_nan.shape, fill_value=-1, dtype=relative_values.dtype)
         new_relative_values[is_not_nan] = relative_values
@@ -662,6 +667,21 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
     return dfs, vocabularies
 
 
+class FasterGroupBy:
+    def __init__(self, groupby_object, dtypes):
+        self.groupby_object = groupby_object
+        self.dtypes = dtypes
+
+    def _retype(self, res):
+        return res.astype(self.dtypes)
+
+    def agg(self, *args, **kwargs):
+        return self._retype(self.groupby_object.agg(*args, **kwargs))
+
+    def apply(self, *args, **kwargs):
+        return self._retype(self.groupby_object.apply(*args, **kwargs))
+
+
 class NLStructAccessor(object):
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
@@ -683,6 +703,15 @@ class NLStructAccessor(object):
     def to_csr(self, row_column, col_column, data_column=None, n_rows=None, n_cols=None):
         return df_to_csr(self._obj[row_column], self._obj[col_column], self._obj[data_column] if data_column is not None else None,
                          n_rows=n_rows, n_cols=n_cols)
+
+    def groupby(self, by, *args, decategorize=None, as_index=False, observed=True, **kwargs):
+        if not as_index:
+            if decategorize is None:
+                decategorize = by
+            new_dtypes = {k: v if not hasattr(v, 'categories') else v.categories.dtype for k, v in self._obj.dtypes[decategorize].items()}
+            return FasterGroupBy(self._obj.astype(new_dtypes).groupby(by=by, *args, as_index=as_index, observed=observed, **kwargs), self._obj.dtypes[decategorize])
+        else:
+            return self._obj.groupby(by=by, *args, as_index=as_index, **kwargs)
 
 
 pd.api.extensions.register_dataframe_accessor("nlstruct")(NLStructAccessor)
