@@ -149,25 +149,19 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True, k
     new_masks = []
     for values, mask, flat_relative_values, unk_mask in zip(all_values, all_masks, all_flat_values, unk_masks):
         if issparse(values):
-            new_mask = mask.tocsr()
             values = values.tocsr()
-            if freeze_reference:
-                if mask is None:
-                    new_mask = values.copy()
-                    new_mask.data = unk_mask
-                else:
-                    new_mask.data = new_mask.data & unk_mask
+            values.data = flat_relative_values + 1
+            if unk_mask is not None:
+                values.data[~unk_mask] = 0
+            values.eliminate_zeros()
+            new_mask = values.copy()
+            values.data -= 1
+            new_mask.data = np.ones(len(new_mask.data), dtype=bool)
+
             if mask is not None:
-                values = new_mask.copy()
-                values.data = flat_relative_values
-                new_col = new_mask.copy()
-                new_col.data = flatten_array(values, new_mask)
-                new_values.append(new_col.tolil())
-                new_masks.append(new_mask.tolil())
-            else:
-                values.data = flat_relative_values
-                new_values.append(values.tolil())
-                new_masks.append(new_mask)
+                new_mask = new_mask.multiply(mask.tocsr())
+            new_values.append(values.tolil())
+            new_masks.append(new_mask.tolil())
         elif isinstance(values, (list, tuple)):
             mask = unk_mask
             if mask is not None:
@@ -506,6 +500,17 @@ class Batcher:
         else:
             raise Exception("Can only assign array or list of arrays to either (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
 
+    def __delitem__(self, key):
+        assert isinstance(key, tuple)
+        table = self.tables[key[0]]
+        if isinstance(key[1], str):
+            del table[key[1]]
+        elif isinstance(key[1], list):
+            for name in key[1]:
+                del table[name]
+        else:
+            raise Exception("Can only delete columns: (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
+
     def __repr__(self):
         return BatcherPrinter(indent=2, depth=2).pformat(self)
 
@@ -698,7 +703,7 @@ class Batcher:
 
     def densify(self, device=None, dtypes=None):
         new_tables = dict(self.tables)
-        new_column_names = {}
+        new_column_names = self.subcolumn_names
         dtypes = dtypes or {}
 
         for table_name, table in self.tables.items():
@@ -814,7 +819,10 @@ class Batcher:
             table_name = queue.pop()
             # Ex: table_name = relations
             table = self.tables[table_name]
-            queried_table = self.query_table(table, selected_ids[table_name])
+            try:
+                queried_table = self.query_table(table, selected_ids[table_name])
+            except:
+                raise Exception(f"Exception occured while querying table {repr(table_name)}. Previously queried tables are {repr(tuple(queried_tables.keys()))}")
             for col_name, col in queried_table.items():
                 # Ex: col_name = from_mention_id
                 #     foreign_table_name = mention
@@ -829,7 +837,13 @@ class Batcher:
                         values=col,
                         mask=queried_table.get(mask_name, None),
                         reference_values=selected_ids.get(foreign_table_name, None),
-                        freeze_reference=False,
+                        # If querying was done against the main axis primary ids (main_table)
+                        # then we don't want to any more ids than those that were given
+                        # ex: batcher.set_main("relation")[:10] => only returns relations 0, 1, ... 9
+                        # If a table refers to other relations through foreign keys, then those pointers will be masked
+                        # For non main ids (ex: mentions), we allow different tables to disagree on the mentions to query
+                        # and retrieve all of the needed mentions
+                        freeze_reference=foreign_table_name == self.main_table,
                     )
                     # new_col, new_mask, unique_ids = col, queried_table.get(mask_name, None), col.tocsr().data if hasattr(col, 'tocsr') else col#selected_ids.get(foreign_table_name, None)
                     if mask_name is not None:
