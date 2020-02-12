@@ -687,7 +687,7 @@ class NLStructAccessor(object):
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
-    def factorize(self, group_nans=False, subset=None, categories=None,
+    def factorize(self, subset=None, categories=None, group_nans=False,
                   return_categories=False, freeze_categories=True):
         return factorize_rows(self._obj,
                               subset=subset,

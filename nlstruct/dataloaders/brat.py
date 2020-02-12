@@ -7,7 +7,7 @@ from nlstruct.core.environment import RelativePath
 from nlstruct.core.dataset import Dataset
 
 
-def load_from_brat(path, validation_split=0.2, random_state=42):
+def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True):
     path = RelativePath(path)
     mentions = []
     fragments = []
@@ -46,14 +46,23 @@ def load_from_brat(path, validation_split=0.2, random_state=42):
                             "label": mention,
                             "text": text,
                         })
-                        for fragment_i, s in enumerate(span.split(';')):
+                        last = None
+                        fragment_i = 0
+                        for s in span.split(';'):
+                            begin, end = int(s.split()[0]), int(s.split()[1])
+                            # If merge_newlines, merge two fragments that are only separated by a newline (brat automatically creates
+                            # multiple fragments for a mention that spans over more than one line)
+                            if merge_newlines and begin - 1 == last and text[last:begin] == '\n':
+                                fragments[-1]["end"] = end
+                                continue
                             fragments.append({
                                 "doc_id": doc_id,
                                 "mention_id": ann_id,
                                 "fragment_id": "{}-{}".format(ann_id, fragment_i),
-                                "begin": int(s.split()[0]),
-                                "end": int(s.split()[1]),
+                                "begin": begin,
+                                "end": end,
                             })
+                            fragment_i += 1
                     elif ann_id.startswith('A'):
                         parts = remaining.split(" ")
                         if len(parts) >= 3:
