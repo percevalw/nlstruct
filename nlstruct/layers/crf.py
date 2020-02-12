@@ -210,7 +210,7 @@ class BIOULDecoder(CRF):
         super().__init__(5, start_transitions_mask, transitions_mask, end_transitions_mask, with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
-    def extract(tags, tokens):
+    def tags_to_spans(tags, tokens):
         squeeze_unflattener = False
         if len(tags.shape) < 3:
             squeeze_unflattener = True
@@ -270,57 +270,35 @@ class BIODecoder(CRF):
                          with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
-    def extract(tag, tokens=None):
-        squeeze_unflattener = False
-        if len(tag.shape) < 3:
-            squeeze_unflattener = True
-            tag = tag.unsqueeze(0)
+    def tags_to_spans(tag, mask=None):
+        if mask is not None:
+            tag = tag.masked_fill(~mask, 0)
         is_B = ((tag - 1) % 2) == 0
         is_I = ((tag - 1) % 2 == 1) & (tag != 0)
         label = (tag - 1) // 2
-        next_label = label.roll(-1, dims=2)
-        next_label[:, :, -1] = 0
-        next_I = is_I.roll(-1, dims=2)
-        next_I[:, :, -1] = 0
+        next_label = label.roll(-1, dims=1)
+        next_label[:, -1] = 0
+        next_I = is_I.roll(-1, dims=1)
+        next_I[:, -1] = 0
         begin_tag = is_B.nonzero()
-        next_tag = tag.roll(-1, dims=2)
-        next_tag[:, :, -1] = 0
+        next_tag = tag.roll(-1, dims=1)
+        next_tag[:, -1] = 0
         end_tag = (((tag != next_tag) & is_I) | (is_B & ~((label == next_label) & next_I))).nonzero()
 
-        mention_label = label[is_B]
+        span_label = label[is_B]
+        spans_count_per_doc = is_B.sum(-1)
+        max_spans_count_per_doc = 0 if 0 in begin_tag.shape else spans_count_per_doc.max()
 
-        mentions_count_per_sample = is_B.sum(-1)
-
-        if (0 in begin_tag.shape):
-            max_mentions_count_per_sample = 0
-            mention_length = 1
-        else:
-            max_mentions_count_per_sample = mentions_count_per_sample.max()
-            mention_length = (end_tag[:, 2] - begin_tag[:, 2]).max().item() + 1
-
-        sample_entity_id = torch.zeros(*mentions_count_per_sample.shape, max(max_mentions_count_per_sample, 1), dtype=torch.long)
-        sample_entity_mask = torch.arange(max(max_mentions_count_per_sample, 1), device=tag.device).view(1, 1, -1) < mentions_count_per_sample.unsqueeze(-1)
-        sample_entity_id[sample_entity_mask] = torch.arange(begin_tag.shape[0], device=tag.device)
-
-        mentions_from_sequences_col_indexer = torch.arange(mention_length, device=tag.device).unsqueeze(0) + begin_tag[:, 2].unsqueeze(1)
-        mentions_from_sequences_row_indexer = begin_tag[:, 1].unsqueeze(1)
-        if tokens is not None:
-            mentions_tokens = tokens[mentions_from_sequences_row_indexer, torch.min(mentions_from_sequences_col_indexer, torch.tensor(tokens.shape[1], device=tag.device) - 1)]
-            mentions_tokens_mask = mentions_from_sequences_col_indexer <= end_tag[:, 2].unsqueeze(1)
-        else:
-            mentions_tokens = None
-            mentions_tokens_mask = None
-        if squeeze_unflattener:
-            sample_entity_id = sample_entity_id.squeeze(0)
-            sample_entity_mask = sample_entity_mask.squeeze(0)
+        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long)
+        doc_entity_mask = torch.arange(max_spans_count_per_doc, device=tag.device).view(1, -1) < spans_count_per_doc.unsqueeze(-1)
+        doc_entity_id[doc_entity_mask] = torch.arange(begin_tag.shape[0], device=tag.device)
 
         return {
-            "begins": begin_tag[:, 2],
-            "ends": end_tag[:, 2] + 1,
-            "labels": mention_label,
-            "mentions_tokens": mentions_tokens,
-            "mentions_tokens_mask": mentions_tokens_mask,
-            "sample_entity_id": sample_entity_id,
-            "sample_entity_mask": sample_entity_mask,
-            "entity_sample_id": begin_tag[:, 1],
+            "doc_spans_id": doc_entity_id,
+            "doc_spans_mask": doc_entity_mask,
+            "span_begin": begin_tag[:, 1],
+            "span_end": end_tag[:, 1] + 1,  # for a tag sequence O O B I O, (begin_tag, end_tag) is (2, 3) so we want token span 2:4
+            "span_label": span_label,
+            "span_doc_id": begin_tag[:, 0],
         }
+
