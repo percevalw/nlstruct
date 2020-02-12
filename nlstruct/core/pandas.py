@@ -651,7 +651,8 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
                 if voc_name in df:
                     df[voc_name] = df[voc_name].astype(voc)
                     if verbose:
-                        print(f"Normalized {voc_name}, with given vocabulary and unk {unk.get(voc_name, 'None')}")
+                        unk_msg = f"unk {unk[voc_name]}" if voc_name in unk else "no unk"
+                        print(f"Normalized {voc_name}, with given vocabulary and {unk_msg}")
                     if voc_name in unk:
                         df[voc_name].fillna(unk[voc_name], inplace=True)
 

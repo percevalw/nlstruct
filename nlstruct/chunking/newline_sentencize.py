@@ -8,7 +8,7 @@ from tqdm import tqdm
 from nlstruct.core.cache import cached
 
 
-def newline_sentencize_(docs, max_sentence_length=70, n_threads=1,
+def newline_sentencize_(docs, max_sentence_length=None, n_threads=1,
                         reg_split=r"((?:\s*\n)+\s*)",
                         reg_token=r"[\w*]+|[^\w\s\n*]",
                         with_tqdm=True):
@@ -51,7 +51,11 @@ def newline_sentencize_(docs, max_sentence_length=70, n_threads=1,
             if i % 2 == 0:  # we're in a sentence
                 spans = [(m.start() + idx, m.end() + idx) for m in reg_token.finditer(part)]
                 last = 0
-                for j in range(last + max_sentence_length, len(spans) - max_sentence_length, max_sentence_length):
+                if max_sentence_length is None:
+                    max_sentence_length_ = len(spans)
+                else:
+                    max_sentence_length_ = max_sentence_length
+                for j in range(last + max_sentence_length_, len(spans) - max_sentence_length_, max_sentence_length_):
                     b = spans[last][0]
                     e = spans[j - 1][1]
                     doc_ids.append(doc_id)
@@ -80,11 +84,11 @@ def newline_sentencize_(docs, max_sentence_length=70, n_threads=1,
     }).astype({"doc_id": docs["doc_id"].dtype})
 
 
-@cached(ignore=["n_threads", "with_tqdm"])
-def mimic_sentencize(texts, max_sentence_length=70, n_threads=1, with_tqdm=True):
+@cached.will_ignore(["n_threads", "with_tqdm"])
+def mimic_sentencize(texts, max_sentence_length=None, n_threads=1, with_tqdm=True):
     return newline_sentencize_(texts, max_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
 
 
-@cached(ignore=["n_threads", "with_tqdm"])
-def newline_sentencize(texts, max_sentence_length=70, n_threads=1, with_tqdm=True):
-    return newline_sentencize_(texts, max_sentence_length, reg_split=r"((?:\s*\n){2,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
+@cached.will_ignore(["n_threads", "with_tqdm"])
+def newline_sentencize(texts, max_sentence_length=None, n_threads=1, with_tqdm=True):
+    return newline_sentencize_(texts, max_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm)

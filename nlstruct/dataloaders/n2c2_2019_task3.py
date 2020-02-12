@@ -3,9 +3,9 @@ import os
 import pandas as pd
 from sklearn.utils import check_random_state
 
+from nlstruct.core.dataset import Dataset
 from nlstruct.core.environment import env
 from nlstruct.core.pandas import merge_with_spans
-from nlstruct.core.dataset import Dataset
 
 
 def load_n2c2_2019_task3(validation_split=0.2, random_state=42, split="train"):

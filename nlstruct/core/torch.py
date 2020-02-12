@@ -191,3 +191,32 @@ def torch_clone(obj, device=None):
     bio = io.BytesIO()
     torch.save(obj, bio)
     return torch.load(bio, map_location=torch_global.device if device is None else device)
+
+
+def extract_slices(sequences, flat_begins, flat_ends, flat_sample_idx):
+    if isinstance(sequences, torch.Tensor):
+        num, device = sequences.shape[1], sequences.device
+    elif isinstance(sequences, (list, tuple)):
+        num, device = sequences[0].shape[1], sequences[0].device
+    elif isinstance(sequences, dict):
+        num, device = next(iter(sequences.values())).shape[1], next(iter(sequences.values())).device
+    else:
+        raise Exception("Can only extract slices from Tensor, list of Tensor or dict of (any, Tensor)")
+
+    if len(flat_ends):
+        mention_length = (flat_ends - flat_begins).max().item()
+    else:
+        mention_length = 0
+    mentions_from_sequences_col_indexer = torch.min(torch.arange(mention_length).unsqueeze(0) + flat_begins.unsqueeze(1),
+                                                    torch.tensor(num, device=device) - 1)
+    mentions_from_sequences_row_indexer = flat_sample_idx.unsqueeze(1)
+    # token_id_[]
+    mask = mentions_from_sequences_col_indexer < flat_ends.unsqueeze(1)
+    if isinstance(sequences, torch.Tensor):
+        return sequences[mentions_from_sequences_row_indexer, mentions_from_sequences_col_indexer], mask
+    elif isinstance(sequences, (list, tuple)):
+        return [seq[mentions_from_sequences_row_indexer, mentions_from_sequences_col_indexer] for seq in sequences], mask
+    elif isinstance(sequences, dict):
+        return {k: seq[mentions_from_sequences_row_indexer, mentions_from_sequences_col_indexer] for k, seq in sequences.items()}, mask
+    print("Cannot be here, already raised and exception")
+

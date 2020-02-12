@@ -182,7 +182,7 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True, k
                     mask[mask] = unk_mask
             if mask is not None:
                 values = np.zeros(values.shape, dtype=int)
-                values[mask] = flat_relative_values
+                values[mask] = flat_relative_values[unk_mask] if unk_mask is not None else flat_relative_values
                 new_values.append(values)
                 new_masks.append(new_mask)
             else:
@@ -199,7 +199,7 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True, k
                     mask[mask] = unk_mask
             if mask is not None:
                 values = torch.zeros(values.shape, dtype=torch.long)
-                values[mask] = flat_relative_values
+                values[mask] = flat_relative_values[unk_mask] if unk_mask is not None else flat_relative_values
                 new_values.append(values)
                 new_masks.append(mask)
             else:
@@ -238,8 +238,8 @@ class BatcherPrinter(pprint.PrettyPrinter):
 
     def format_array(self, obj, stream, indent, allowance, context, level):
         dtype_str = (
-            ("ndarray" if isinstance(obj, np.ndarray) else "tensor" if torch.is_tensor(obj) else str(obj.__class__.__name__)) +
-            "[{}]".format(str(obj.dtype) if hasattr(obj, 'dtype') else str(obj.dtypes.values[0]) if len(set(obj.dtypes.values)) == 1 else 'multiple')
+              ("ndarray" if isinstance(obj, np.ndarray) else "tensor" if torch.is_tensor(obj) else str(obj.__class__.__name__)) +
+              "[{}]".format(str(obj.dtype) if hasattr(obj, 'dtype') else str(obj.dtypes.values[0]) if len(set(obj.dtypes.values)) == 1 else 'multiple')
         )
         stream.write(dtype_str + str(tuple(obj.shape)))
 
@@ -335,20 +335,24 @@ class SparseBatchSampler(BatchSampler):
 
 
 class Batcher:
-    def __init__(self, tables, main_table=None, masks=None, subcolumn_names=None, foreign_ids=None, primary_ids=None):
-        self.tables = {}
+    def __init__(self, tables, main_table=None, masks=None, subcolumn_names=None, foreign_ids=None, primary_ids=None, check=True):
         self.subcolumn_names = subcolumn_names or {}
-        for table_name, table in tables.items():
-            for col_name, col in table.items():
-                if isinstance(col, pd.DataFrame):
-                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
-                    self.subcolumn_names.setdefault(table_name, {}).setdefault(col_name, list(col.columns))
-                elif isinstance(col, pd.Series):
-                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
-                elif isinstance(col, pd.Categorical):
-                    self.tables.setdefault(table_name, {}).setdefault(col_name, col.codes)
-                else:
-                    self.tables.setdefault(table_name, {}).setdefault(col_name, col)
+        if check:
+            self.tables = {}
+            for table_name, table in tables.items():
+                for col_name, col in table.items():
+                    if isinstance(col, pd.DataFrame):
+                        self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
+                        self.subcolumn_names.setdefault(table_name, {}).setdefault(col_name, list(col.columns))
+                    elif isinstance(col, pd.Series):
+                        self.tables.setdefault(table_name, {}).setdefault(col_name, col.values)
+                    elif isinstance(col, pd.Categorical):
+                        self.tables.setdefault(table_name, {}).setdefault(col_name, col.codes)
+                    else:
+                        assert col is not None, f"Column {repr(table_name)}{repr(col_name)} cannot be None"
+                        self.tables.setdefault(table_name, {}).setdefault(col_name, col)
+        else:
+            self.tables = tables
         self.main_table = main_table or next(iter(tables.keys()))
         self.masks = masks or {}
         if primary_ids is not None:
@@ -383,10 +387,34 @@ class Batcher:
                 # ex: table_name = "mention", table_columns = ["sample_id", "begin", "end", "idx_in_sample"]
                 for col_name in table_columns:
                     if col_name.endswith('_mask') and col_name != self.primary_ids.get(table_name, None):
-                        id_name = col_name[:-5]+'_id'
+                        id_name = col_name[:-5] + '_id'
                         # foreign_table_id = f"{table_name}_id"
                         if id_name in table_columns:
                             self.masks.setdefault(table_name, {})[id_name] = col_name
+
+        if check:
+            # Check that all tables / columns exist in subcolumn names
+            for table_name, cols in self.subcolumn_names.items():
+                assert table_name in self.tables, f"Unknown table {repr(table_name)} in `subcolumn_names`"
+                for col_name in cols:
+                    assert col_name in self.tables[table_name], f"Unknown column {repr(col_name)} for table {repr(table_name)} in `subcolumn_names`"
+            # Check that all tables / columns exist in masks
+            for table_name, cols in self.masks.items():
+                assert table_name in self.tables, f"Unknown table {repr(table_name)} in `masks`"
+                for col_name, mask_name in cols.items():
+                    assert col_name in self.tables[table_name], f"Unknown column {repr(col_name)} for table {repr(table_name)} in `masks`"
+                    assert mask_name in self.tables[table_name], f"Unknown mask {repr(mask_name)} for column {table_name}/{col_name} in `masks`"
+            # Check that all tables / columns exist in foreign_ids
+            for table_name, cols in self.foreign_ids.items():
+                assert table_name in self.tables, f"Unknown table {repr(table_name)} in `foreign_ids`"
+                for col_name, (foreign_table_name, mode) in cols.items():
+                    assert mode in ('relative', 'absolute'), f"Unknown mode {repr(mode)} for {table_name}/{col_name} in `foreign_ids`"
+                    assert col_name in self.tables[table_name], f"Unknown column {repr(col_name)} for table {repr(table_name)} in `foreign_ids`"
+                    assert foreign_table_name in self.tables, f"Unknown foreign table {repr(foreign_table_name)} for column {table_name}/{col_name} in `foreign_ids`"
+            # Check that all tables / columns exist in primary_ids
+            for table_name, col_name in self.primary_ids.items():
+                assert table_name in self.tables, f"Unknown table {repr(table_name)} in `primary_ids`"
+                assert col_name in self.tables[table_name], f"Unknown column {repr(col_name)} for table {repr(table_name)} in `primary_ids`"
 
     def __len__(self):
         return next(iter(self.tables[self.main_table].values())).shape[0]
@@ -416,6 +444,7 @@ class Batcher:
             subcolumn_names=dict(self.subcolumn_names),
             foreign_ids={table_name: dict(vals) for table_name, vals in self.foreign_ids.items()},
             primary_ids=dict(self.primary_ids),
+            check=False,
         )
 
     def set_main_table(self, name, inplace=False):
@@ -483,7 +512,7 @@ class Batcher:
                     indexer = np.asarray(indexer)
             if len(indexer.shape) == 1 and indexer.dtype == np.bool:
                 return self.query_ids(np.flatnonzero(indexer))
-            elif len(indexer.shape) == 1 and  torch.is_tensor(indexer) and indexer.dtype == torch.bool:
+            elif len(indexer.shape) == 1 and torch.is_tensor(indexer) and indexer.dtype == torch.bool:
                 return self.query_ids(torch.nonzero(indexer, as_tuple=True)[0])
             else:
                 return self.query_ids(indexer)
@@ -567,9 +596,9 @@ class Batcher:
                 self.primary_ids[sample_table_name] = sample_id_name
                 offset = offsets.get(sample_table_name, 0)
                 if device is None:
-                    self.tables[sample_table_name][sample_id_name] = np.arange(offset, offset+next(iter(self.tables[sample_table_name].values())).shape[0])
+                    self.tables[sample_table_name][sample_id_name] = np.arange(offset, offset + next(iter(self.tables[sample_table_name].values())).shape[0])
                 else:
-                    self.tables[sample_table_name][sample_id_name] = torch.arange(offset, offset+next(iter(self.tables[sample_table_name].values())).shape[0], device=device)
+                    self.tables[sample_table_name][sample_id_name] = torch.arange(offset, offset + next(iter(self.tables[sample_table_name].values())).shape[0], device=device)
 
         if not inplace:
             return self
@@ -718,8 +747,9 @@ class Batcher:
                 elif isinstance(col, pd.Series):
                     if device is not None:
                         col = col.values
-                if device is not None:
-                    col = torch.as_tensor(col, device=device, dtype=dtypes.get(table_name, {}).get(col_name, torch.long if col_name.endswith('_id') else None))
+                torch_dtype = dtypes.get(table_name, {}).get(col_name, torch.long if not torch.is_tensor(col) and np.issubdtype(col.dtype, np.integer) else None)
+                if device is not None and (not torch.is_tensor(col) or col.device != device or (torch_dtype is not None and col.dtype != torch_dtype)):
+                    col = torch.as_tensor(col, device=device, dtype=torch_dtype)
                 new_table[col_name] = col
             new_tables[table_name] = new_table
         return Batcher(new_tables,
@@ -727,7 +757,8 @@ class Batcher:
                        masks=self.masks,
                        subcolumn_names=new_column_names,
                        foreign_ids=self.foreign_ids,
-                       primary_ids=self.primary_ids)
+                       primary_ids=self.primary_ids,
+                       check=False, )
 
     def sparsify(self):
         """
@@ -760,7 +791,7 @@ class Batcher:
                     else:
                         mask = sparsified_masks[mask_name]
                 elif not issparse(col) and not issparse(mask):
-                    data = as_numpy_array(col)[mask]
+                    data = as_numpy_array(col)[np.asarray(mask)]
                     if mask_name not in sparsified_masks:
                         sparsified_masks[mask_name] = mask = csr_matrix(as_numpy_array(mask))
                     else:
@@ -781,7 +812,8 @@ class Batcher:
                        masks=self.masks,
                        subcolumn_names=self.subcolumn_names,
                        foreign_ids=self.foreign_ids,
-                       primary_ids=self.primary_ids)
+                       primary_ids=self.primary_ids,
+                       check=False, )
 
     def slice_tables(self, tables_and_columns):
         tables_and_columns = {
@@ -799,9 +831,11 @@ class Batcher:
                              for table_name, col_name_to_subcol_name in self.subcolumn_names.items() if table_name in tables_and_columns},
             masks={table_name: {col_name: mask_name for col_name, mask_name in col_name_to_mask_name.items() if col_name in tables_and_columns[table_name]}
                    for table_name, col_name_to_mask_name in self.masks.items() if table_name in tables_and_columns},
-            foreign_ids={table_name: {col_name: (foreign_table, mode) for col_name, (foreign_table, mode) in col_name_to_foreign_table.items() if col_name in tables_and_columns[table_name] and foreign_table in tables_and_columns}
+            foreign_ids={table_name: {col_name: (foreign_table, mode) for col_name, (foreign_table, mode) in col_name_to_foreign_table.items() if
+                                      col_name in tables_and_columns[table_name] and foreign_table in tables_and_columns}
                          for table_name, col_name_to_foreign_table in self.foreign_ids.items() if table_name in tables_and_columns},
-            primary_ids={table_name: primary_id for table_name, primary_id in self.primary_ids.items() if table_name in tables_and_columns})
+            primary_ids={table_name: primary_id for table_name, primary_id in self.primary_ids.items() if table_name in tables_and_columns},
+            check=False, )
         return res
 
     def query_ids(self, ids, **densify_kwargs):
@@ -887,13 +921,14 @@ class Batcher:
                       masks=self.masks,
                       subcolumn_names=self.subcolumn_names,
                       foreign_ids=self.foreign_ids,
-                      primary_ids=self.primary_ids)
+                      primary_ids=self.primary_ids,
+                      check=False, )
         if densify_kwargs:
             res = res.densify(**densify_kwargs)
         return res
 
     @classmethod
-    def concat(cls, batches, sparsify=True):
+    def concat(cls, batches, sparsify=True, allow_non_unique_primary_ids=False):
         """
 
         Parameters
@@ -911,7 +946,7 @@ class Batcher:
 
         new_batches = []
         offsets = {table_name: 0 for table_name in struct.tables}
-        for batch in batches:
+        for i, batch in enumerate(batches):
             new_batches.append(batch.fill_primary_ids(offsets=offsets).switch_foreign_ids_mode("absolute"))
             for table_name, table in batch.tables.items():
                 offsets[table_name] += next(iter(table.values())).shape[0]
@@ -991,18 +1026,28 @@ class Batcher:
                              masks=struct.masks,
                              subcolumn_names=struct.subcolumn_names,
                              foreign_ids=struct.foreign_ids,
-                             primary_ids=struct.primary_ids)
+                             primary_ids=struct.primary_ids,
+                             check=False, )
         for sample_table_name, table in list(new_tables.tables.items()):
             id_name = struct.primary_ids[sample_table_name]
             if id_name in table:
+                if not allow_non_unique_primary_ids:
+                    message = f"Primary id {table_name}/{id_name} is not unique.\n" \
+                              f"You can either set Batcher.concat `allow_non_unique_primary_ids` parameter to True or check that each concatenated" \
+                              f" batch has no redundant {table_name}/{id_name}.\n" \
+                              f"You maybe forgot to set foreign_ids='relative' when you created these batches."
+
                 if torch.is_tensor(table[id_name]):
-                    inverse = torch.unique(table[id_name], return_inverse=True)[1]  # sort and unifies
+                    uniq, inverse = torch.unique(table[id_name], return_inverse=True)
+                    if not allow_non_unique_primary_ids:
+                        assert len(uniq) == len(table[id_name]), message
                     uniquifier = inverse.argsort()[:len(table[id_name])]
                 elif isinstance(table[id_name], np.ndarray):
-                    inverse = pd.factorize(table[id_name])[0]  # sort and unifies
+                    inverse, uniq = pd.factorize(table[id_name])
+                    if not allow_non_unique_primary_ids:
+                        assert len(uniq) == len(table[id_name]), message
                     uniquifier = inverse.argsort()[:len(table[id_name])]
                 else:
                     raise Exception(f"Primary id {id_name} of table {sample_table_name} should be a torch tensor or a numpy ndarray")
                 new_tables.tables[sample_table_name] = new_tables.query_table(table, uniquifier)
         return new_tables
-

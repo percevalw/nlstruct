@@ -1,10 +1,8 @@
 import pandas as pd
 import spacy
 
-from nlstruct.core.cache import cached
 
-
-def make_spacy_model(need_pipelines=(), lang="en"):
+def make_spacy_model(need_pipelines=(), lang="en_core_web_sm"):
     nlp = spacy.load(lang)
     for pipename in nlp.pipe_names:
         if pipename not in need_pipelines:
@@ -50,7 +48,6 @@ SPACY_ATTRIBUTES = (
     'whitespace_')
 
 
-@cached
 def spacy_tokenize(docs, spacy_model=None, spacy_attributes=SPACY_ATTRIBUTES, **spacy_args):
     if spacy_model is None:
         spacy_model = make_spacy_model(**spacy_args)
@@ -83,8 +80,7 @@ def spacy_tokenize(docs, spacy_model=None, spacy_attributes=SPACY_ATTRIBUTES, **
     return tokens
 
 
-@cached
-def sentencize(docs, need_pipelines=('sbd',), max_token_length=200, **spacy_args):
+def sentencize(docs, need_pipelines=('sentencizer',), max_token_length=200, **spacy_args):
     spacy_model = make_spacy_model(need_pipelines, **spacy_args)
     doc_ids = []
     sentence_idx = []

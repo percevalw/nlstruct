@@ -6,7 +6,7 @@ IMPOSSIBLE = -10000
 
 
 class CRF(torch.nn.Module):
-    def __init__(self, num_tags, start_transitions_mask=None, transitions_mask=None, end_transitions_mask=None):
+    def __init__(self, num_tags, start_transitions_mask=None, transitions_mask=None, end_transitions_mask=None, with_start_end_transitions=True):
         super().__init__()
         self.num_tags = num_tags
 
@@ -14,9 +14,14 @@ class CRF(torch.nn.Module):
         self.transitions_mask = transitions_mask
         self.end_transitions_mask = end_transitions_mask
 
-        self.start_transitions = torch.nn.Parameter(torch.empty(num_tags))
         self.transitions = torch.nn.Parameter(torch.empty(num_tags, num_tags))
-        self.end_transitions = torch.nn.Parameter(torch.empty(num_tags))
+
+        if with_start_end_transitions:
+            self.start_transitions = torch.nn.Parameter(torch.empty(num_tags))
+            self.end_transitions = torch.nn.Parameter(torch.empty(num_tags))
+        else:
+            self.start_transitions = torch.zeros(num_tags)
+            self.end_transitions = torch.zeros(num_tags)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -174,7 +179,7 @@ class CRF(torch.nn.Module):
 
 
 class BIOULDecoder(CRF):
-    def __init__(self):
+    def __init__(self, with_start_end_transitions=True):
         num_tags = 5
         TAG_O = 0
         TAG_B = 1
@@ -202,7 +207,7 @@ class BIOULDecoder(CRF):
         end_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
         end_transitions_mask[TAG_I] = 1
         end_transitions_mask[TAG_B] = 1
-        super().__init__(5, start_transitions_mask, transitions_mask, end_transitions_mask)
+        super().__init__(5, start_transitions_mask, transitions_mask, end_transitions_mask, with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
     def extract(tags, tokens):
@@ -236,7 +241,7 @@ class BIOULDecoder(CRF):
 
 
 class BIODecoder(CRF):
-    def __init__(self, num_labels):
+    def __init__(self, num_labels, with_start_end_transitions=True):
         num_tags = 1 + num_labels * 2
         TAG_O = 0
         TAG_B = 1
@@ -261,7 +266,8 @@ class BIODecoder(CRF):
         super().__init__(num_tags=num_tags,
                          start_transitions_mask=start_transitions_mask,
                          transitions_mask=transitions_mask,
-                         end_transitions_mask=end_transitions_mask)
+                         end_transitions_mask=end_transitions_mask,
+                         with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
     def extract(tag, tokens=None):

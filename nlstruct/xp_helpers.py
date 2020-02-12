@@ -88,8 +88,6 @@ def make_optimizer_and_schedules(net, optim_factory, optim_params, names, num_it
 
 
 def run_optimization(
-      state,
-
       main_score,
       metrics_info,
       patience_warmup,
@@ -99,6 +97,7 @@ def run_optimization(
 
       epoch_fn,
 
+      state=None,
       n_save_checkpoints=1,
       required_start_score=None,
       cache=None,
@@ -106,6 +105,9 @@ def run_optimization(
       with_writer=False,
       seed=42,
 ):
+    if state is None:
+        state = {}
+
     if cache is None:
         cache_policy = []
     elif cache_policy is None:
@@ -222,4 +224,4 @@ def run_optimization(
                     state[name] = dumped[name]
         else:
             print(f"Could not restore model to its best state: {monitor.best_epoch}")
-    return history[monitor.best_epoch - 1]
+    return {**history[monitor.best_epoch - 1], "best_epoch": monitor.best_epoch}

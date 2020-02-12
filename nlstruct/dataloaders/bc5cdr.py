@@ -1,6 +1,5 @@
 import pandas as pd
 
-from nlstruct.core.cache import cached
 from nlstruct.core.dataset import Dataset
 from nlstruct.core.environment import env
 
@@ -19,9 +18,7 @@ from nlstruct.core.environment import env
 # ]
 
 
-@cached
 def load_bc5cdr():
-
     train_file = env.resource(env['BC5CDR_TRAIN_PATH'])
     dev_file = env.resource(env['BC5CDR_DEV_PATH'])
     test_file = env.resource(env['BC5CDR_TEST_PATH'])
