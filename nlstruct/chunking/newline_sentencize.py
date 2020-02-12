@@ -55,7 +55,7 @@ def newline_sentencize_(docs, max_sentence_length=None, n_threads=1,
                     max_sentence_length_ = len(spans)
                 else:
                     max_sentence_length_ = max_sentence_length
-                for j in range(last + max_sentence_length_, len(spans) - max_sentence_length_, max_sentence_length_):
+                for j in range(last + max_sentence_length_, len(spans) - max_sentence_length_, max(max_sentence_length_, 1)):
                     b = spans[last][0]
                     e = spans[j - 1][1]
                     doc_ids.append(doc_id)
