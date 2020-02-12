@@ -112,7 +112,6 @@ def regex_multisub_with_spans(patterns, replacements, text):
     return text, deltas
 
 
-@cached
 def transform_text(dataset,
                    global_patterns=None,
                    global_replacements=None, return_deltas=True, with_tqdm=False):
@@ -325,11 +324,13 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
             )
 
     merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
-    merged = small.merge(merged, how="left")
+    merged = small.merge(merged[doc_id_cols + small_id_cols + label_cols], on=doc_id_cols + small_id_cols, how="left")
+    label_categories = {}
     if tag_scheme != "raw":
         try:
             for label_col in label_cols:
                 unique_labels = list(set(large[label_col]))
+                label_categories[label_col] = unique_labels
                 merged[label_col] = merged[label_col].fillna("O").astype(pd.CategoricalDtype(
                     ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
                     ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "U-" + str(label), "L-" + str(label)))]
@@ -337,7 +338,7 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
         except Exception:
             raise Exception(f"Error occured during the encoding of label columns '{label_col}'")
     # return small[doc_id_cols + small_id_cols].merge(merged, how='left')
-    return merged
+    return merged, label_categories
 
 
 def partition_spans(smalls, large,
@@ -455,13 +456,13 @@ def partition_spans(smalls, large,
         new_smalls.append(new_small)
     if original_new_id_name:
         if new_id_name:
-            large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category")
+            large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1)
             large = large.drop(columns={*doc_id_cols, new_id_name} - {original_new_id_name})
             new_doc_id_cols = [c if c != original_new_id_name else f'_{c}' for c in doc_id_cols]
             (old_to_new[original_new_id_name],
              old_to_new[new_doc_id_cols],
              ) = (
-                old_to_new[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category"),
+                old_to_new[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1),
                 old_to_new[doc_id_cols]
             )
             if new_id_name not in (*new_doc_id_cols, original_new_id_name):

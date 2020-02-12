@@ -3,7 +3,7 @@ import zipfile
 import pandas as pd
 from sklearn.datasets._base import RemoteFileMetadata
 
-from nlstruct.core.cache import cached
+from nlstruct.core.cache import get_cache
 from nlstruct.core.network import ensure_files, NetworkLoadMode
 from nlstruct.core.dataset import Dataset
 
@@ -23,9 +23,8 @@ remote_files = [
 ]
 
 
-@cached
-def load_ncbi_disease(_cache=None):
-    download_path = _cache.entry("raw")
+def load_ncbi_disease():
+    download_path = get_cache("ncbi_raw_files")
     train_file, test_file, dev_file = ensure_files(download_path, remote_files, mode=NetworkLoadMode.AUTO)
 
     entries = []

@@ -1,10 +1,8 @@
 import pandas as pd
 
-from nlstruct.core.cache import cached
 from nlstruct.core.text import transform_text, reverse_deltas
 
 
-@cached
 def spm_tokenize(docs, path):
     subs = [
         (r"\s+", " "),

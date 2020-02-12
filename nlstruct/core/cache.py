@@ -546,12 +546,18 @@ def get_class_that_defined_method(meth):
 class cached(object):
     MAP = {}
 
-    def __init__(self, with_state=False, hash_only=None, ram=False, ignore=(), loader=None, dumper=None,
-                 default_cache_mode="rw"):
+    @classmethod
+    def will_ignore(cls, names):
+        def apply_on_func(func):
+            func._ignore_args = names
+            return func
+        return apply_on_func
+
+    def __init__(self, with_state=False, hash_only=None, ram=False, ignore=None, loader=None, dumper=None, default_cache_mode="rw"):
         self.ready = False
         self.with_state = with_state
         self.cls = None
-        self.ignore = tuple(ignore)
+        self.ignore = ignore
         self.hash_only = hash_only
         self.ram = ram
         self.loader = loader
@@ -615,16 +621,15 @@ class cached(object):
                 if self.hash_only is not None:
                     handle = get_cache(keys,
                                        self.hash_only(caller_self, *bound_arguments.args, **bound_arguments.kwargs),
-                                       _ram=self.ram,
-                                       _loader=self.loader,
-                                       _dumper=self.dumper)
+                                       on_ram=self.ram,
+                                       loader=self.loader,
+                                       dumper=self.dumper)
                 else:
                     handle = get_cache(keys, caller_self,
-                                       _ram=self.ram,
-                                       *bound_arguments.args,
-                                       _loader=self.loader,
-                                       _dumper=self.dumper,
-                                       **bound_arguments.kwargs)
+                                       (bound_arguments.args, bound_arguments.kwargs),
+                                       on_ram=self.ram,
+                                       loader=self.loader,
+                                       dumper=self.dumper,)
                 cached_result = handle.load() if "r" in cache_mode else None
 
                 if cached_result is None:
@@ -645,15 +650,14 @@ class cached(object):
                 if self.hash_only is not None:
                     handle = get_cache(keys,
                                        self.hash_only(*bound_arguments.args, **bound_arguments.kwargs),
-                                       _ram=self.ram,
-                                       _loader=self.loader,
-                                       _dumper=self.dumper)
+                                       on_ram=self.ram,
+                                       loader=self.loader,
+                                       dumper=self.dumper)
                 else:
-                    handle = get_cache(keys, *bound_arguments.args,
-                                       _ram=self.ram,
-                                       _loader=self.loader,
-                                       _dumper=self.dumper,
-                                       **bound_arguments.kwargs)
+                    handle = get_cache(keys, (bound_arguments.args, bound_arguments.kwargs),
+                                       on_ram=self.ram,
+                                       loader=self.loader,
+                                       dumper=self.dumper,)
                 result = handle.load() if "r" in cache_mode else None
                 if result is None:
                     if expect_cache_handle:
@@ -665,6 +669,8 @@ class cached(object):
                 return result
         else:
             func = args[0]
+            if self.ignore is None:
+                self.ignore = getattr(func, '_ignore_args', ())
             cache_key = (func, self.with_state, self.ram, self.ignore, self.loader, self.dumper, self.default_cache_mode)
             if cache_key in cached.MAP:
                 return cached.MAP[cache_key]
@@ -679,7 +685,7 @@ class cached(object):
             return self
 
 
-def get_cache(keys, *args, _loader=None, _dumper=None, _ram=False, **kwargs):
+def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
     """
     Get a unique cache object for given identifier and args
 
@@ -688,8 +694,8 @@ def get_cache(keys, *args, _loader=None, _dumper=None, _ram=False, **kwargs):
     keys: (typing.Sequence of str) or str or int or RelativePath
     args: Any
     kwargs: Any
-    _loader:
-    _dumper:
+    loader:
+    dumper:
 
     Returns
     -------
@@ -701,19 +707,20 @@ def get_cache(keys, *args, _loader=None, _dumper=None, _ram=False, **kwargs):
         keys = [*str(keys).split("/")]
     elif not hasattr(keys, '__len__'):
         keys = [str(keys)]
-    keys = list(keys) + [hash_object((args, kwargs), mmap_mode=None)]
-    if _ram:
+    keys = list(keys) + [hash_object(args, mmap_mode=None)]
+    if on_ram:
         cache_handle = RAMCacheHandle(os.path.join(env['CACHE_PATH'], *keys))
     else:
-        cache_handle = CacheHandle(os.path.join(env['CACHE_PATH'], *keys), loader=_loader, dumper=_dumper)
+        cache_handle = CacheHandle(os.path.join(env['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
         inputs_path = cache_handle.entry("inputs.txt")
-        if not inputs_path.exists():
-            with open(str(cache_handle.entry("inputs.txt")), "w") as inputs_file:
-                inputs_file.write("{}({})\n".format(
-                    ".".join(keys),
-                    ", ".join((*("[{}]{}".format(hash_object(a), repr(a)) for a in args),
-                               # FIXIT: repr(val) bellow may take a long long time for big collections
-                               *(f"[{hash_object(val)}]{name}={repr(val)}" for name, val in kwargs.items())))))
+        # TODO print input files top structures like dist / lists into an inputs.txt file
+        # if not inputs_path.exists():
+        #     with open(str(cache_handle.entry("inputs.txt")), "w") as inputs_file:
+        #         inputs_file.write("{}({})\n".format(
+        #             ".".join(keys),
+        #             ", ".join((*("[{}]{}".format(hash_object(a), repr(a)) for a in args),
+        #                        # FIXIT: repr(val) bellow may take a long long time for big collections
+        #                        *(f"[{hash_object(val)}]{name}={repr(val)}" for name, val in kwargs.items())))))
     return cache_handle
 
 

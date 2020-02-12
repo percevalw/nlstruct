@@ -99,7 +99,7 @@ def merge_pred_and_gold(
     return res
 
 
-def compute_metrics(merged_results, level='root'):
+def compute_metrics(merged_results, level='root', prefix=''):
     """
 
     Parameters
@@ -133,6 +133,7 @@ def compute_metrics(merged_results, level='root'):
     res.loc[null_tp, ('precision', 'recall', 'f1')] = 1
     res = res.agg({'recall': 'mean', 'precision': 'mean', 'f1': 'mean',
                    'pred_count': 'sum', 'gold_count': 'sum', 'tp': 'sum'})
+    res.index = [prefix+c for c in res.index]
     return res
 
 

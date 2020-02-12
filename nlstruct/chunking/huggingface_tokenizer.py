@@ -1,9 +1,6 @@
 import pandas as pd
 
-from nlstruct.core.cache import cached
 
-
-@cached
 def huggingface_tokenize(docs, tokenizer):
     doc_ids = []
     tokens = []
