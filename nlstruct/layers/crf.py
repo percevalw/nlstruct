@@ -178,89 +178,28 @@ class CRF(torch.nn.Module):
         return z, log_probs, backtrack
 
 
-class BIOULDecoder(CRF):
-    def __init__(self, with_start_end_transitions=True):
-        num_tags = 5
-        TAG_O = 0
-        TAG_B = 1
-        TAG_I = 2
-        TAG_U = 3
-        TAG_L = 4
-        transitions_mask = torch.zeros(num_tags, num_tags, device=tg.device, dtype=torch.bool)
-        transitions_mask[TAG_O, TAG_I] = 1
-        transitions_mask[TAG_O, TAG_L] = 1
-        transitions_mask[TAG_B, TAG_O] = 1
-        transitions_mask[TAG_B, TAG_B] = 1
-        transitions_mask[TAG_B, TAG_U] = 1
-        transitions_mask[TAG_I, TAG_O] = 1
-        transitions_mask[TAG_I, TAG_B] = 1
-        transitions_mask[TAG_I, TAG_U] = 1
-        transitions_mask[TAG_U, TAG_I] = 1
-        transitions_mask[TAG_U, TAG_L] = 1
-        transitions_mask[TAG_L, TAG_I] = 1
-        transitions_mask[TAG_L, TAG_L] = 1
-
-        start_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
-        start_transitions_mask[TAG_L] = 1
-        start_transitions_mask[TAG_I] = 1
-
-        end_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
-        end_transitions_mask[TAG_I] = 1
-        end_transitions_mask[TAG_B] = 1
-        super().__init__(5, start_transitions_mask, transitions_mask, end_transitions_mask, with_start_end_transitions=with_start_end_transitions)
-
-    @staticmethod
-    def tags_to_spans(tags, tokens):
-        squeeze_unflattener = False
-        if len(tags.shape) < 3:
-            squeeze_unflattener = True
-            tags = tags.unsqueeze(0)
-        begin_tags = ((tags == 1) | (tags == 3)).nonzero()
-        end_tags = ((tags == 4) | (tags == 3)).nonzero()
-
-        if (0 in begin_tags.shape):
-            return [None] * 6
-
-        if (0 in begin_tags.shape):
-            return [None] * 6
-
-        mentions_count_per_sample = ((tags == 1) | (tags == 3)).sum(-1)
-        mentions_unflattener = torch.zeros(*mentions_count_per_sample.shape, max(mentions_count_per_sample.max(), 1), dtype=torch.long)
-        mentions_unflattener_mask = torch.arange(max(mentions_count_per_sample.max(), 1), device=tags.device).view(1, 1, -1) < mentions_count_per_sample.unsqueeze(-1)
-        mentions_unflattener[mentions_unflattener_mask] = torch.arange(begin_tags.shape[0], device=tags.device)
-
-        mention_length = (end_tags[:, 2] - begin_tags[:, 2]).max().item() + 1
-        mentions_from_sequences_col_indexer = torch.arange(mention_length, device=tags.device).unsqueeze(0) + begin_tags[:, 2].unsqueeze(1)
-        mentions_from_sequences_row_indexer = begin_tags[:, 1].unsqueeze(1)
-        mentions_tokens = tokens[mentions_from_sequences_row_indexer, torch.min(mentions_from_sequences_col_indexer, torch.tensor(tokens.shape[1], device=tags.device) - 1)]
-        mentions_tokens_mask = mentions_from_sequences_col_indexer <= end_tags[:, 2].unsqueeze(1)
-        if squeeze_unflattener:
-            mentions_unflattener = mentions_unflattener.squeeze(0)
-            mentions_unflattener_mask = mentions_unflattener_mask.squeeze(0)
-        return mentions_tokens, mentions_tokens_mask, mentions_unflattener, mentions_unflattener_mask, begin_tags[:, 2], end_tags[:, 2]
-
-
 class BIODecoder(CRF):
     def __init__(self, num_labels, with_start_end_transitions=True):
         num_tags = 1 + num_labels * 2
-        TAG_O = 0
-        TAG_B = 1
-        TAG_I = 2
+        O, B, I = 0, 1, 2
         transitions_mask = torch.ones(num_tags, num_tags, device=tg.device, dtype=torch.bool)
-        transitions_mask[0, 0] = 0  # O to O
+        transitions_mask[O, O] = 0  # O to O
         for i in range(num_labels):
-            transitions_mask[0, 1 + 2 * i] = 0  # O to B-i
-            transitions_mask[1 + 2 * i, 2 + 2 * i] = 0  # B-i to I-i
-            transitions_mask[2 + 2 * i, 2 + 2 * i] = 0  # I-i to I-i
-            transitions_mask[2 + 2 * i, 0] = 0  # I-i to O
-            transitions_mask[1 + 2 * i, 0] = 0  # B-i to O
+            STRIDE = i * 2
+            transitions_mask[O, B + STRIDE] = 0  # O to B-i
+            transitions_mask[B + STRIDE, I + STRIDE] = 0  # B-i to I-i
+            transitions_mask[I + STRIDE, I + STRIDE] = 0  # I-i to I-i
+            transitions_mask[I + STRIDE, O] = 0  # I-i to O
+            transitions_mask[B + STRIDE, O] = 0  # B-i to O
             for j in range(num_labels):
-                transitions_mask[1 + 2 * i, 1 + 2 * j] = 0  # B-i to B-j
-                transitions_mask[2 + 2 * i, 1 + 2 * j] = 0  # I-i to B-j
+                STRIDE_J = j * 2
+                transitions_mask[B + STRIDE, B + STRIDE_J] = 0  # B-i to B-j
+                transitions_mask[I + STRIDE, B + STRIDE_J] = 0  # I-i to B-j
 
         start_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
         for i in range(num_labels):
-            start_transitions_mask[2 + 2 * i] = 1  # forbidden to start by I-i
+            STRIDE = i * 2
+            start_transitions_mask[I + STRIDE] = 1  # forbidden to start by I-i
 
         end_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
         super().__init__(num_tags=num_tags,
@@ -273,8 +212,10 @@ class BIODecoder(CRF):
     def tags_to_spans(tag, mask=None):
         if mask is not None:
             tag = tag.masked_fill(~mask, 0)
-        is_B = ((tag - 1) % 2) == 0
-        is_I = ((tag - 1) % 2 == 1) & (tag != 0)
+        unstrided_tags = ((tag - 1) % 2).masked_fill(tag == 0, -1)
+        is_B = unstrided_tags == 0
+        is_I = unstrided_tags == 1
+
         label = (tag - 1) // 2
         next_label = label.roll(-1, dims=1)
         next_label[:, -1] = 0
@@ -302,3 +243,72 @@ class BIODecoder(CRF):
             "span_doc_id": begin_tag[:, 0],
         }
 
+class BIOULDecoder(CRF):
+    def __init__(self, num_labels, with_start_end_transitions=True):
+        O, B, I, L, U = 0, 1, 2, 3, 4
+
+        num_tags = 1 + num_labels * 4
+        transitions_mask = torch.ones(num_tags, num_tags, device=tg.device, dtype=torch.bool)
+        transitions_mask[O, O] = 0  # O to O
+        for i in range(num_labels):
+            STRIDE = 4 * i
+            transitions_mask[O, B + STRIDE] = 0  # O to B-i
+            transitions_mask[B + STRIDE, I + STRIDE] = 0  # B-i to I-i
+            transitions_mask[I + STRIDE, I + STRIDE] = 0  # I-i to I-i
+            transitions_mask[I + STRIDE, L + STRIDE] = 0  # I-i to L-i
+            transitions_mask[L + STRIDE, O] = 0  # L-i to O
+            transitions_mask[O, U + STRIDE] = 0  # O to U-i
+            transitions_mask[U + STRIDE, O] = 0  # U-i to O
+            for j in range(num_labels):
+                STRIDE_J = j * 4
+                transitions_mask[L + STRIDE, B + STRIDE_J] = 0  # L-i to B-j
+                transitions_mask[L + STRIDE, U + STRIDE_J] = 0  # L-i to U-j
+                transitions_mask[U + STRIDE, B + STRIDE_J] = 0  # U-i to B-j
+
+        start_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
+        for i in range(num_labels):
+            STRIDE = 4 * i
+            start_transitions_mask[I + STRIDE] = 1  # forbidden to start by I-i
+            start_transitions_mask[L + STRIDE] = 1  # forbidden to start by L-i
+
+        end_transitions_mask = torch.zeros(num_tags, device=tg.device, dtype=torch.bool)
+        for i in range(num_labels):
+            STRIDE = 4 * i
+            end_transitions_mask[I + STRIDE] = 1  # forbidden to end by I-i
+            end_transitions_mask[B + STRIDE] = 1  # forbidden to end by B-i
+
+        super().__init__(num_tags=num_tags,
+                         start_transitions_mask=start_transitions_mask,
+                         transitions_mask=transitions_mask,
+                         end_transitions_mask=end_transitions_mask,
+                         with_start_end_transitions=with_start_end_transitions)
+
+    @staticmethod
+    def tags_to_spans(tag, mask=None):
+        B, I, L, U = 0, 1, 2, 3
+
+        if mask is not None:
+            tag = tag.masked_fill(~mask, 0)
+        unstrided_tags = ((tag - 1) % 4).masked_fill(tag == 0, -1)
+        label = (tag - 1) // 4
+        is_B_or_U = (unstrided_tags == B) | (unstrided_tags == U)
+        is_L_or_U = (unstrided_tags == L) | (unstrided_tags == U)
+        begin_tag = is_B_or_U.nonzero()
+        end_tag = is_L_or_U.nonzero()
+
+        span_label = label[is_B_or_U]
+        spans_count_per_doc = is_B_or_U.sum(-1)
+        max_spans_count_per_doc = 0 if 0 in begin_tag.shape else spans_count_per_doc.max()
+
+        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long)
+        doc_entity_mask = torch.arange(max_spans_count_per_doc, device=tag.device).view(1, -1) < spans_count_per_doc.unsqueeze(-1)
+        doc_entity_id[doc_entity_mask] = torch.arange(begin_tag.shape[0], device=tag.device)
+
+        return {
+            "doc_spans_id": doc_entity_id,
+            "doc_spans_mask": doc_entity_mask,
+            "span_begin": begin_tag[:, 1],
+            "span_end": end_tag[:, 1] + 1,  # for a tag sequence O O B I O, (begin_tag, end_tag) is (2, 3) so we want token span 2:4
+            "span_label": span_label,
+            "span_doc_id": begin_tag[:, 0],
+        }
