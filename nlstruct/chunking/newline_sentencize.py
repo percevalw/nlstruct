@@ -84,11 +84,11 @@ def newline_sentencize_(docs, max_sentence_length=None, n_threads=1,
     }).astype({"doc_id": docs["doc_id"].dtype})
 
 
-@cached.will_ignore(["n_threads", "with_tqdm"])
+@cached.will_ignore(("n_threads", "with_tqdm"))
 def mimic_sentencize(texts, max_sentence_length=None, n_threads=1, with_tqdm=True):
     return newline_sentencize_(texts, max_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
 
 
-@cached.will_ignore(["n_threads", "with_tqdm"])
+@cached.will_ignore(("n_threads", "with_tqdm"))
 def newline_sentencize(texts, max_sentence_length=None, n_threads=1, with_tqdm=True):
     return newline_sentencize_(texts, max_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm)
