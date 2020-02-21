@@ -551,6 +551,7 @@ class cached(object):
         def apply_on_func(func):
             func._ignore_args = tuple(names)
             return func
+
         return apply_on_func
 
     def __init__(self, with_state=False, hash_only=None, ram=False, ignore=None, loader=None, dumper=None, default_cache_mode="rw"):
@@ -629,7 +630,7 @@ class cached(object):
                                        (bound_arguments.args, bound_arguments.kwargs),
                                        on_ram=self.ram,
                                        loader=self.loader,
-                                       dumper=self.dumper,)
+                                       dumper=self.dumper, )
                 cached_result = handle.load() if "r" in cache_mode else None
 
                 if cached_result is None:
@@ -657,7 +658,7 @@ class cached(object):
                     handle = get_cache(keys, (bound_arguments.args, bound_arguments.kwargs),
                                        on_ram=self.ram,
                                        loader=self.loader,
-                                       dumper=self.dumper,)
+                                       dumper=self.dumper, )
                 result = handle.load() if "r" in cache_mode else None
                 if result is None:
                     if expect_cache_handle:
@@ -718,9 +719,10 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
             with open(str(cache_handle.entry("inputs.txt")), "w") as inputs_file:
                 inputs_file.write("{}({})\n".format(
                     ".".join(keys),
-                    ", ".join((#*("[{}]{}".format(hash_object(a), repr(a)) for a in args[0]),
-                               # FIXIT: repr(val) bellow may take a long long time for big collections
-                               (f"[{hash_object(val)}]{name}={repr(val)}" for name, val in args.items())))))
+                    ", ".join((  # *("[{}]{}".format(hash_object(a), repr(a)) for a in args[0]),
+                        # FIXIT: repr(val) bellow may take a long long time for big collections
+                        (f"[{hash_object(val)}]{name}={repr(val)}"
+                         for name, val in (args.items() if hasattr(args, 'items') else ("", args)))))))
     return cache_handle
 
 
