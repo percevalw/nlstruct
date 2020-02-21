@@ -549,7 +549,7 @@ class cached(object):
     @classmethod
     def will_ignore(cls, names):
         def apply_on_func(func):
-            func._ignore_args = names
+            func._ignore_args = tuple(names)
             return func
         return apply_on_func
 
