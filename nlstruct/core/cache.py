@@ -722,7 +722,7 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
                     ", ".join((  # *("[{}]{}".format(hash_object(a), repr(a)) for a in args[0]),
                         # FIXIT: repr(val) bellow may take a long long time for big collections
                         (f"[{hash_object(val)}]{name}={repr(val)}"
-                         for name, val in (args.items() if hasattr(args, 'items') else [("", args)]))))))
+                         for name, val in (args.items() if hasattr(args, 'items') else zip(range(len(args)), args)))))))
     return cache_handle
 
 
