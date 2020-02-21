@@ -329,7 +329,7 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     if tag_scheme != "raw":
         try:
             for label_col in label_cols:
-                unique_labels = list(set(large[label_col]))
+                unique_labels = list(set(large[label_col])) if not hasattr(large[label_col], 'cat') else large[label_col].cat.categories
                 label_categories[label_col] = unique_labels
                 merged[label_col] = merged[label_col].fillna("O").astype(pd.CategoricalDtype(
                     ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
