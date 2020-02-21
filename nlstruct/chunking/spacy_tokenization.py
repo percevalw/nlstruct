@@ -3,13 +3,7 @@ import spacy
 
 
 def make_spacy_model(need_pipelines=(), lang="en_core_web_sm"):
-    nlp = spacy.load(lang)
-    for pipename in nlp.pipe_names:
-        if pipename not in need_pipelines:
-            nlp.remove_pipe(pipename)
-    for pipename in need_pipelines:
-        if pipename not in nlp.pipe_names:
-            nlp.add_pipe(nlp.create_pipe(pipename))
+    nlp = spacy.load(lang, pipeline=need_pipelines)
     return nlp
 
 
