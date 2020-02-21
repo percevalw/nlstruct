@@ -60,7 +60,7 @@ def flatten_array(array, mask=None):
         raise Exception(f"Unrecognized array type {repr(type(array))} during array flattening (mask type is {repr(type(mask))}')")
 
 
-def factorize(values, mask=None, reference_values=None, freeze_reference=True, keep_old_values=False):
+def factorize(values, mask=None, reference_values=None, freeze_reference=True):
     """
     Express values in "col" as row numbers in a reference list of values
     The reference values list is the deduplicated concatenation of preferred_unique_values (if not None) and col
@@ -112,20 +112,25 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True, k
             f"values and (optional mask) should be of same type torch.tensor, numpy.ndarray or scipy.sparse.spmatrix. Given types are values: {repr(type(values))} and mask: {repr(type(mask))}")
         all_flat_values.append(flatten_array(values, mask))
         # return all_values[0], all_masks[0], all_values[0].tocsr().data if hasattr(all_values[0], 'tocsr') else all_values#col.tocsr().data if hasattr(col, 'tocsr')
+    was_torch = False
     if torch.is_tensor(all_flat_values[0]):
-        if reference_values is None:
-            unique_values, relative_values = torch.unique(torch.cat(all_flat_values), return_inverse=True)
-        elif freeze_reference:
-            relative_values, unique_values = torch.unique(torch.cat((reference_values, *all_flat_values)), return_inverse=True)[1], reference_values
-        else:
-            unique_values, relative_values = torch.unique(torch.cat((reference_values, *all_flat_values)), return_inverse=True)
-    else:
+        was_torch = True
+        # if reference_values is None:
+        #     unique_values, relative_values = torch.unique(torch.cat(all_flat_values), sorted=False, return_inverse=True)
+        # elif freeze_reference:
+        #     relative_values, unique_values = torch.unique(torch.cat((reference_values, *all_flat_values)), sorted=False, return_inverse=True)[1], reference_values
+        # else:
+        #     unique_values, relative_values = torch.unique(torch.cat((reference_values, *all_flat_values)), sorted=False, return_inverse=True)
+    if True:
         if reference_values is None:
             relative_values, unique_values = pd.factorize(np.concatenate(all_flat_values))
         elif freeze_reference:
             relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))[0], reference_values
         else:
             relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))
+    if was_torch:
+        relative_values = torch.as_tensor(relative_values)
+        unique_values = torch.as_tensor(unique_values)
     if freeze_reference:
         all_unk_masks = relative_values < len(reference_values)
     else:
@@ -518,25 +523,52 @@ class Batcher:
                 return self.query_ids(indexer)
 
     def __setitem__(self, key, value):
-        assert isinstance(key, tuple)
-        table = self.tables[key[0]]
-        if isinstance(key[1], str):
-            table[key[1]] = value
-        elif isinstance(key[1], list):
-            assert len(key[1]) == len(value)
-            for name, val in zip(key[1], value):
-                table[name] = val
+        if isinstance(key, str):
+            if isinstance(value, (Batcher, self.__class__)) or str(type(value)) == "<class 'nlstruct.core.batcher.Batcher'>":
+                foreign_ids = self.foreign_ids
+                self.switch_foreign_ids_mode("absolute", inplace=True)
+                value = value.switch_foreign_ids_mode("absolute")
+                self.tables[key] = value.tables[key]
+            else:
+                raise Exception(f"TODO {type(value)}")
+            return self
+        elif isinstance(key, tuple):
+            table = self.tables[key[0]]
+            if isinstance(key[1], str):
+                table[key[1]] = value
+            elif isinstance(key[1], list):
+                assert len(key[1]) == len(value)
+                for name, val in zip(key[1], value):
+                    table[name] = val
+            else:
+                raise Exception("Can only assign array or list of arrays to either (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
         else:
-            raise Exception("Can only assign array or list of arrays to either (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
+            raise Exception("Key should be either a str or a tuple of (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
 
     def __delitem__(self, key):
-        assert isinstance(key, tuple)
-        table = self.tables[key[0]]
-        if isinstance(key[1], str):
-            del table[key[1]]
-        elif isinstance(key[1], list):
-            for name in key[1]:
-                del table[name]
+        if isinstance(key, str):
+            del self.tables[key]
+            if key == self.main_table:
+                self.main_table = next(iter(self.tables.keys()))
+            if key in self.masks:
+                del self.masks[key]
+            if key in self.foreign_ids:
+                del self.foreign_ids[key]
+            if key in self.subcolumn_names:
+                del self.subcolumn_names[key]
+            if key in self.primary_ids:
+                del self.primary_ids[key]
+            for name, foreigns in self.foreign_ids.items():
+                for col_name, (table, mode) in list(foreigns.items()):
+                    if table == key:
+                        del foreigns[col_name]
+        elif isinstance(key, tuple):
+            table = self.tables[key[0]]
+            if isinstance(key[1], str):
+                del table[key[1]]
+            elif isinstance(key[1], (list, tuple)):
+                for name in key[1]:
+                    del table[name]
         else:
             raise Exception("Can only delete columns: (table_name:str, col_name:str) or (table_name:str, col_names: list of str)")
 
@@ -752,13 +784,10 @@ class Batcher:
                     col = torch.as_tensor(col, device=device, dtype=torch_dtype)
                 new_table[col_name] = col
             new_tables[table_name] = new_table
-        return Batcher(new_tables,
-                       main_table=self.main_table,
-                       masks=self.masks,
-                       subcolumn_names=new_column_names,
-                       foreign_ids=self.foreign_ids,
-                       primary_ids=self.primary_ids,
-                       check=False, )
+
+        res = self.copy()
+        res.tables = new_tables
+        return res
 
     def sparsify(self):
         """
@@ -807,13 +836,9 @@ class Batcher:
                 if new_tables.get(table_name, {}).get(col_name, None) is None:
                     new_tables.setdefault(table_name, {})[col_name] = as_numpy_array(col) if not issparse(col) else col
 
-        return Batcher(new_tables,
-                       main_table=self.main_table,
-                       masks=self.masks,
-                       subcolumn_names=self.subcolumn_names,
-                       foreign_ids=self.foreign_ids,
-                       primary_ids=self.primary_ids,
-                       check=False, )
+        res = self.copy()
+        res.tables = new_tables
+        return res
 
     def slice_tables(self, tables_and_columns):
         tables_and_columns = {
@@ -857,6 +882,7 @@ class Batcher:
                 queried_table = self.query_table(table, selected_ids[table_name])
             except:
                 raise Exception(f"Exception occured while querying table {repr(table_name)}. Previously queried tables are {repr(tuple(queried_tables.keys()))}")
+            logging.debug(f"Queried table {repr(table_name)}. Previously queried tables are {repr(tuple(queried_tables.keys()))}")
             for col_name, col in queried_table.items():
                 # Ex: col_name = from_mention_id
                 #     foreign_table_name = mention
@@ -877,7 +903,7 @@ class Batcher:
                         # If a table refers to other relations through foreign keys, then those pointers will be masked
                         # For non main ids (ex: mentions), we allow different tables to disagree on the mentions to query
                         # and retrieve all of the needed mentions
-                        freeze_reference=foreign_table_name == self.main_table,
+                        freeze_reference=foreign_table_name in queried_tables,
                     )
                     # new_col, new_mask, unique_ids = col, queried_table.get(mask_name, None), col.tocsr().data if hasattr(col, 'tocsr') else col#selected_ids.get(foreign_table_name, None)
                     if mask_name is not None:
@@ -916,13 +942,8 @@ class Batcher:
         new_tables = dict(self.tables)
         new_tables.update(queried_tables)
 
-        res = Batcher(new_tables,
-                      main_table=self.main_table,
-                      masks=self.masks,
-                      subcolumn_names=self.subcolumn_names,
-                      foreign_ids=self.foreign_ids,
-                      primary_ids=self.primary_ids,
-                      check=False, )
+        res = self.copy()
+        res.tables = new_tables
         if densify_kwargs:
             res = res.densify(**densify_kwargs)
         return res
@@ -941,7 +962,7 @@ class Batcher:
         Batcher
         """
 
-        struct = batches[0]
+        struct = batches[0].copy()
         new_tables = {}
 
         new_batches = []
@@ -1038,7 +1059,7 @@ class Batcher:
                               f"You maybe forgot to set foreign_ids='relative' when you created these batches."
 
                 if torch.is_tensor(table[id_name]):
-                    uniq, inverse = torch.unique(table[id_name], return_inverse=True)
+                    uniq, inverse = torch.unique(table[id_name], sorted=False, return_inverse=True)
                     if not allow_non_unique_primary_ids:
                         assert len(uniq) == len(table[id_name]), message
                     uniquifier = inverse.argsort()[:len(table[id_name])]
