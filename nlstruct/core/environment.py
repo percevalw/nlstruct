@@ -42,15 +42,15 @@ class RelativePath(Path):
 
     def __repr__(self):
         try:
-            return f"[resource]/{str(self.relative_to(_resource_path))}"
+            return f"[resource]/{str(super().relative_to(_resource_path))}"
         except ValueError:
-            return f"[cache]/{str(self.relative_to(_cache_path))}"
+            return f"[cache]/{str(super().relative_to(_cache_path))}"
 
     def __reduce__(self):
         try:
-            return RelativePath.rebuild_from_state, (str(self.relative_to(_resource_path)), "resource")
+            return RelativePath.rebuild_from_state, (str(super().relative_to(_resource_path)), "resource")
         except ValueError:
-            return RelativePath.rebuild_from_state, (str(self.relative_to(_cache_path)), "cache")
+            return RelativePath.rebuild_from_state, (str(super().relative_to(_cache_path)), "cache")
 
     @classmethod
     def from_yaml(cls, loader, tag_suffix, node):
@@ -63,6 +63,9 @@ class RelativePath(Path):
             return dumper.represent_scalar("!env/resource", str(data.relative_to(_resource_path)))
         except ValueError:
             return dumper.represent_scalar("!env/cache", str(data.relative_to(_cache_path)))
+
+    def relative_to(self, *other):
+        return Path(super(RelativePath, self).relative_to(*other))
 
 
 # Required for safe_load
