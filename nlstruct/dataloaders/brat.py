@@ -24,10 +24,6 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     rng = check_random_state(random_state)
     docs['split'] = rng.choice(['train', 'val'], size=len(docs),
                                p=[1 - validation_split, validation_split])
-    docs = docs.astype({
-        "doc_id": "category",
-        "split": "category",
-    })
 
     # Extract annotations from path and make multiple dataframe from it
     for filename in sorted(os.listdir(path)):
@@ -86,10 +82,9 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
                             "from_mention_id": parts[0].split(":")[1],
                             "to_mention_id": parts[1].split(":")[1],
                         })
-    mentions = pd.DataFrame(mentions)
-    fragments = pd.DataFrame(fragments)
-    mentions = mentions[["doc_id", "mention_id", "label", "text"]]
-    attributes = pd.DataFrame(attributes)[["doc_id", "mention_id", "attribute_id", "label", "value"]]
-    relations = pd.DataFrame(relations)[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
+    mentions = pd.DataFrame(mentions, columns=["doc_id", "mention_id", "label", "text"])
+    fragments = pd.DataFrame(fragments, columns=["doc_id", "mention_id", "fragment_id", "begin", "end"])
+    attributes = pd.DataFrame(attributes, columns=["doc_id", "mention_id", "attribute_id", "label", "value"])
+    relations = pd.DataFrame(relations, columns=["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"])
 
     return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations)
