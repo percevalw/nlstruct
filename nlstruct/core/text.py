@@ -1,17 +1,19 @@
 import re
+from functools import reduce
 from itertools import repeat
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from nlstruct.core.cache import cached
 from nlstruct.core.pandas import make_merged_names_map, merge_with_spans, make_id_from_merged, flatten
 
 
 def make_tag_scheme(length, entity, scheme='bio'):
     if scheme == "bio":
         return [f"B-{entity}", *(f"I-{entity}" for _ in range(length - 1))]
+    elif scheme == "bioul":
+        return [f"B-{entity}", *(f"I-{entity}" for _ in range(length - 2)), f"L-{entity}"] if length >= 2 else [f"U-{entity}"]
     raise ValueError(f"'{scheme}' scheme is not supported")
 
 
@@ -291,7 +293,8 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     # Map mentions to small as a tag
     large = large.sort_values([*doc_id_cols, "begin", "end"])
     if use_token_idx:
-        merged = merge_with_spans(large, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query("begin <= token_idx and token_idx < end")
+        merged = merge_with_spans(large, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query(
+            "begin <= token_idx and token_idx < end")
     else:
         merged = merge_with_spans(large, small, span_policy='partial_strict', on=[*doc_id_cols, ("begin", "end")], suffixes=('_large', ''))
 
@@ -303,25 +306,18 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     tags = (merged[merged_id_cols + label_cols]
             .sort_values(merged_id_cols))
     if tag_scheme != "raw":
-        if verbose > 0:
-            n_groups = len(tags.groupby(doc_id_cols + large_id_cols + label_cols, as_index=False, observed=True))
-            bar = tqdm(total=n_groups)
-        else:
-            bar = memoryview(b'')  # no-op context for next instruction
-        with bar:
-            keep_cols = list(set(doc_id_cols + large_id_cols) - set(label_cols))
-            tags = (
-                # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
-                # to accelerate concatenation inside the groupby
-                tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
-                    .groupby(doc_id_cols + large_id_cols + label_cols, as_index=False, observed=True)
-                    .apply(lambda group: (bar.update(1) if verbose > 0 else False) or group.assign(**{
-                    label_col: make_tag_scheme(len(group[small_id_cols[0]]), group[label_col].iloc[0], tag_scheme)
-                    for label_col in label_cols
-                }))
-                    # convert back each group column dtype to its origial categorical dtype
-                    .astype(tags.dtypes[keep_cols])
-            )
+        keep_cols = list(set(doc_id_cols + large_id_cols) - set(label_cols))
+        tags = (
+            # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
+            # to accelerate concatenation inside the groupby
+            tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
+                .nlstruct.groupby_assign(
+                doc_id_cols + large_id_cols,
+                {label_col: lambda labels: make_tag_scheme(len(labels), labels.iloc[0], tag_scheme)
+                 for label_col in label_cols})
+                # convert back each group column dtype to its origial categorical dtype
+                .astype(tags.dtypes[keep_cols])
+        )
 
     merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
     merged = small.merge(merged[doc_id_cols + small_id_cols + label_cols], on=doc_id_cols + small_id_cols, how="left")
@@ -329,11 +325,11 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     if tag_scheme != "raw":
         try:
             for label_col in label_cols:
-                unique_labels = list(set(large[label_col])) if not hasattr(large[label_col], 'cat') else large[label_col].cat.categories
+                unique_labels = sorted(set(large[label_col])) if not hasattr(large[label_col], 'cat') else large[label_col].cat.categories
                 label_categories[label_col] = unique_labels
                 merged[label_col] = merged[label_col].fillna("O").astype(pd.CategoricalDtype(
                     ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
-                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "U-" + str(label), "L-" + str(label)))]
+                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "L-" + str(label), "U-" + str(label)))]
                 ))
         except Exception:
             raise Exception(f"Error occured during the encoding of label columns '{label_col}'")
@@ -418,6 +414,8 @@ def partition_spans(smalls, large,
                      .agg({**{n: 'first' for n in [*doc_id_cols, *large_id_cols] if n != new_id_name}, 'begin': 'min', 'end': 'max'})
                      .astype({"begin": int, "end": int, **large[doc_id_cols].dtypes}))
             large = large[doc_id_cols + [new_id_name] + ["begin", "end"]]
+            large[new_id_name] = large['begin']
+            large = large.nlstruct.groupby_assign(doc_id_cols, {new_id_name: lambda x: tuple(np.argsort(np.argsort(x)))})
             old_to_new = large[doc_id_cols + [new_id_name]].drop_duplicates().reset_index(drop=True)
             merged_id_cols = [new_id_name]
         # large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category")
@@ -450,25 +448,39 @@ def partition_spans(smalls, large,
             merged.assign(begin=merged["begin_x"] - merged["begin_y"], end=merged["end_x"] - merged["begin_y"])
                 .astype({"begin": int, "end": int})[[*doc_id_cols, *(merged_id_cols or ()), *small_id_cols, *small_val_cols, "begin", "end"]])
         if new_id_name:
-            new_small[original_new_id_name] = new_small[list(set((*doc_id_cols, new_id_name)))].apply(
-                lambda x: "/".join([str(x[c]) for c in list(doc_id_cols) + ([new_id_name] if new_id_name not in doc_id_cols else [])]), axis=1)
+            new_small[new_id_name] = new_small[new_id_name].astype(str)
+            new_small[new_id_name] = new_small[new_id_name].str.zfill(new_small[new_id_name].str.len().max())
+            new_small[original_new_id_name] = join_cols(new_small[doc_id_cols + ([new_id_name] if new_id_name not in doc_id_cols else [])], "/")
             new_small = new_small.drop(columns={*doc_id_cols, new_id_name} - {original_new_id_name})
+
         new_smalls.append(new_small)
+
     if original_new_id_name:
         if new_id_name:
-            large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1)
+            large[new_id_name] = large[new_id_name].astype(str)
+            large[new_id_name] = large[new_id_name].str.zfill(large[new_id_name].str.len().max())
+            large[original_new_id_name] = join_cols(large[doc_id_cols + [new_id_name]], "/")
             large = large.drop(columns={*doc_id_cols, new_id_name} - {original_new_id_name})
             new_doc_id_cols = [c if c != original_new_id_name else f'_{c}' for c in doc_id_cols]
+
+            old_to_new[new_id_name] = old_to_new[new_id_name].astype(str)
+            old_to_new[new_id_name] = old_to_new[new_id_name].str.zfill(old_to_new[new_id_name].str.len().max())
             (old_to_new[original_new_id_name],
              old_to_new[new_doc_id_cols],
              ) = (
-                old_to_new[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1),
+                # old_to_new[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1),
+                join_cols(old_to_new[doc_id_cols + [new_id_name]], "/"),
                 old_to_new[doc_id_cols]
             )
             if new_id_name not in (*new_doc_id_cols, original_new_id_name):
                 del old_to_new[new_id_name]
         new_smalls = [small.astype({original_new_id_name: large[original_new_id_name].dtype}) for small in new_smalls]
     return new_smalls, large, old_to_new
+
+
+def join_cols(df, sep="/"):
+    df = df.astype(str)
+    return reduce(lambda x, y: x + sep + y, (df.iloc[:, i] for i in range(1, len(df.columns))), df.iloc[:, 0])
 
 
 def split_into_spans(large, small, overlap_policy="split_small", pos_col=None):

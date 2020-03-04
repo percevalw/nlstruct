@@ -60,9 +60,9 @@ def flatten(frame,
 
     if isinstance(frame, pd.Series):
         res = flatten(pd.DataFrame({"X": frame}), index_name, as_column, keep_na, columns, tile_index)
-        new_frame = res[0]["X"]
+        new_frame = res["X"]
         new_frame.name = frame.name
-        return (new_frame, *res[1:])
+        return new_frame
 
     if keep_na is True:
         keep_na = 'null_index'
@@ -669,18 +669,24 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
 
 
 class FasterGroupBy:
-    def __init__(self, groupby_object, dtypes):
+    def __init__(self, groupby_object, dtypes, name=None):
         self.groupby_object = groupby_object
         self.dtypes = dtypes
+        self.name = name
 
     def _retype(self, res):
-        return res.astype(self.dtypes)
+        if self.name is None:
+            return res.astype(self.dtypes)
+        return (res.astype(self.dtypes) if self.dtypes is not None else res).reset_index().rename({0: self.name}, axis=1)
 
     def agg(self, *args, **kwargs):
         return self._retype(self.groupby_object.agg(*args, **kwargs))
 
     def apply(self, *args, **kwargs):
         return self._retype(self.groupby_object.apply(*args, **kwargs))
+
+    def __getitem__(self, item):
+        return FasterGroupBy(self.groupby_object[item], self.dtypes.get(item, None), item if not isinstance(item, (list, tuple)) else None)
 
 
 class NLStructAccessor(object):
@@ -714,6 +720,19 @@ class NLStructAccessor(object):
         else:
             return self._obj.groupby(by=by, *args, as_index=as_index, **kwargs)
 
+    def groupby_assign(self, by, agg, as_index=False, observed=True, **kwargs):
+        res = self._obj.assign(_index=np.arange(len(self._obj)))
+        res = res.drop(columns=list(agg.keys())).merge(
+              # .astype({key: "category" for key in mentions_cluster_ids})
+            res.groupby(by, observed=observed, **kwargs)
+            .agg({**agg, "_index": tuple}).reset_index(drop=True)
+            .nlstruct.flatten("_index"),
+            how='left',
+            on='_index',
+        ).drop(columns=["_index"])
+        if as_index:
+            res = res.set_index(by)
+        return res
 
 pd.api.extensions.register_dataframe_accessor("nlstruct")(NLStructAccessor)
 pd.api.extensions.register_series_accessor("nlstruct")(NLStructAccessor)
