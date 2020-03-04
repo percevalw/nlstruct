@@ -1,4 +1,5 @@
 import itertools
+import threading
 import time
 
 import regex
@@ -87,6 +88,21 @@ def make_optimizer_and_schedules(net, optim_factory, optim_params, names, num_it
     return optim, schedules
 
 
+class StoppableThread(threading.Thread):
+    """Thread class with a stop() method. The thread itself has to check
+    regularly for the stopped() condition."""
+
+    def __init__(self,  *args, **kwargs):
+        super(StoppableThread, self).__init__(*args, **kwargs)
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def stopped(self):
+        return self._stop_event.is_set()
+
+
 def run_optimization(
       main_score,
       metrics_info,
@@ -104,7 +120,31 @@ def run_optimization(
       cache_policy="all",
       with_writer=False,
       seed=42,
+      as_thread=False,
+      _thread_should_stop=None,
 ):
+    if as_thread:
+        x = StoppableThread(
+            target=run_optimization, args=(
+                main_score,
+                metrics_info,
+                patience_warmup,
+                patience_rate,
+                patience,
+                max_epoch,
+                epoch_fn,
+                state,
+                n_save_checkpoints,
+                required_start_score,
+                cache,
+                cache_policy,
+                with_writer,
+                seed,
+                False,  # as_thread
+                lambda: x.stopped()  # _thread_should_stop
+            ))
+        x.start()
+        return x
     if state is None:
         state = {}
 
@@ -165,6 +205,8 @@ def run_optimization(
             # Iterate over state["epoch"] (11, 12)
             # region train until required epoch
             while state["epoch"] < monitor.epoch + 1:
+                if _thread_should_stop():
+                    raise KeyboardInterrupt()
                 if writer is None and with_writer and cache is not None:
                     from tensorboardX import SummaryWriter
                     writer = SummaryWriter(logdir=cache.entry('logs'))
@@ -179,7 +221,7 @@ def run_optimization(
 
                 time_end = time.time()
                 scores = {
-                    **epoch_scores,
+                    **{key: value.item() if hasattr(value, 'item') else value for key, value in epoch_scores.items()},
                     "duration": time_end - time_start}
                 if writer is not None:
                     for score_name, score in scores.items():
