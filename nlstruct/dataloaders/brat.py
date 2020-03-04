@@ -89,7 +89,13 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     mentions = pd.DataFrame(mentions)
     fragments = pd.DataFrame(fragments)
     mentions = mentions[["doc_id", "mention_id", "label", "text"]]
-    attributes = pd.DataFrame(attributes)[["doc_id", "mention_id", "attribute_id", "label", "value"]]
-    relations = pd.DataFrame(relations)[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
+    if len(attributes):
+        attributes = pd.DataFrame(attributes)[["doc_id", "mention_id", "attribute_id", "label", "value"]]
+    else:
+        attributes = pd.DataFrame(columns=["doc_id", "mention_id", "attribute_id", "label", "value"])
+    if len(relations):
+        relations = pd.DataFrame(relations)[["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"]]
+    else:
+        relations = pd.DataFrame(columns=["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"])
 
     return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations)
