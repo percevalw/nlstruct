@@ -14,7 +14,9 @@ from pickle import PicklingError
 
 import joblib
 import numpy as np
-import pandas as pd
+from pandas.core.internals.managers import BlockManager
+from pandas.core.base import PandasObject
+from pandas import DataFrame
 import torch
 import xxhash
 import yaml
@@ -168,16 +170,44 @@ class TruncatedNumpyHasher(Hasher):
         # Save the reduce() output and finally memoize the object
         self.save_reduce(obj=obj, *rv)
 
-    # noinspection PyProtectedMember
     def save_dataframe(self, obj):
-        if len(obj) > self.max_length:
-            self.save(dict(
-                _data_axes=obj._data.axes,
-                _data_blocks=[(b.ndim, b.mgr_locs, b.values.T) for b in obj._data.blocks],
-                _typ=obj._typ, _metadata=obj._metadata,
-                **{k: getattr(obj, k, None) for k in obj._metadata}))
-        else:
+        self.save(hash_object(obj.__getstate__()))
+
+    # noinspection PyProtectedMember
+    def save_blockmanager(self, obj):
+        obj = next(iter(obj.__getstate__()[3].values()))
+        for block in obj['blocks']:
+            block['values'] = block['values'].T
+        self.save(obj)
+
+    # noinspection PyProtectedMember
+    def save_pandas_object(self, obj):
+        if hasattr(obj, '__getstate__'):
             self.save(obj, bypass_dispatch=True)
+            return
+        reduce = getattr(obj, "__reduce_ex__", None)
+        if reduce is not None:
+            rv = reduce(self.proto)
+        else:
+            reduce = getattr(obj, "__reduce__", None)
+            if reduce is not None:
+                rv = reduce()
+            else:
+                raise PicklingError("Can't pickle %r object: %r" % (type(obj).__name__, obj))
+        # Assert that reduce() returned a tuple
+        if isinstance(rv, str):
+            self.save_global(obj, rv)
+            return
+        if not isinstance(rv, tuple):
+            raise PicklingError("%s must return string or tuple" % reduce)
+        if rv[2] is not None and isinstance(rv, dict):
+            if '_cache' in rv[2]:
+                del rv[2]['_cache']
+            if '_cacher' in rv[2]:
+                del rv[2]['_cacher']
+            if '_ordered' in rv[2]:
+                del rv[2]['_ordered']
+        self.save_reduce(obj=obj, *rv)
 
     def save_ndarray(self, obj):
         if not obj.dtype.hasobject:
@@ -342,7 +372,9 @@ class TruncatedNumpyHasher(Hasher):
     dispatch[memoryview] = save_memoryview
     dispatch[types.MethodType] = save_method
     dispatch[type({}.pop)] = save_method
-    dispatch[pd.DataFrame] = save_dataframe
+    dispatch[DataFrame] = save_dataframe
+    dispatch[BlockManager] = save_blockmanager
+    dispatch[PandasObject] = save_pandas_object
     dispatch[np.ndarray] = save_ndarray
     dispatch[np.dtype] = save_ndtype
     dispatch[torch.nn.Parameter] = save_parameter
@@ -384,7 +416,7 @@ class CacheHandle(RelativePath):
                 res = self.loader(path, **kwargs)
             else:
                 res = loader(path, **kwargs)
-            print("Done")
+            print("Done", flush=True)
             return res
         return None
 
@@ -626,8 +658,8 @@ class cached(object):
                                        loader=self.loader,
                                        dumper=self.dumper)
                 else:
-                    handle = get_cache(keys, caller_self,
-                                       (bound_arguments.args, bound_arguments.kwargs),
+                    handle = get_cache(keys,
+                                       (caller_self, bound_arguments.args, bound_arguments.kwargs),
                                        on_ram=self.ram,
                                        loader=self.loader,
                                        dumper=self.dumper, )
@@ -639,7 +671,7 @@ class cached(object):
                     else:
                         result = self.func(caller_self, *args, **kwargs)
                     if "w" in cache_mode:
-                        handle.dump((caller_self, result))
+                        filename = handle.dump((caller_self, result))
                 else:
                     cached_self, result = cached_result
                     caller_self.__dict__ = cached_self.__dict__
@@ -666,7 +698,7 @@ class cached(object):
                     else:
                         result = self.func(*args, **kwargs)
                     if "w" in cache_mode:
-                        handle.dump(result)
+                        filename = handle.dump(result)
                 return result
         else:
             func = args[0]
