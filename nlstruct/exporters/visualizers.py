@@ -7,7 +7,8 @@ def render_with_displacy(dataset,
                          doc_id_colname="doc_id",
                          mention_id_colname="mention_id",
                          text_name="text",
-                         label_colname="label"):
+                         label_colname="label",
+                         raw=False):
     """
     Visualize a labelled mention dataset with spacy's displacy
 
@@ -41,7 +42,9 @@ def render_with_displacy(dataset,
             "text": doc[text_name],
             "ents": [
                 {"start": mention["begin"], "end": mention["end"], "label": mention[label_colname]}
-                for _, mention in doc_mentions.iterrows()
+                for _, mention in doc_mentions.sort_values(["begin", "end"]).iterrows()
             ]
         })
+    if raw:
+        return to_render
     return displacy.render(to_render, manual=True, style="ent")
