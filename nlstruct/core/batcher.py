@@ -364,6 +364,12 @@ class Batcher:
             self.primary_ids = primary_ids
         else:
             self.primary_ids = {table_name: f"{table_name}_id" for table_name in self.tables if f"{table_name}_id" in self.tables[table_name]}
+            if check:
+                for table_name, primary_id in self.primary_ids.items():
+                    uniques, counts = np.unique(tables[table_name][primary_id], return_counts=True)
+                    duplicated = uniques[counts > 1]
+                    assert len(duplicated) == 0, f"Primary id {repr(primary_id)} of {repr(table_name)} has {len(duplicated)} duplicate{'s' if len(duplicated) > 0 else ''}, " \
+                                                 f"when it should be unique: {repr(list(duplicated[:5]))} (first 5 shown)"
         if isinstance(foreign_ids, dict):
             self.foreign_ids = foreign_ids
         else:
