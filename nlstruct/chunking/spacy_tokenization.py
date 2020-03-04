@@ -50,25 +50,34 @@ def spacy_tokenize(docs, spacy_model=None, spacy_attributes=SPACY_ATTRIBUTES, **
     # tokens = []
     begins = []
     ends = []
+    sent_starts = []
     attributes = {("token_" + name).strip("_id_").strip("_"): [] for name in sorted(spacy_attributes)}
     for doc_id, doc in zip(docs["doc_id"], spacy_model.pipe(map(str, docs["text"]))):
         token_id = 0
+        next_sent_start = False
         for token in doc:
-            striped = str(token).strip(" ")
+            striped = str(token).strip()
             if striped:
                 doc_ids.append(doc_id)
                 token_idx.append(token_id)
                 begins.append(token.idx)
                 ends.append(token.idx + len(token))
+                sent_starts.append(token.is_sent_start or next_sent_start)
                 # tokens.append(striped)
                 for attr in spacy_attributes:
                     attributes[("token_" + attr).strip("_id_").strip("_")].append(getattr(token, attr))
                 token_id += 1
+                next_sent_start = False
+            else:
+                if token.is_sent_start:
+                    next_sent_start = True
+                
     tokens = pd.DataFrame({"doc_id": doc_ids,
                            "token_id": range(len(token_idx)),
                            "begin": begins,
                            "end": ends,
                            "token_idx": token_idx,
+                           'is_sent_start': sent_starts,
                            **attributes})
     tokens = tokens.astype({"doc_id": docs["doc_id"].dtype})
     return tokens
