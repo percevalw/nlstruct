@@ -205,7 +205,7 @@ def run_optimization(
             # Iterate over state["epoch"] (11, 12)
             # region train until required epoch
             while state["epoch"] < monitor.epoch + 1:
-                if _thread_should_stop():
+                if _thread_should_stop is not None and _thread_should_stop():
                     raise KeyboardInterrupt()
                 if writer is None and with_writer and cache is not None:
                     from tensorboardX import SummaryWriter
