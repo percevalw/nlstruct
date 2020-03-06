@@ -1,7 +1,7 @@
 import re
 from functools import reduce
 from itertools import repeat
-
+from logging import warn
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -10,6 +10,8 @@ from nlstruct.core.pandas import make_merged_names_map, merge_with_spans, make_i
 
 
 def make_tag_scheme(length, entity, scheme='bio'):
+    if entity is None:
+        return [None] * length
     if scheme == "bio":
         return [f"B-{entity}", *(f"I-{entity}" for _ in range(length - 1))]
     elif scheme == "bioul":
@@ -262,7 +264,7 @@ def preprocess_ids(large, small, large_id_cols=None, small_id_cols=None):
         [c for c in large.columns if c not in large_id_cols and c not in ("begin", "end") and c not in doc_id_cols])
 
 
-def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx=False, verbose=0):
+def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx=False, verbose=0, groupby=None):
     """
 
     Parameters
@@ -290,51 +292,59 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
     if isinstance(label_cols, str):
         label_cols = [label_cols]
 
+    label_categories = {}
     # Map mentions to small as a tag
     large = large.sort_values([*doc_id_cols, "begin", "end"])
-    if use_token_idx:
-        merged = merge_with_spans(large, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query(
-            "begin <= token_idx and token_idx < end")
-    else:
-        merged = merge_with_spans(large, small, span_policy='partial_strict', on=[*doc_id_cols, ("begin", "end")], suffixes=('_large', ''))
+    for label, mentions_of_group in (large.groupby(groupby, as_index=False, observed=True) if groupby is not None else [(None, large)]):
+        assert label not in large_val_cols, f"Cannot groupby {label} value because there is already a column with this name"
+        group_tag_names = [f"{label}/{label_col}" for label_col in label_cols]
+        if use_token_idx:
+            merged = merge_with_spans(mentions_of_group, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query(
+                "begin <= token_idx and token_idx < end")
+        else:
+            merged = merge_with_spans(mentions_of_group, small, span_policy='partial_strict', on=[*doc_id_cols, ("begin", "end")], suffixes=('_large', ''))
 
-    # If a token overlap multiple mentions, assign it to the last mention
-    merged = merged.drop_duplicates([*doc_id_cols, *small_id_cols], keep='last')
-    merged_id_cols = doc_id_cols + large_id_cols + small_id_cols
+        # If a token overlap multiple mentions, assign it to the last mention
+        len_before = len(merged)
+        merged = merged.drop_duplicates([*doc_id_cols, *small_id_cols], keep='last')
+        if len_before-len(merged) > 0:
+            warn(f"Dropped {len_before-len(merged)} duplicated tags caused by overlapping mentions")
+        merged_id_cols = doc_id_cols + large_id_cols + small_id_cols
 
-    # Encode mention labels as a tag
-    tags = (merged[merged_id_cols + label_cols]
-            .sort_values(merged_id_cols))
-    if tag_scheme != "raw":
-        keep_cols = list(set(doc_id_cols + large_id_cols) - set(label_cols))
-        tags = (
-            # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
-            # to accelerate concatenation inside the groupby
-            tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
-                .nlstruct.groupby_assign(
-                doc_id_cols + large_id_cols,
-                {label_col: lambda labels: make_tag_scheme(len(labels), labels.iloc[0], tag_scheme)
-                 for label_col in label_cols})
-                # convert back each group column dtype to its origial categorical dtype
-                .astype(tags.dtypes[keep_cols])
-        )
+        # Encode mention labels as a tag
+        tags = (merged[merged_id_cols + label_cols]
+                .sort_values(merged_id_cols))
+        if tag_scheme != "raw":
+            keep_cols = list(set(doc_id_cols + large_id_cols) - set(label_cols))
+            tags = (
+                # convert all categorical dtypes of group cols as simple types (np.str, np.int, np.object...)
+                # to accelerate concatenation inside the groupby
+                tags.astype({k: dtype if not hasattr(dtype, 'categories') else dtype.categories.dtype for k, dtype in tags.dtypes[keep_cols].items()})
+                    .rename(dict(zip(label_cols, group_tag_names)), axis=1)
+                    .nlstruct.groupby_assign(
+                    doc_id_cols + large_id_cols,
+                    {tag_name: lambda labels: make_tag_scheme(len(labels), labels.iloc[0], tag_scheme)
+                     for tag_name, label_col in zip(group_tag_names, label_cols)})
+                    # convert back each group column dtype to its origial categorical dtype
+                    .astype(tags.dtypes[keep_cols])[doc_id_cols + small_id_cols + group_tag_names]
+            )
 
-    merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
-    merged = small.merge(merged[doc_id_cols + small_id_cols + label_cols], on=doc_id_cols + small_id_cols, how="left")
-    label_categories = {}
-    if tag_scheme != "raw":
-        try:
-            for label_col in label_cols:
-                unique_labels = sorted(set(large[label_col])) if not hasattr(large[label_col], 'cat') else large[label_col].cat.categories
-                label_categories[label_col] = unique_labels
-                merged[label_col] = merged[label_col].fillna("O").astype(pd.CategoricalDtype(
-                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
-                    ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "L-" + str(label), "U-" + str(label)))]
-                ))
-        except Exception:
-            raise Exception(f"Error occured during the encoding of label columns '{label_col}'")
+        # merged = merged[[*merged_id_cols, *small_val_cols, "begin", "end"]].merge(tags)
+        small = small.merge(tags, on=doc_id_cols + small_id_cols, how="left")
+        if tag_scheme != "raw":
+            try:
+                for tag_name, label_col in zip(group_tag_names, label_cols):
+                    unique_labels = sorted(set(label for label in mentions_of_group[label_col] if label is not None))\
+                        if not hasattr(mentions_of_group[label_col], 'cat') else mentions_of_group[label_col].cat.categories
+                    label_categories[tag_name] = unique_labels
+                    small[tag_name] = small[tag_name].fillna("O").astype(pd.CategoricalDtype(
+                        ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label)))] if tag_scheme == "bio" else
+                        ["O", *(tag for label in unique_labels for tag in ("B-" + str(label), "I-" + str(label), "L-" + str(label), "U-" + str(label)))]
+                    ))
+            except Exception:
+                raise Exception(f"Error occured during the encoding of label column '{label_col}' into tag '{tag_name}'")
     # return small[doc_id_cols + small_id_cols].merge(merged, how='left')
-    return merged, label_categories
+    return small, label_categories
 
 
 def partition_spans(smalls, large,
