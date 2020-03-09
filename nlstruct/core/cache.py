@@ -557,7 +557,7 @@ def yaml_dump(obj, dest=None):
         with open(dest, "w") as f:
             return yaml.dump(obj, f)
     else:
-        return yaml.dump(obj, dest)
+        return yaml.dump(obj, dest, sort_keys=False)
 
 
 def yaml_load(dest):
