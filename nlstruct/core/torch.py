@@ -190,6 +190,7 @@ def slice_parameters(obj, names, indexer, optimizer):
 def torch_clone(obj, device=None):
     bio = io.BytesIO()
     torch.save(obj, bio)
+    bio.seek(0)
     return torch.load(bio, map_location=torch_global.device if device is None else device)
 
 
