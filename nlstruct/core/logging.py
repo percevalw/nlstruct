@@ -63,9 +63,10 @@ class TrainingLogger(object):
 
             formatted = str(field_formatter(info[field])) if info[field] is not None else 'None'
             if field == "patience_warmup":
-                formatted = f"{str(min(info[field], self.patience_warmup))}/{self.patience_warmup}"
+                assert 'epoch' in info, "Cannot display 'patience_warmup' column without an 'epoch' column"
+                formatted = f"{str(min(info['epoch'], self.patience_warmup))}/{self.patience_warmup}"
                 obj_width = len(formatted)
-                if info[field] < self.patience_warmup:
+                if info['epoch'] < self.patience_warmup:
                     formatted = colored(formatted, "green")
             elif field == "patience":
                 formatted = f"{str(info[field])}/{self.patience}"
@@ -74,7 +75,7 @@ class TrainingLogger(object):
                     formatted = colored(formatted, "red")
             else:
                 obj_width = len(formatted)
-                if goal is not None and info[field] is not None:
+                if goal is not None and info[field] is not None and ('epoch' not in info or info["epoch"] >= self.patience_warmup):
                     if field not in self.best or abs(self.best[field] - goal) > abs(info[field] - goal):
                         formatted = colored(formatted, 'green')
                         self.best[field] = info[field]
