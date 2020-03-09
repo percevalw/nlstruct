@@ -264,15 +264,17 @@ def preprocess_ids(large, small, large_id_cols=None, small_id_cols=None):
         [c for c in large.columns if c not in large_id_cols and c not in ("begin", "end") and c not in doc_id_cols])
 
 
-def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx=False, verbose=0, groupby=None):
+def encode_as_tag(small, large, label_cols=None, tag_names=None, tag_scheme="bio", use_token_idx=False, verbose=0, groupby=None):
     """
 
     Parameters
     ----------
+    tag_names: str or list of str
+        tag name that will be created for each label
+    tag_scheme: str
+        BIO/BIOUL tagging scheme
     small: tokens
     large: mentions
-    small_id_cols: token id cols (doc_id, token_pos)
-    large_id_cols: mention id cols (doc_id, mention_id, mention_part_id)
     label_cols: "label"
     use_token_idx: Use token pos instead of char spans, defaults to False
     verbose: int
@@ -291,13 +293,20 @@ def encode_as_tag(small, large, label_cols=None, tag_scheme="bio", use_token_idx
         label_cols = large_val_cols
     if isinstance(label_cols, str):
         label_cols = [label_cols]
+    if tag_names is None:
+        if len(label_cols) == 1:
+            tag_names = [None]
+        else:
+            tag_names = label_cols
+    if isinstance(tag_names, str):
+        tag_names = [tag_names]
 
     label_categories = {}
     # Map mentions to small as a tag
     large = large.sort_values([*doc_id_cols, "begin", "end"])
     for label, mentions_of_group in (large.groupby(groupby, as_index=False, observed=True) if groupby is not None else [(None, large)]):
         assert label not in large_val_cols, f"Cannot groupby {label} value because there is already a column with this name"
-        group_tag_names = [f"{label}/{label_col}" for label_col in label_cols]
+        group_tag_names = ["/".join(s for s in (label, tag_name) if s is not None) for tag_name in tag_names]
         if use_token_idx:
             merged = merge_with_spans(mentions_of_group, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query(
                 "begin <= token_idx and token_idx < end")
