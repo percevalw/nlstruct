@@ -215,8 +215,8 @@ class BIODecoder(CRF):
         if mask is not None:
             tag = tag.masked_fill(~mask, 0)
         unstrided_tags = ((tag - 1) % 2).masked_fill(tag == 0, -1)
-        is_B = unstrided_tags == 0
-        is_I = unstrided_tags == 1
+        is_B = (unstrided_tags == 0).int()
+        is_I = (unstrided_tags == 1).int()
 
         label = (tag - 1) // 2
         next_label = label.roll(-1, dims=1)
@@ -293,8 +293,8 @@ class BIOULDecoder(CRF):
             tag = tag.masked_fill(~mask, 0)
         unstrided_tags = ((tag - 1) % 4).masked_fill(tag == 0, -1)
         label = (tag - 1) // 4
-        is_B_or_U = (unstrided_tags == B) | (unstrided_tags == U)
-        is_L_or_U = (unstrided_tags == L) | (unstrided_tags == U)
+        is_B_or_U = ((unstrided_tags == B) | (unstrided_tags == U)).int()
+        is_L_or_U = ((unstrided_tags == L) | (unstrided_tags == U)).int()
         begin_tag = is_B_or_U.nonzero()
         end_tag = is_L_or_U.nonzero()
 
