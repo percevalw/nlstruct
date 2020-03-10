@@ -1,4 +1,5 @@
 import io
+import warnings
 from contextlib import contextmanager
 
 import torch
@@ -189,7 +190,9 @@ def slice_parameters(obj, names, indexer, optimizer):
 
 def torch_clone(obj, device=None):
     bio = io.BytesIO()
-    torch.save(obj, bio)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "Couldn't retrieve source code for")
+        torch.save(obj, bio)
     bio.seek(0)
     return torch.load(bio, map_location=torch_global.device if device is None else device)
 
