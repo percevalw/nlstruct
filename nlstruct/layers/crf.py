@@ -219,7 +219,7 @@ class BIODecoder(CRF):
         is_I = unstrided_tags == 1
 
         label = (tag - 1) // 2
-        next_label = label.int().roll(-1, dims=1).bool()
+        next_label = label.roll(-1, dims=1)
         next_label[:, -1] = 0
         next_I = is_I.int().roll(-1, dims=1).bool()
         next_I[:, -1] = 0
