@@ -10,9 +10,11 @@ class CRF(torch.nn.Module):
         super().__init__()
         self.num_tags = num_tags
 
-        self.start_transitions_mask = start_transitions_mask
-        self.transitions_mask = transitions_mask
-        self.end_transitions_mask = end_transitions_mask
+        # Make masks to buffer, since they are not parameters, but we want pytorch to know they are part of
+        # the model and should be moved to the new device when module.to(...) is called on the CRF
+        self.register_buffer('start_transitions_mask', start_transitions_mask)
+        self.register_buffer('transitions_mask', transitions_mask)
+        self.register_buffer('end_transitions_mask', end_transitions_mask)
 
         self.transitions = torch.nn.Parameter(torch.empty(num_tags, num_tags))
 
