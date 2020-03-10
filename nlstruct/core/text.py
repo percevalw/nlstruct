@@ -244,7 +244,7 @@ def reverse_deltas(positions, deltas, on, position_columns=None):
         tmp = tmp.groupby('_id_col').agg({
             "shift": "sum",
             **{n: order for n in mention_deltas.columns if n not in ("shift", "_id_col")}})
-        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0)
+        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0).astype(int)
     positions = positions.reset_index(drop=True)
     return positions
 
@@ -399,7 +399,6 @@ def partition_spans(smalls, large,
                               "small_to_rightmost_large",
                               "small_to_biggest_overlap_large", False), f"Unknown small overlap policy '{overlap_policy}'"
 
-    assert len(smalls) >= 1
     if not isinstance(smalls, (list, tuple)):
         smalls = [smalls]
 
@@ -532,6 +531,7 @@ def split_into_spans(large, small, overlap_policy="split_small", pos_col=None):
             begin={pos_col}
             end={pos_col} + 1""")
             .groupby(doc_id_cols, as_index=False, observed=True)
-            .agg({"begin": "min", "end": "max"})
+            .agg({"begin": "min", "end": "max"}),
+        on=doc_id_cols
     )
     return res
