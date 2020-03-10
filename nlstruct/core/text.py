@@ -294,10 +294,7 @@ def encode_as_tag(small, large, label_cols=None, tag_names=None, tag_scheme="bio
     if isinstance(label_cols, str):
         label_cols = [label_cols]
     if tag_names is None:
-        if len(label_cols) == 1:
-            tag_names = [None]
-        else:
-            tag_names = label_cols
+        tag_names = label_cols
     if isinstance(tag_names, str):
         tag_names = [tag_names]
 
