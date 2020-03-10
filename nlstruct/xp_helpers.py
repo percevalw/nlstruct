@@ -20,7 +20,7 @@ class TrainingState(object):
                  patience,
                  patience_rate,
                  max_epoch=None,
-                 required_start_score=None):
+                 exit_on_score=None):
         self.epoch = 0
         self.patience_counter = 0
         self.goal = goal
@@ -33,13 +33,11 @@ class TrainingState(object):
         self.patience_warmup = patience_warmup
         self.patience = patience
         self.patience_rate = patience_rate
-        self.required_start_score = required_start_score
+        self.exit_on_score = exit_on_score
         self.quick_exit = False
 
     def record(self, loss):
         self.epoch += 1
-        if self.epoch == 1 and (self.required_start_score is None or abs(self.goal - self.required_start_score) < abs(self.goal - loss)):
-            self.quick_exit = True
         if self.best_loss is None or abs(self.goal - loss) < abs(self.goal - self.best_loss):
             self.best_loss = loss
             self.best_epoch = self.epoch
@@ -50,6 +48,8 @@ class TrainingState(object):
             self.last_patience_reset_best_loss = self.best_loss
         elif self.epoch >= self.patience_warmup:
             self.patience_counter += 1
+            if self.exit_on_score is not None and abs(self.goal - self.exit_on_score) < abs(self.goal - loss):
+                self.quick_exit = True
 
     @property
     def keep_going(self):
@@ -115,7 +115,7 @@ def run_optimization(
 
       state=None,
       n_save_checkpoints=1,
-      required_start_score=None,
+      exit_on_score=None,
       cache=None,
       cache_policy="all",
       with_writer=False,
@@ -135,7 +135,7 @@ def run_optimization(
                 epoch_fn,
                 state,
                 n_save_checkpoints,
-                required_start_score,
+                exit_on_score,
                 cache,
                 cache_policy,
                 with_writer,
@@ -171,7 +171,7 @@ def run_optimization(
     monitor = TrainingState(goal=metrics_info[main_score]['goal'],
                             patience_warmup=patience_warmup, patience=patience,
                             patience_rate=patience_rate, max_epoch=max_epoch,
-                            required_start_score=required_start_score)
+                            exit_on_score=exit_on_score)
 
     assert state.setdefault("epoch", 0) == 0, "Init epoch must be 0"
     dumps = {}
