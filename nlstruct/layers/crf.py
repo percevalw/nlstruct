@@ -22,8 +22,8 @@ class CRF(torch.nn.Module):
             self.start_transitions = torch.nn.Parameter(torch.empty(num_tags))
             self.end_transitions = torch.nn.Parameter(torch.empty(num_tags))
         else:
-            self.start_transitions = torch.zeros(num_tags)
-            self.end_transitions = torch.zeros(num_tags)
+            self.register_buffer('start_transitions', torch.zeros(num_tags))
+            self.register_buffer('end_transitions', torch.zeros(num_tags))
         self.reset_parameters()
 
     def reset_parameters(self):
