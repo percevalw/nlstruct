@@ -232,7 +232,7 @@ class BIODecoder(CRF):
         spans_count_per_doc = is_B.sum(-1)
         max_spans_count_per_doc = 0 if 0 in begin_tag.shape else spans_count_per_doc.max()
 
-        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long)
+        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long, device=tag.device)
         doc_entity_mask = torch.arange(max_spans_count_per_doc, device=tag.device).view(1, -1) < spans_count_per_doc.unsqueeze(-1)
         doc_entity_id[doc_entity_mask] = torch.arange(begin_tag.shape[0], device=tag.device)
 
@@ -302,7 +302,7 @@ class BIOULDecoder(CRF):
         spans_count_per_doc = is_B_or_U.sum(-1)
         max_spans_count_per_doc = 0 if 0 in begin_tag.shape else spans_count_per_doc.max()
 
-        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long)
+        doc_entity_id = torch.zeros(*spans_count_per_doc.shape, max_spans_count_per_doc, dtype=torch.long, device=tag.device)
         doc_entity_mask = torch.arange(max_spans_count_per_doc, device=tag.device).view(1, -1) < spans_count_per_doc.unsqueeze(-1)
         doc_entity_id[doc_entity_mask] = torch.arange(begin_tag.shape[0], device=tag.device)
 
