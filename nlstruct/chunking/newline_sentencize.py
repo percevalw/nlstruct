@@ -6,12 +6,13 @@ from pathos.multiprocessing import ProcessPool
 from tqdm import tqdm
 
 from nlstruct.core.cache import cached
+from nlstruct.core.text import join_cols
 
 
-def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None, n_threads=1,
-                        reg_split=r"((?:\s*\n)+\s*)",
-                        reg_token=r"[\w*]+|[^\w\s\n*]",
-                        with_tqdm=False, verbose=0):
+def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n_threads=1,
+                     reg_split=r"((?:\s*\n)+\s*)",
+                     reg_token=r"[\w*]+|[^\w\s\n*]",
+                     with_tqdm=False, verbose=0):
     """
     Simple split MIMIC docs into sentences:
     - sentences bounds are found when multiple newline occurs
@@ -33,7 +34,7 @@ def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None
         text_chunks = np.array_split(np.arange(len(docs)), n_threads)
         pool = ProcessPool(nodes=n_threads)
         pool.restart(force=True)
-        results = [pool.apipe(newline_sentencize_, docs.iloc[chunk], max_sentence_length, 1, with_tqdm=False) for chunk in text_chunks]
+        results = [pool.apipe(regex_sentencize, docs.iloc[chunk], max_sentence_length, 1, with_tqdm=False) for chunk in text_chunks]
         results = [r.get() for r in results]
         pool.close()
         return pd.concat(results, ignore_index=True)
@@ -41,7 +42,7 @@ def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None
     reg_split = re.compile(reg_split)
     reg_token = re.compile(reg_token)
     doc_ids = []
-    sentence_ids = []
+    sentence_idx_list = []
     begins = []
     ends = []
     sentences = []
@@ -50,7 +51,7 @@ def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None
     for doc_id, txt in zip(docs["doc_id"], (tqdm(docs["text"], desc="Splitting docs into sentences") if with_tqdm else docs["text"])):
         idx = 0
         queued_spans = []
-        sentence_id = 0
+        sentence_idx = 0
         for i, part in enumerate(reg_split.split(txt)):
             if i % 2 == 0:  # we're in a sentence
                 queued_spans.extend([(m.start() + idx, m.end() + idx) for m in reg_token.finditer(part)])
@@ -62,13 +63,14 @@ def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None
                     b = queued_spans[0][0]
                     e = queued_spans[max_sentence_length_ - 1][1]
                     doc_ids.append(doc_id)
-                    sentence_ids.append(sentence_id)
+                    sentence_idx_list.append(sentence_idx)
                     begins.append(b)
                     ends.append(e)
+
                     max_size, min_size = max(max_size, max_sentence_length_), min(min_size, max_sentence_length_)
-                    queued_spans = queued_spans[max_sentence_length_-1:]
+                    queued_spans = queued_spans[max_sentence_length_:]
                     sentences.append(txt[b:e])
-                    sentence_id += 1
+                    sentence_idx += 1
                 if min_sentence_length is not None and len(queued_spans) < min_sentence_length:
                     idx += len(part)
                     continue
@@ -76,30 +78,33 @@ def newline_sentencize_(docs, max_sentence_length=None, min_sentence_length=None
                     b = queued_spans[0][0]
                     e = queued_spans[-1][1]
                     doc_ids.append(doc_id)
-                    sentence_ids.append(sentence_id)
+                    sentence_idx_list.append(sentence_idx)
                     begins.append(b)
                     ends.append(e)
                     max_size, min_size = max(max_size, len(queued_spans)), min(min_size, len(queued_spans))
                     queued_spans = []
                     sentences.append(txt[b:e])
-                    sentence_id += 1
-            idx += len(part)
+                    sentence_idx += 1
+            if part is not None:
+                idx += len(part)
     if verbose:
         print("Sentence size: max = {}, min = {}".format(max_size, min_size))
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "doc_id": doc_ids,
-        "sentence_id": sentence_ids,
+        "sentence_idx": sentence_idx_list,
         "begin": begins,
         "end": ends,
-        "sentence": sentences,
+        "text": sentences,
     }).astype({"doc_id": docs["doc_id"].dtype})
+    df["sentence_id"] = join_cols(df[["doc_id", "sentence_idx"]], "/")
+    return df
 
 
 @cached.will_ignore(("n_threads", "with_tqdm"))
 def mimic_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, verbose=0):
-    return newline_sentencize_(texts, max_sentence_length, min_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
+    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
 
 
 @cached.will_ignore(("n_threads", "with_tqdm"))
 def newline_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, verbose=0):
-    return newline_sentencize_(texts, max_sentence_length, min_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
+    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
