@@ -23,7 +23,7 @@ if __name__ == "__main__":
             "Operating System :: OS Independent",
         ],
         python_requires='>=3.6',
-        install_reqs=[
+        install_requires=[
             'numpy>=1.17.4',
             'pandas>=0.24.1',
             'pathos>=0.2.5',
