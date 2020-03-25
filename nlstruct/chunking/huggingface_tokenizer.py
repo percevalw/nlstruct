@@ -25,7 +25,7 @@ def huggingface_tokenize(docs, tokenizer):
                 striped_piece = striped_piece.replace(special, "")
             piece_size = len(striped_piece)
             delta = lookuptext[i:].find(striped_piece.lower())
-            assert 0 <= delta < 50, (lookuptext[i:i + 50], striped_piece.lower())
+            assert 0 <= (delta - lookuptext[i:i+delta].count(' ') - lookuptext[i:i+delta].count('\n')) < 5, (lookuptext[i:i + 50], striped_piece.lower())
             i += delta
             begins.append(i)
             i += piece_size
