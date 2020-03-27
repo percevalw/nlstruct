@@ -3,16 +3,36 @@ import os
 import pandas as pd
 from sklearn.utils import check_random_state
 
-from nlstruct.core.environment import RelativePath
 from nlstruct.core.dataset import Dataset
+from nlstruct.core.environment import RelativePath
 
 
-def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True):
+def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True, doc_attributes=None):
+    """
+    Load a brat dataset into a Dataset object
+
+    Parameters
+    ----------
+    path: str or pathlib.Path
+    validation_split: float
+    random_state: int
+        Seed
+    merge_newlines: bool
+        Merge fragments of a mention that was splited by brat because it overlapped an end of line
+    doc_attributes: dict
+        Attributes that will be added in the docs dataframe for all entries
+
+    Returns
+    -------
+    Dataset
+    """
+
     path = RelativePath(path)
     mentions = []
     fragments = []
     attributes = []
     relations = []
+    comments = []
 
     # Extract texts from path and make a dataframe from it
     texts = []
@@ -25,6 +45,9 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     docs['split'] = rng.choice(['train', 'val'], size=len(docs),
                                p=[1 - validation_split, validation_split])
 
+    if doc_attributes is not None:
+        for key, val in doc_attributes.items():
+            docs[key] = val
     # Extract annotations from path and make multiple dataframe from it
     for filename in sorted(os.listdir(path)):
         if filename.endswith('.ann'):
@@ -82,9 +105,21 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
                             "from_mention_id": parts[0].split(":")[1],
                             "to_mention_id": parts[1].split(":")[1],
                         })
+                    elif ann_id.startswith('#'):
+                        remaining = remaining.strip(" \t").split("\t")
+                        [mention_id, comment] = remaining + ([""] if len(remaining) < 2 else [])
+                        ann_type, mention_id = mention_id.split(" ")
+                        if ann_type == "AnnotatorNotes":
+                            comments.append({
+                                "doc_id": doc_id,
+                                "comment_id": ann_id,
+                                "mention_id": mention_id,
+                                "comment": comment,
+                            })
     mentions = pd.DataFrame(mentions, columns=["doc_id", "mention_id", "label", "text"])
     fragments = pd.DataFrame(fragments, columns=["doc_id", "mention_id", "fragment_id", "begin", "end"])
     attributes = pd.DataFrame(attributes, columns=["doc_id", "mention_id", "attribute_id", "label", "value"])
     relations = pd.DataFrame(relations, columns=["doc_id", "relation_id", "relation_label", "from_mention_id", "to_mention_id"])
+    comments = pd.DataFrame(comments, columns=["doc_id", "comment_id", "mention_id", "comment"])
 
-    return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations)
+    return Dataset(docs=docs, mentions=mentions, fragments=fragments, attributes=attributes, relations=relations, comments=comments)
