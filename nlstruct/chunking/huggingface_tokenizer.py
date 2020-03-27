@@ -1,4 +1,5 @@
 import pandas as pd
+import unidecode
 from tqdm import tqdm
 
 
@@ -9,15 +10,12 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False):
     ends = []
     token_idx = []
     special_tokens = [t for token in tokenizer.special_tokens_map.values() for t in ((token,) if isinstance(token, str) else token)]
-    if hasattr(tokenizer, 'sp_model'):
-        special_tokens += ["▁", "##"]
-    else:
-        special_tokens += ["</w>"]
+    special_tokens += ["▁", "##", "</w>"]
     for doc_id, text in tqdm(zip(docs["doc_id"], docs["text"]), disable=not with_tqdm, total=len(docs)):
         i = 0
         token_id = 0
 
-        lookuptext = text.lower()
+        lookuptext = unidecode.unidecode(text.lower())
         for piece in tokenizer.convert_ids_to_tokens(tokenizer.encode(text)):
             doc_ids.append(doc_id)
             tokens.append(piece)
@@ -25,8 +23,8 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False):
             for special in special_tokens:
                 striped_piece = striped_piece.replace(special, "")
             piece_size = len(striped_piece)
-            delta = lookuptext[i:].find(striped_piece.lower())
-            assert 0 <= (delta - lookuptext[i:i+delta].count(' ') - lookuptext[i:i+delta].count('\n')) < 5, (lookuptext[i:i + 50], striped_piece.lower())
+            delta = lookuptext[i:].find(unidecode.unidecode(striped_piece.lower()))
+            assert 0 <= (delta - lookuptext[i:i + delta].count(' ') - lookuptext[i:i + delta].count('\n')) < 5, (lookuptext[i:i + 50], striped_piece.lower())
             i += delta
             begins.append(i)
             i += piece_size
