@@ -425,12 +425,12 @@ def df_to_csr(rows, cols, data=None, n_rows=None, n_cols=None):
         n_rows = len(rows.cat.categories)
         rows, rows_cat = rows.cat.codes, rows.cat.categories
     else:
-        n_rows = n_rows or (rows.max() + 1)
+        n_rows = n_rows or (rows.max() + 1 if len(rows) > 0 else 0)
     if hasattr(cols, 'cat'):
         n_cols = len(cols.cat.categories)
         cols, cols_cat = cols.cat.codes, cols.cat.categories
     else:
-        n_cols = n_cols or (cols.max() + 1)
+        n_cols = n_cols or (cols.max() + 1 if len(cols) > 0 else 0)
     return csr_matrix((np.asarray(data), (np.asarray(rows), np.asarray(cols))), shape=(n_rows, n_cols))
 
 
