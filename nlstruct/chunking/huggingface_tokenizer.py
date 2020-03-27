@@ -1,7 +1,8 @@
 import pandas as pd
+from tqdm import tqdm
 
 
-def huggingface_tokenize(docs, tokenizer):
+def huggingface_tokenize(docs, tokenizer, with_tqdm=False):
     doc_ids = []
     tokens = []
     begins = []
@@ -12,7 +13,7 @@ def huggingface_tokenize(docs, tokenizer):
         special_tokens += ["▁", "##"]
     else:
         special_tokens += ["</w>"]
-    for doc_id, text in zip(docs["doc_id"], docs["text"]):
+    for doc_id, text in tqdm(zip(docs["doc_id"], docs["text"]), disable=not with_tqdm, total=len(docs)):
         i = 0
         token_id = 0
 
