@@ -16,9 +16,9 @@ from nlstruct.core.torch import torch_global as tg
 class TrainingState(object):
     def __init__(self,
                  goal,
-                 patience_warmup,
-                 patience,
-                 patience_rate,
+                 patience_warmup=None,
+                 patience=None,
+                 patience_rate=None,
                  max_epoch=None,
                  exit_on_score=None):
         self.epoch = 0
@@ -30,9 +30,11 @@ class TrainingState(object):
         self.best_loss = None
         self.last_patience_reset_best_loss = None
         self.best_epoch = None
-        self.patience_warmup = patience_warmup
+        assert patience_rate is None or patience is not None, "Must set patience (int > 0) if patience_rate is not None"
+        assert patience_warmup is None or patience is not None, "Must set patience (int > 0) if patience_warmup is not None"
         self.patience = patience
-        self.patience_rate = patience_rate
+        self.patience_warmup = patience_warmup or 0
+        self.patience_rate = patience_rate or 0
         self.exit_on_score = exit_on_score
         self.quick_exit = False
 
@@ -41,19 +43,21 @@ class TrainingState(object):
         if self.best_loss is None or abs(self.goal - loss) < abs(self.goal - self.best_loss):
             self.best_loss = loss
             self.best_epoch = self.epoch
-        if self.last_patience_reset_best_loss is None or abs(self.goal - loss) < abs(
+        if self.patience is not None and (self.last_patience_reset_best_loss is None or abs(self.goal - loss) < abs(
               self.goal - self.last_patience_reset_best_loss) * (
-              1 - self.patience_rate):
+              1 - self.patience_rate)):
             self.patience_counter = 0
             self.last_patience_reset_best_loss = self.best_loss
-        elif self.epoch >= self.patience_warmup:
+        elif self.patience is not None and self.epoch >= self.patience_warmup:
             self.patience_counter += 1
             if self.exit_on_score is not None and abs(self.goal - self.exit_on_score) < abs(self.goal - loss):
                 self.quick_exit = True
+        elif self.exit_on_score is not None and abs(self.goal - self.exit_on_score) < abs(self.goal - loss):
+            self.quick_exit = True
 
     @property
     def keep_going(self):
-        if (self.max_epoch is None or self.epoch < self.max_epoch) and (self.patience_counter <= self.patience or self.epoch < self.patience_warmup) and not self.quick_exit:
+        if (self.max_epoch is None or self.epoch < self.max_epoch) and (self.patience is None or self.patience_counter <= self.patience or self.epoch < self.patience_warmup) and not self.quick_exit:
             return True
         return False
 
@@ -106,13 +110,13 @@ class StoppableThread(threading.Thread):
 def run_optimization(
       main_score,
       metrics_info,
-      patience_warmup,
-      patience_rate,
-      patience,
       max_epoch,
 
       epoch_fn,
 
+      patience_warmup=None,
+      patience_rate=None,
+      patience=None,
       state=None,
       n_save_checkpoints=1,
       exit_on_score=None,
