@@ -9,7 +9,7 @@ def huggingface_tokenize(docs, tokenizer):
     token_idx = []
     special_tokens = [t for token in tokenizer.special_tokens_map.values() for t in ((token,) if isinstance(token, str) else token)]
     if hasattr(tokenizer, 'sp_model'):
-        special_tokens += ["▁"]
+        special_tokens += ["▁", "##"]
     else:
         special_tokens += ["</w>"]
     for doc_id, text in zip(docs["doc_id"], docs["text"]):
