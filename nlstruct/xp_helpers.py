@@ -200,8 +200,10 @@ def run_optimization(
                             persistable.load_state_dict(dumped[name])
                         else:
                             state[name] = dumped[name]
+                        del persistable
                     # ex: now state["epoch"] = 11
                     state["epoch"] = epoch
+                    del dumped
                     break
 
             # endregion
