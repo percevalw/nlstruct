@@ -5,6 +5,7 @@ from logging import warn
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from unidecode import unidecode
 
 from nlstruct.core.pandas import make_merged_names_map, merge_with_spans, make_id_from_merged, flatten
 
@@ -105,8 +106,9 @@ def regex_sub_with_spans(pattern, replacement, text):
     return text, DeltaCollection(begins, ends, deltas)
 
 
-def regex_multisub_with_spans(patterns, replacements, text):
-    deltas = DeltaCollection([], [], [])
+def regex_multisub_with_spans(patterns, replacements, text, deltas=None):
+    if deltas is None:
+        deltas = DeltaCollection([], [], [])
     for pattern, replacement in zip(patterns, replacements):
         text, new_deltas = regex_sub_with_spans(pattern, replacement, text)
         if deltas is not None:
@@ -116,21 +118,43 @@ def regex_multisub_with_spans(patterns, replacements, text):
     return text, deltas
 
 
+def run_unidecode(text):
+    begins, ends, deltas = [], [], []
+    new_text = ""
+    for i, (old_char, new_char) in enumerate((char, unidecode(char)) for char in text):
+        if len(old_char) != len(new_char):
+            begins.append(i)
+            ends.append(i+1)
+            deltas.append(len(new_char)-1)
+        new_text += new_char
+    return new_text, DeltaCollection(begins, ends, deltas)
+
+
 def transform_text(dataset,
                    global_patterns=None,
-                   global_replacements=None, return_deltas=True, with_tqdm=False):
+                   global_replacements=None,
+                   apply_unidecode=False,
+                   return_deltas=True, with_tqdm=False):
     assert (global_patterns is None) == (global_replacements is None)
-    expand_deltas = lambda x: (x[0], tuple(x[1].begins), tuple(x[1].ends), tuple(x[1].deltas))
     if global_patterns is None:
         global_patterns = []
         global_replacements = []
+
+    def process_text(text, doc_patterns, doc_replacements):
+        deltas = None
+        if apply_unidecode:
+            text, deltas = run_unidecode(text)
+        text, deltas = regex_multisub_with_spans(
+            [*doc_patterns, *global_patterns],
+            [*doc_replacements, *global_replacements],
+            text,
+            deltas=deltas,
+        )
+        return text, deltas.begins, deltas.ends, deltas.deltas
+
     if return_deltas:
         text, delta_begins, delta_ends, deltas = zip(*[
-            expand_deltas(regex_multisub_with_spans(
-                [*doc_patterns, *global_patterns],
-                [*doc_replacements, *global_replacements],
-                text
-            )) for text, doc_patterns, doc_replacements in
+            process_text(text, doc_patterns, doc_replacements) for text, doc_patterns, doc_replacements in
             tqdm(zip(
                 dataset["text"],
                 dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
