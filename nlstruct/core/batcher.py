@@ -115,6 +115,8 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True):
     was_torch = False
     if torch.is_tensor(all_flat_values[0]):
         was_torch = True
+        device = all_flat_values[0].device
+        all_flat_values = [v.cpu() for v in all_flat_values]
         # if reference_values is None:
         #     unique_values, relative_values = torch.unique(torch.cat(all_flat_values), sorted=False, return_inverse=True)
         # elif freeze_reference:
@@ -129,8 +131,8 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True):
         else:
             relative_values, unique_values = pd.factorize(np.concatenate((reference_values, *all_flat_values)))
     if was_torch:
-        relative_values = torch.as_tensor(relative_values)
-        unique_values = torch.as_tensor(unique_values)
+        relative_values = torch.as_tensor(relative_values, device=device)
+        unique_values = torch.as_tensor(unique_values, device=device)
     if freeze_reference:
         all_unk_masks = relative_values < len(reference_values)
     else:
@@ -203,7 +205,7 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True):
                     new_mask = mask.clone()
                     mask[mask] = unk_mask
             if mask is not None:
-                values = torch.zeros(values.shape, dtype=torch.long)
+                values = torch.zeros(values.shape, dtype=torch.long, device=device)
                 values[mask] = flat_relative_values[unk_mask] if unk_mask is not None else flat_relative_values
                 new_values.append(values)
                 new_masks.append(mask)
