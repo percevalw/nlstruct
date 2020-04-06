@@ -3,7 +3,7 @@ import unidecode
 from tqdm import tqdm
 
 
-def huggingface_tokenize(docs, tokenizer, with_tqdm=False, **kwargs):
+def huggingface_tokenize(docs, tokenizer, unidecode_first=False, with_tqdm=False, **kwargs):
     doc_ids = []
     tokens = []
     begins = []
@@ -15,6 +15,8 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, **kwargs):
         i = 0
         token_id = 0
 
+        if unidecode_first:
+            text = unidecode.unidecode(text)
         lookuptext = unidecode.unidecode(text.lower())
         for piece in tokenizer.convert_ids_to_tokens(tokenizer.encode(text, **kwargs)):
             doc_ids.append(doc_id)
@@ -23,8 +25,8 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, **kwargs):
             for special in special_tokens:
                 striped_piece = striped_piece.replace(special, "")
             piece_size = len(striped_piece)
-            delta = lookuptext[i:].find(unidecode.unidecode(striped_piece.lower()))
-            assert 0 <= (delta - lookuptext[i:i + delta].count(' ') - lookuptext[i:i + delta].count('\n')) < 5, (lookuptext[i:i + 50], striped_piece.lower())
+            delta = lookuptext[i:].find(unidecode.unidecode(striped_piece.lower()) if not unidecode_first else striped_piece.lower())
+            assert 0 <= (delta - lookuptext[i:i + delta].count(' ') - lookuptext[i:i + delta].count('\n')) < 10, (lookuptext[i:i + 50], striped_piece.lower())
             i += delta
             begins.append(i)
             i += piece_size
