@@ -747,7 +747,7 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
         cache_handle = CacheHandle(os.path.join(env['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
         inputs_path = cache_handle.entry("inputs.txt")
         # TODO print input files top structures like dist / lists into an inputs.txt file
-        if not inputs_path.exists():
+        if not inputs_path.exists() and args is not None:
             with open(str(cache_handle.entry("inputs.txt")), "w") as inputs_file:
                 inputs_file.write("{}({})\n".format(
                     ".".join(keys),
