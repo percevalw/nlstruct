@@ -176,7 +176,7 @@ def transform_text(dataset,
               dataset["text"],
               dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
               dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm):
-            if run_unidecode:
+            if apply_unidecode:
                 text = unidecode(text)
             for pattern, replacement in zip([*doc_patterns, *global_patterns], [*doc_replacements, *global_replacements]):
                 text = re.sub(pattern, replacement, text)
