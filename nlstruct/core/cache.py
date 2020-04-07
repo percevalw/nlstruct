@@ -618,10 +618,7 @@ class cached(object):
 
     def __reduce__(self):
         if self.func is not None:
-            name = getattr(self.func, '__qualname__', None)
-            if name is None:
-                name = self.func.__name__
-            return name
+            name = self.func.__name__
         return object.__reduce__(self)
 
     def __get__(self, instance, owner):
