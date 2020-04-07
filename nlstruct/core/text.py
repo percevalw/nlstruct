@@ -158,7 +158,7 @@ def transform_text(dataset,
             tqdm(zip(
                 dataset["text"],
                 dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
-                dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not tqdm)
+                dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm)
         ])
         dataset = pd.DataFrame({
             "text": text,
@@ -175,7 +175,9 @@ def transform_text(dataset,
         for text, doc_patterns, doc_replacements in tqdm(zip(
               dataset["text"],
               dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
-              dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not tqdm):
+              dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm):
+            if run_unidecode:
+                text = unidecode(text)
             for pattern, replacement in zip([*doc_patterns, *global_patterns], [*doc_replacements, *global_replacements]):
                 text = re.sub(pattern, replacement, text)
             new_texts.append(text)
