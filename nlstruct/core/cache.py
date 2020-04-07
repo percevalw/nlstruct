@@ -366,8 +366,16 @@ class TruncatedNumpyHasher(Hasher):
             obj = _MyHash(func_name, inst, cls)
         self.save(obj)
 
+    def save_type(self, obj):
+        if hasattr(obj, '__name__'):
+            self.save(("HASHED_TYPE", obj.__name__, obj.__mro__[1:]))
+            self.memoize(obj)
+        else:
+            self.save(obj, bypass_dispatch=True)
+
     dispatch = Dispatcher()
     dispatch[tuple] = save_tuple
+    dispatch[type] = save_type
     dispatch[str] = Pickler.save_str
     dispatch[memoryview] = save_memoryview
     dispatch[types.MethodType] = save_method
