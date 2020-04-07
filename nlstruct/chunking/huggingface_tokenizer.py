@@ -20,7 +20,7 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True
             token_id = 0
 
             sentence_pieces = tokenizer.tokenize(text)
-            tokenizer_output = tokenizer.encode_plus(tokenizer.convert_tokens_to_ids(sentence_pieces), return_special_tokens_mask=True)
+            tokenizer_output = tokenizer.encode_plus(tokenizer.convert_tokens_to_ids(sentence_pieces), return_special_tokens_mask=True, **kwargs)
             encoded_pieces = tokenizer.convert_ids_to_tokens(tokenizer_output["input_ids"])
             pieces = np.asarray(encoded_pieces)
             pieces[~np.asarray(tokenizer_output["special_tokens_mask"], dtype=bool)] = sentence_pieces
@@ -46,7 +46,7 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True
     else:
         for doc_id, text in tqdm(zip(docs["doc_id"], docs["text"]), disable=not with_tqdm, total=len(docs), leave=False, desc="Tokenizing"):
             token_id = 0
-            for encoded_piece in tokenizer.convert_ids_to_tokens(tokenizer.encode(text)):
+            for encoded_piece in tokenizer.convert_ids_to_tokens(tokenizer.encode(text, **kwargs)):
                 doc_ids.append(doc_id)
                 tokens.append(encoded_piece)
                 token_idx.append(token_id)
