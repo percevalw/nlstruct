@@ -647,9 +647,9 @@ class cached(object):
                     del bound_arguments.arguments['_cache']
 
             if self.cls is not None:
-                keys = tuple((*self.func.__module__.split('.'), self.cls.__name__, self.func.__name__))
+                keys = tuple((self.cls.__name__, self.func.__name__))
             else:
-                keys = tuple((*self.func.__module__.split('.'), self.func.__name__))
+                keys = tuple((self.func.__name__))
 
             if self.with_state:
                 (caller_self, *args) = args
