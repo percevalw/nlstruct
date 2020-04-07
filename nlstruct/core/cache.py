@@ -649,7 +649,7 @@ class cached(object):
             if self.cls is not None:
                 keys = tuple((self.cls.__name__, self.func.__name__))
             else:
-                keys = tuple((self.func.__name__))
+                keys = tuple((self.func.__name__,))
 
             if self.with_state:
                 (caller_self, *args) = args
