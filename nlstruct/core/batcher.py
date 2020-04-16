@@ -688,10 +688,10 @@ class Batcher:
                     reference_values=self.tables[table_name][self.primary_ids[table_name]],
                     freeze_reference=True
                 )[:2]
-                for (table_name, table_col_name), table_foreign_ids, table_foreign_mask in zip(others, new_relative_ids, new_masks):
-                    self.tables[table_name][table_col_name] = table_foreign_ids
-                    if table_foreign_mask is not None and self.masks.get(table_name, {}).get(table_col_name, None):
-                        self.tables[table_name][self.masks[table_name][table_col_name]] = table_foreign_mask
+                for (other_table_name, table_col_name), table_foreign_ids, table_foreign_mask in zip(others, new_relative_ids, new_masks):
+                    self.tables[other_table_name][table_col_name] = table_foreign_ids
+                    if table_foreign_mask is not None and self.masks.get(other_table_name, {}).get(table_col_name, None):
+                        self.tables[other_table_name][self.masks[other_table_name][table_col_name]] = table_foreign_mask
         elif mode == "absolute":
             for table_name, table_foreign_ids in self.foreign_ids.items():
                 for table_foreign_id_col, (foreign_table_name, old_mode) in table_foreign_ids.items():
@@ -886,10 +886,7 @@ class Batcher:
             table_name = queue.pop()
             # Ex: table_name = relations
             table = self.tables[table_name]
-            try:
-                queried_table = self.query_table(table, selected_ids[table_name])
-            except:
-                raise Exception(f"Exception occured while querying table {repr(table_name)}. Previously queried tables are {repr(tuple(queried_tables.keys()))}")
+            queried_table = self.query_table(table, selected_ids[table_name])
             logging.debug(f"Queried table {repr(table_name)}. Previously queried tables are {repr(tuple(queried_tables.keys()))}")
             for col_name, col in queried_table.items():
                 # Ex: col_name = from_mention_id
@@ -1061,21 +1058,21 @@ class Batcher:
             id_name = struct.primary_ids[sample_table_name]
             if id_name in table:
                 if not allow_non_unique_primary_ids:
-                    message = f"Primary id {table_name}/{id_name} is not unique.\n" \
+                    message = f"Primary id {sample_table_name}/{id_name} is not unique.\n" \
                               f"You can either set Batcher.concat `allow_non_unique_primary_ids` parameter to True or check that each concatenated" \
-                              f" batch has no redundant {table_name}/{id_name}.\n" \
+                              f" batch has no redundant {sample_table_name}/{id_name}.\n" \
                               f"You maybe forgot to set foreign_ids='relative' when you created these batches."
 
                 if torch.is_tensor(table[id_name]):
                     uniq, inverse = torch.unique(table[id_name], sorted=False, return_inverse=True)
                     if not allow_non_unique_primary_ids:
                         assert len(uniq) == len(table[id_name]), message
-                    uniquifier = inverse.argsort()[:len(table[id_name])]
+                    uniquifier = torch.unique(torch.cat([table[id_name], uniq]), sorted=False, return_inverse=True)[1][-len(uniq):]
                 elif isinstance(table[id_name], np.ndarray):
                     inverse, uniq = pd.factorize(table[id_name])
                     if not allow_non_unique_primary_ids:
                         assert len(uniq) == len(table[id_name]), message
-                    uniquifier = inverse.argsort()[:len(table[id_name])]
+                    uniquifier = pd.factorize(np.concatenate([table[id_name], uniq]))[0][-len(uniq):]
                 else:
                     raise Exception(f"Primary id {id_name} of table {sample_table_name} should be a torch tensor or a numpy ndarray")
                 new_tables.tables[sample_table_name] = new_tables.query_table(table, uniquifier)
