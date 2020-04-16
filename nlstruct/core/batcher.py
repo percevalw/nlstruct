@@ -828,7 +828,7 @@ class Batcher:
                     else:
                         mask = sparsified_masks[mask_name]
                 elif not issparse(col) and not issparse(mask):
-                    data = as_numpy_array(col)[np.asarray(mask)]
+                    data = as_numpy_array(col)[as_numpy_array(mask)]
                     if mask_name not in sparsified_masks:
                         sparsified_masks[mask_name] = mask = csr_matrix(as_numpy_array(mask))
                     else:
