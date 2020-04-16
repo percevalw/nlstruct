@@ -12,6 +12,8 @@ from nlstruct.core.text import join_cols
 def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n_threads=1,
                      reg_split=r"((?:\s*\n)+\s*)",
                      reg_token=r"[\w*]+|[^\w\s\n*]",
+                     text_col="text",
+                     doc_id_col="doc_id",
                      with_tqdm=False, verbose=0):
     """
     Simple split MIMIC docs into sentences:
@@ -24,6 +26,8 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     max_sentence_length: int
     with_tqdm: bool
     verbose: int
+    doc_id_col: str
+    text_col: str
 
     Returns
     -------
@@ -48,7 +52,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     sentences = []
     max_size = 0
     min_size = 10000000
-    for doc_id, txt in zip(docs["doc_id"], (tqdm(docs["text"], desc="Splitting docs into sentences") if with_tqdm else docs["text"])):
+    for doc_id, txt in zip(docs[doc_id_col], (tqdm(docs[text_col], desc="Splitting docs into sentences") if with_tqdm else docs[text_col])):
         idx = 0
         queued_spans = []
         sentence_idx = 0
@@ -90,21 +94,24 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     if verbose:
         print("Sentence size: max = {}, min = {}".format(max_size, min_size))
     df = pd.DataFrame({
-        "doc_id": doc_ids,
+        doc_id_col: doc_ids,
         "sentence_idx": sentence_idx_list,
         "begin": begins,
         "end": ends,
         "text": sentences,
-    }).astype({"doc_id": docs["doc_id"].dtype})
-    df["sentence_id"] = join_cols(df[["doc_id", "sentence_idx"]], "/")
+    }).astype({doc_id_col: docs[doc_id_col].dtype})
+    df = df.merge(docs[[doc_id_col] + [col for col in docs.columns if col not in df.columns and col != "text"]])
+    df["sentence_id"] = join_cols(df[[doc_id_col, "sentence_idx"]], "/")
     return df
 
 
 @cached.will_ignore(("n_threads", "with_tqdm"))
-def mimic_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, verbose=0):
-    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
+def mimic_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, text_col="text", doc_id_col="doc_id", verbose=0):
+    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm, text_col=text_col, doc_id_col=doc_id_col,
+                            verbose=verbose)
 
 
 @cached.will_ignore(("n_threads", "with_tqdm"))
-def newline_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, verbose=0):
-    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm, verbose=verbose)
+def newline_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, text_col="text", doc_id_col="doc_id", verbose=0):
+    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm, text_col=text_col, doc_id_col=doc_id_col,
+                            verbose=verbose)
