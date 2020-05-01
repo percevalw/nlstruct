@@ -168,7 +168,7 @@ def apply_substitutions(
         })
         return (
             dataset[[c for c in dataset.columns if c not in ("begin", "end", "delta")]],
-            flatten(dataset[[doc_cols, "begin", "end", "delta"]]))
+            flatten(dataset[[*doc_cols, "begin", "end", "delta"]]))
     else:
         new_texts = []
         for text, doc_patterns, doc_replacements in tqdm(zip(
