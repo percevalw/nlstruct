@@ -1,6 +1,5 @@
 import torch
 
-
 from nlstruct.utils.torch import torch_global as tg
 
 IMPOSSIBLE = -10000
@@ -245,6 +244,7 @@ class BIODecoder(LinearChainCRF):
             "span_label": span_label,
             "span_doc_id": begin_tag[:, 0],
         }
+
 
 class BIOULDecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True):

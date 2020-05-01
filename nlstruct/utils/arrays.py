@@ -73,7 +73,7 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True):
 
     Parameters
     ----------
-    col: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list of (np.ndarray or scipy.sparse.spmatrix or torch.Tensor)
+    values: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list of (np.ndarray or scipy.sparse.spmatrix or torch.Tensor)
         values to factorize
     mask: np.ndarray or scipy.sparse.spmatrix or torch.Tensor or list of (np.ndarray or scipy.sparse.spmatrix or torch.Tensor) or None
         optional mask on col, useful for multiple dimension values arrays

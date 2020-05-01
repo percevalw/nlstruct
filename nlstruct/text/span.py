@@ -1,5 +1,4 @@
-from functools import reduce
-from logging import warn
+from logging import warning
 
 import numpy as np
 import pandas as pd
@@ -82,7 +81,7 @@ def encode_as_tag(small, large, label_cols=None, tag_names=None, tag_scheme="bio
         len_before = len(merged)
         merged = merged.drop_duplicates([*doc_id_cols, *small_id_cols], keep='last')
         if len_before - len(merged) > 0:
-            warn(f"Dropped {len_before-len(merged)} duplicated tags caused by overlapping mentions")
+            warning(f"Dropped {len_before-len(merged)} duplicated tags caused by overlapping mentions")
         merged_id_cols = doc_id_cols + large_id_cols + small_id_cols
 
         # Encode mention labels as a tag

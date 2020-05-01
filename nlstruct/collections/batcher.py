@@ -636,6 +636,8 @@ class Batcher:
             if isinstance(key[0], str):
                 assert set(type(k) for k in key) == {str}
                 return self.slice_tables(key)
+            else:
+                indexer = key
         else:
             indexer = key
 
@@ -664,8 +666,8 @@ class Batcher:
             self.tables[key[0]][key[1:]] = value
         elif isinstance(key, list):
             if isinstance(value, Batcher):
-                assert len(value.data) == len(key)
-                for name, table in zip(key, value.data.values()):
+                assert len(value.tables) == len(key)
+                for name, table in zip(key, value.tables.values()):
                     self.tables[name] = table.copy()
                     self.tables[name].batcher = self
             elif not len(key) or isinstance(key[0], (str, tuple, list)):

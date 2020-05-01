@@ -1,10 +1,11 @@
 from collections import Iterable, Sequence, Mapping
-from logging import warn, warning
+from logging import warning
 
 import pandas as pd
 from pandas.core.computation.ops import UndefinedVariableError
 
 from nlstruct.utils.pandas import merge_with_spans
+
 
 class Dataset(Mapping):
     def __init__(self, **dfs):
@@ -34,7 +35,6 @@ class Dataset(Mapping):
                     querier = querier & (other_table[col] == col_id)
                 other_group = other_table[querier]
         pass
-
 
     def query(self, query, names=None, propagate=False, keyerror='ignore'):
         if names is None:
