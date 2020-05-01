@@ -1,8 +1,8 @@
 import pandas as pd
-import spacy
 
 
 def make_spacy_model(need_pipelines=(), lang="en_core_web_sm"):
+    import spacy
     nlp = spacy.load(lang, pipeline=need_pipelines)
     return nlp
 
@@ -74,7 +74,7 @@ def spacy_tokenize(docs, spacy_model=None, spacy_attributes=SPACY_ATTRIBUTES, **
     return tokens
 
 
-def sentencize(docs, need_pipelines=('sentencizer',), max_token_length=200, **spacy_args):
+def spacy_sentencize(docs, need_pipelines=('sentencizer',), max_token_length=200, **spacy_args):
     spacy_model = make_spacy_model(need_pipelines, **spacy_args)
     doc_ids = []
     sentence_idx = []

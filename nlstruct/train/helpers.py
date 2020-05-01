@@ -5,12 +5,12 @@ import time
 import regex
 import sh
 
-from nlstruct.core.cache import yaml_load, yaml_dump
-from nlstruct.core.collections import set_deep_attr
-from nlstruct.core.logging import TrainingLogger
-from nlstruct.core.random import seed_all
-from nlstruct.core.schedule import ConcatSchedule
-from nlstruct.core.torch import torch_global as tg
+from nlstruct.environment.cache import yaml_load, yaml_dump
+from nlstruct.utils.deep_attributes import set_deep_attr
+from nlstruct.train.logging import TrainingLogger
+from nlstruct.train.random import seed_all
+from nlstruct.train.schedule import ConcatSchedule
+from nlstruct.utils.torch import torch_global as tg
 
 
 class TrainingState(object):
@@ -40,6 +40,10 @@ class TrainingState(object):
 
     def record(self, loss):
         self.epoch += 1
+        if loss is None:
+            self.best_loss = loss
+            self.best_epoch = self.epoch
+            return
         if self.best_loss is None or abs(self.goal - loss) < abs(self.goal - self.best_loss):
             self.best_loss = loss
             self.best_epoch = self.epoch
@@ -108,12 +112,10 @@ class StoppableThread(threading.Thread):
 
 
 def run_optimization(
-      main_score,
       metrics_info,
       max_epoch,
-
       epoch_fn,
-
+      main_score=None,
       patience_warmup=None,
       patience_rate=None,
       patience=None,
@@ -130,13 +132,13 @@ def run_optimization(
     if as_thread:
         x = StoppableThread(
             target=run_optimization, args=(
-                main_score,
                 metrics_info,
+                max_epoch,
+                epoch_fn,
+                main_score,
                 patience_warmup,
                 patience_rate,
                 patience,
-                max_epoch,
-                epoch_fn,
                 state,
                 n_save_checkpoints,
                 exit_on_score,
@@ -172,7 +174,7 @@ def run_optimization(
     score_logger = TrainingLogger(key=main_score,
                                   patience_warmup=patience_warmup, patience=patience,
                                   formatter=metrics_info)
-    monitor = TrainingState(goal=metrics_info[main_score]['goal'],
+    monitor = TrainingState(goal=metrics_info[main_score]['goal'] if main_score is not None else main_score,
                             patience_warmup=patience_warmup, patience=patience,
                             patience_rate=patience_rate, max_epoch=max_epoch,
                             exit_on_score=exit_on_score)
@@ -242,7 +244,7 @@ def run_optimization(
             # endregion
             # region update training state and dump model and history
         history = history[:monitor.epoch] + [scores] + history[monitor.epoch + 1:]
-        monitor.record(scores[main_score])
+        monitor.record(scores[main_score] if main_score is not None else None)
         if "write_history" in cache_policy:
             cache.dump(history, "history.yaml", dumper=yaml_dump)
         if model_has_been_trained:

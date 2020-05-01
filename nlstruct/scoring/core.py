@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from nlstruct.core.pandas import merge_with_spans
+from nlstruct.utils.pandas import merge_with_spans, make_merged_names
 
 
 def merge_pred_and_gold(
@@ -18,6 +18,7 @@ def merge_pred_and_gold(
 
     Parameters
     ----------
+    suffixes: tuple of str
     pred: pd.DataFrame
     gold: pd.DataFrame
     on: typing.Sequence of (str or tuple)
@@ -61,6 +62,13 @@ def merge_pred_and_gold(
     #         categoricals[gold_names_map[col]] = gold[col].cat.categories
     #         gold[col] = gold[col].cat.codes
     merged = merge_with_spans(pred, gold, on=on, how='inner', span_policy=span_policy, suffixes=suffixes)
+    pred_new_names, gold_new_names = make_merged_names(
+        pred.columns, gold.columns,
+        left_on=on,
+        right_on=on,
+        left_columns=pred.columns, right_columns=gold.columns, suffixes=suffixes)
+    pred_names_map = list(zip(pred.columns, pred_new_names))
+    gold_names_map = list(zip(gold.columns, gold_new_names))
 
     overlap_size_names = [c for c in merged.columns if c.startswith("overlap_size_")]
     merged = merged.groupby([atom_pred_level, atom_gold_level], as_index=False, observed=True).agg({
@@ -82,8 +90,9 @@ def merge_pred_and_gold(
     pred = pred.groupby([atom_pred_level], as_index=False, observed=True).last()
     gold = gold.groupby([atom_gold_level], as_index=False, observed=True).last()
     res = pd.concat((res,
-                     pred[~pred[atom_pred_level].isin(res[atom_pred_level])][list(set(res.columns) & set(pred.columns))],
-                     gold[~gold[atom_gold_level].isin(res[atom_gold_level])][list(set(res.columns) & set(gold.columns))]), sort=False)
+                     pred[~pred[atom_pred_level].isin(res[atom_pred_level])][[old_col for old_col, new_col in pred_names_map if old_col in res or new_col in res]].rename(dict(pred_names_map), axis=1),
+                     gold[~gold[atom_gold_level].isin(res[atom_gold_level])][[old_col for old_col, new_col in gold_names_map if old_col in res or new_col in res]].rename(dict(gold_names_map), axis=1)),
+                     sort=False)
     # for col, categories in categoricals.items():
     #     res[col] = pd.Categorical.from_codes(res[col].fillna(-1).astype(int), categories=categories)
 
@@ -99,7 +108,7 @@ def merge_pred_and_gold(
     return res
 
 
-def compute_metrics(merged_results, level='root', prefix=''):
+def compute_metrics(merged_results, level='root', prefix='', aggregate=True):
     """
 
     Parameters
@@ -117,7 +126,7 @@ def compute_metrics(merged_results, level='root', prefix=''):
     -------
     dict
     """
-    res = merged_results.groupby([level])[['pred_count', 'gold_count', 'tp']].sum()
+    res = merged_results.groupby([level], as_index=False)[['pred_count', 'gold_count', 'tp']].sum()
     res['recall'] = res['tp'] / res['gold_count']
     res['precision'] = res['tp'] / res['pred_count']
     res['f1'] = 2 / (1 / res['precision'] + 1 / res['recall'])
@@ -131,9 +140,10 @@ def compute_metrics(merged_results, level='root', prefix=''):
     # Precision, recall & f1 is 1 where expected count = 0 and predicted count =  0
     null_tp = np.logical_and(null_p, null_r)
     res.loc[null_tp, ('precision', 'recall', 'f1')] = 1
-    res = res.agg({'recall': 'mean', 'precision': 'mean', 'f1': 'mean',
-                   'pred_count': 'sum', 'gold_count': 'sum', 'tp': 'sum'})
-    res.index = [prefix+c for c in res.index]
+    if aggregate:
+        res = res.agg({'recall': 'mean', 'precision': 'mean', 'f1': 'mean',
+                       'pred_count': 'sum', 'gold_count': 'sum', 'tp': 'sum'})
+        res.index = [prefix+c for c in res.index]
     return res
 
 

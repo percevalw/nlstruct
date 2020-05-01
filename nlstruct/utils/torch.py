@@ -224,3 +224,19 @@ def extract_slices(sequences, flat_begins, flat_ends, flat_sample_idx):
         return {k: seq[mentions_from_sequences_row_indexer, mentions_from_sequences_col_indexer] for k, seq in sequences.items()}, mask
     print("Cannot be here, already raised and exception")
 
+
+def print_optimized_params(net, optim):
+    inv_dict = {id(p): name for name, p in net.named_parameters()}
+    seen_params = set()
+    for group_idx, group in enumerate(optim.param_groups):
+        print("Group", group_idx)
+        for p in group["params"]:
+            print("   " if not p.requires_grad else " x ", inv_dict[id(p)])
+            seen_params.add(id(p))
+    found_unoptimized = False
+    for id_p, name in inv_dict.items():
+        if id_p not in seen_params:
+            print("Unoptimized param", name)
+            found_unoptimized = True
+    if not found_unoptimized:
+        print("All parameters are in the optimizer")

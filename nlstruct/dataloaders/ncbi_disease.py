@@ -3,9 +3,9 @@ import zipfile
 import pandas as pd
 from sklearn.datasets._base import RemoteFileMetadata
 
-from nlstruct.core.cache import get_cache
-from nlstruct.core.network import ensure_files, NetworkLoadMode
-from nlstruct.core.dataset import Dataset
+from nlstruct.environment.cache import get_cache
+from nlstruct.utils.network import ensure_files, NetworkLoadMode
+from nlstruct.collections.dataset import Dataset
 
 remote_files = [
     RemoteFileMetadata(

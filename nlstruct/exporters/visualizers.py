@@ -14,7 +14,7 @@ def render_with_displacy(dataset,
 
     Parameters
     ----------
-    dataset: nlstruct.core.dataset.Dataset
+    dataset: nlstruct.collections.dataset.Dataset
         Expected table/columns are:
         - docs: [doc_id, text]
         - mentions: [doc_id, mention_id, label]

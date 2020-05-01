@@ -1,17 +1,18 @@
 import torch
 
-from nlstruct.core.torch import torch_global as tg
+
+from nlstruct.utils.torch import torch_global as tg
 
 IMPOSSIBLE = -10000
 
 
-class CRF(torch.nn.Module):
+class LinearChainCRF(torch.nn.Module):
     def __init__(self, num_tags, start_transitions_mask=None, transitions_mask=None, end_transitions_mask=None, with_start_end_transitions=True):
         super().__init__()
         self.num_tags = num_tags
 
         # Make masks to buffer, since they are not parameters, but we want pytorch to know they are part of
-        # the model and should be moved to the new device when module.to(...) is called on the CRF
+        # the model and should be moved to the new device when module.to(...) is called on the LinearChainCRF
         self.register_buffer('start_transitions_mask', start_transitions_mask)
         self.register_buffer('transitions_mask', transitions_mask)
         self.register_buffer('end_transitions_mask', end_transitions_mask)
@@ -180,7 +181,7 @@ class CRF(torch.nn.Module):
         return z, log_probs, backtrack
 
 
-class BIODecoder(CRF):
+class BIODecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True):
         num_tags = 1 + num_labels * 2
         O, B, I = 0, 1, 2
@@ -245,7 +246,7 @@ class BIODecoder(CRF):
             "span_doc_id": begin_tag[:, 0],
         }
 
-class BIOULDecoder(CRF):
+class BIOULDecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True):
         O, B, I, L, U = 0, 1, 2, 3, 4
 

@@ -2,9 +2,9 @@ import zipfile
 
 from sklearn.datasets._base import RemoteFileMetadata
 
-from nlstruct.core.dataset import Dataset
-from nlstruct.core.environment import env
-from nlstruct.core.network import ensure_files, NetworkLoadMode
+from nlstruct.collections.dataset import Dataset
+from nlstruct.environment.path import root
+from nlstruct.utils.network import ensure_files, NetworkLoadMode
 from nlstruct.dataloaders.brat import load_from_brat
 
 remote = RemoteFileMetadata(
@@ -14,7 +14,7 @@ remote = RemoteFileMetadata(
 
 
 def load_quaero(resource_path="quaero"):
-    path = env.resource(resource_path)
+    path = root.resource(resource_path)
     [file] = ensure_files(path, [remote], mode=NetworkLoadMode.AUTO)
     zip_ref = zipfile.ZipFile(path / "QUAERO_FrenchMed_brat.zip", "r")
     zip_ref.extractall(path)

@@ -1,6 +1,6 @@
 from tqdm import tqdm
 
-from nlstruct.core.cache import get_cache
+from nlstruct.environment.cache import get_cache
 
 
 def to_conll(
@@ -17,7 +17,7 @@ def to_conll(
 
     Parameters
     ----------
-    dataset: nlstruct.core.dataset.Dataset
+    dataset: nlstruct.collections.dataset.Dataset
     token_cols: list of str
         Columns in the `token_name` frame to put in the CoNLL file
     destination: str or pathlib.Path
