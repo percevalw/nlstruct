@@ -28,7 +28,7 @@ from joblib.numpy_pickle_utils import _read_fileobject
 from scipy.sparse import spmatrix
 from sklearn.base import BaseEstimator
 
-from nlstruct.environment import RelativePath, root
+from nlstruct.environment.path import RelativePath, root
 
 logger = logging.getLogger()
 
