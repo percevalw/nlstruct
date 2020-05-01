@@ -28,7 +28,7 @@ from joblib.numpy_pickle_utils import _read_fileobject
 from scipy.sparse import spmatrix
 from sklearn.base import BaseEstimator
 
-from nlstruct.environment.environment import RelativePath, env
+from nlstruct.environment import RelativePath, root
 
 logger = logging.getLogger()
 
@@ -419,7 +419,7 @@ class CacheHandle(RelativePath):
         return RelativePath(os.path.join(str(self), name))
 
     def tmp(self, item):
-        return env.tmp(os.path.join(item))
+        return root.tmp(os.path.join(item))
 
     def load(self, source="output.pkl", loader=None, **kwargs):
         path = str(self / source)
@@ -495,9 +495,9 @@ class CustomUnpickler(NumpyUnpickler):
             inst.suffix = state['suffix']
             inst.source = state['source']
             if state['source'] == "resource":
-                inst.prefix = env['RESOURCES_PATH']
+                inst.prefix = root['RESOURCES_PATH']
             elif state['source'] == "source":
-                inst.prefix = env.basedir
+                inst.prefix = root.basedir
             elif state['source'] == "cache":
                 if self.current_cache is not None:
                     inst.prefix = self.current_cache
@@ -736,7 +736,6 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
     ----------
     keys: (typing.Sequence of str) or str or int or RelativePath
     args: Any
-    kwargs: Any
     loader:
     dumper:
 
@@ -745,16 +744,16 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
     CacheHandle
     """
     if isinstance(keys, RelativePath):
-        keys = str(keys.relative_to(Path(env["CACHE_PATH"])))
+        keys = str(keys.relative_to(Path(root["CACHE_PATH"])))
     if isinstance(keys, str):
         keys = [*str(keys).split("/")]
     elif not hasattr(keys, '__len__'):
         keys = [str(keys)]
     keys = list(keys) + [hash_object(args, mmap_mode=None)]
     if on_ram:
-        cache_handle = RAMCacheHandle(os.path.join(env['CACHE_PATH'], *keys))
+        cache_handle = RAMCacheHandle(os.path.join(root['CACHE_PATH'], *keys))
     else:
-        cache_handle = CacheHandle(os.path.join(env['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
+        cache_handle = CacheHandle(os.path.join(root['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
         inputs_path = cache_handle.entry("inputs.txt")
         # TODO print input files top structures like dist / lists into an inputs.txt file
         if not inputs_path.exists() and args is not None:

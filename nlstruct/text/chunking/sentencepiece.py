@@ -1,6 +1,6 @@
 import pandas as pd
 
-from nlstruct.utils.text import transform_text, reverse_deltas
+from nlstruct.text.sub import apply_substitutions, reverse_deltas
 
 
 def sentencepiece_tokenize(docs, path):
@@ -8,7 +8,7 @@ def sentencepiece_tokenize(docs, path):
         (r"\s+", " "),
         ("^([^\s])", r" \1"),
     ]
-    docs, deltas = transform_text(docs, *zip(*subs), return_deltas=True)
+    docs, deltas = apply_substitutions(docs, *zip(*subs), return_deltas=True)
 
     import sentencepiece as spm
     sp = spm.SentencePieceProcessor()
