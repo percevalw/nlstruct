@@ -25,9 +25,10 @@ from joblib.hashing import Hasher, _MyHash
 from joblib.numpy_pickle import NumpyArrayWrapper, NumpyUnpickler
 from joblib.numpy_pickle_compat import NDArrayWrapper
 from joblib.numpy_pickle_utils import _read_fileobject
+from scipy.sparse import spmatrix
 from sklearn.base import BaseEstimator
 
-from nlstruct.core.environment import RelativePath, env
+from nlstruct.environment.environment import RelativePath, env
 
 logger = logging.getLogger()
 
@@ -340,6 +341,9 @@ class TruncatedNumpyHasher(Hasher):
     def save_tensor(self, obj):
         self.save(obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)])
 
+    def save_spmatrix(self, obj):
+        self.save(obj.tocsr(), bypass_dispatch=True)
+
     def save_parameter(self, obj):
         obj = (obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)],
                obj.requires_grad)
@@ -384,6 +388,7 @@ class TruncatedNumpyHasher(Hasher):
     dispatch[BlockManager] = save_blockmanager
     dispatch[PandasObject] = save_pandas_object
     dispatch[np.ndarray] = save_ndarray
+    dispatch[spmatrix] = save_spmatrix
     dispatch[np.dtype] = save_ndtype
     dispatch[torch.nn.Parameter] = save_parameter
     dispatch[torch.Tensor] = save_tensor

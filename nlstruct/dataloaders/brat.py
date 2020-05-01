@@ -3,8 +3,8 @@ import os
 import pandas as pd
 from sklearn.utils import check_random_state
 
-from nlstruct.core.dataset import Dataset
-from nlstruct.core.environment import RelativePath
+from nlstruct.collections.dataset import Dataset
+from nlstruct.environment.path import RelativePath
 
 
 def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True, doc_attributes=None):

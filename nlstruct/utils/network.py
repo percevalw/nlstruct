@@ -6,7 +6,7 @@ import urllib.request
 import tqdm as tqdm
 from sklearn.datasets._base import _sha256
 
-from nlstruct.core.environment import env
+from nlstruct.environment.environment import env
 
 
 class NetworkLoadMode(enum.Enum):

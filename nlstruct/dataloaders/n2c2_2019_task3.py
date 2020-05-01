@@ -3,13 +3,13 @@ import os
 import pandas as pd
 from sklearn.utils import check_random_state
 
-from nlstruct.core.dataset import Dataset
-from nlstruct.core.environment import env
-from nlstruct.core.pandas import merge_with_spans
+from nlstruct.collections.dataset import Dataset
+from nlstruct.environment.path import root
+from nlstruct.utils.pandas import merge_with_spans
 
 
 def load_n2c2_2019_task3(validation_split=0.2, random_state=42, split="train"):
-    path = env.resource("n2c2/".format(split))
+    path = root.resource("n2c2/".format(split))
     dataset = []
     for filename in sorted(os.listdir(path / '{}_norm'.format(split))):
         if filename.endswith('.norm'):

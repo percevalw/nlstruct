@@ -1,4 +1,5 @@
 from collections import defaultdict, Sized
+from functools import reduce
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,11 @@ from pandas._libs.parsers import union_categoricals
 from pandas.core.dtypes.common import is_numeric_dtype
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph._traversal import connected_components
+
+
+def join_cols(df, sep="/"):
+    df = df.astype(str)
+    return reduce(lambda x, y: x + sep + y, (df.iloc[:, i] for i in range(1, len(df.columns))), df.iloc[:, 0])
 
 
 def get_sequence_length(obj):
@@ -723,16 +729,17 @@ class NLStructAccessor(object):
     def groupby_assign(self, by, agg, as_index=False, observed=True, **kwargs):
         res = self._obj.assign(_index=np.arange(len(self._obj)))
         res = res.drop(columns=list(agg.keys())).merge(
-              # .astype({key: "category" for key in mentions_cluster_ids})
+            # .astype({key: "category" for key in mentions_cluster_ids})
             res.groupby(by, observed=observed, **kwargs)
-            .agg({**agg, "_index": tuple}).reset_index(drop=True)
-            .nlstruct.flatten("_index"),
+                .agg({**agg, "_index": tuple}).reset_index(drop=True)
+                .nlstruct.flatten("_index"),
             how='left',
             on='_index',
         ).drop(columns=["_index"])
         if as_index:
             res = res.set_index(by)
         return res
+
 
 pd.api.extensions.register_dataframe_accessor("nlstruct")(NLStructAccessor)
 pd.api.extensions.register_series_accessor("nlstruct")(NLStructAccessor)

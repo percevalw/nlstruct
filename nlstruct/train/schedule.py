@@ -3,7 +3,7 @@ from math import inf
 
 from torch.optim.optimizer import Optimizer
 
-from nlstruct.core.collections import get_deep_attr, set_deep_attr
+from nlstruct.utils.deep_attributes import get_deep_attr, set_deep_attr
 
 
 class Schedule(object):
