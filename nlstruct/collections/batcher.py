@@ -22,8 +22,8 @@ class BatcherPrinter(pprint.PrettyPrinter):
         write("Batcher(")
         object_dict = obj.tables
         length = len(object_dict)
-        items = [(obj.main_table, obj.tables[obj.main_table]),
-                 *list((k, v) for k, v in object_dict.items() if k != obj.main_table)]
+        items = [*((name, obj.tables[name], True) for name in obj.join_order),
+                 *((name, table, False) for name, table in object_dict.items() if name not in obj.join_order)]
         if length:
             # We first try to print inline, and if it is too large then we print it on multiple lines
             self.format_table(items, stream, indent, allowance + 1, context, level, inline=False)
@@ -66,9 +66,9 @@ class BatcherPrinter(pprint.PrettyPrinter):
             delimnl = '\n' + ' ' * indent
             write('\n' + ' ' * indent)
 
-        for i, (key, ent) in enumerate(table):
+        for i, (key, ent, joinable) in enumerate(table):
             last = i == last_index
-            write("[{}]".format(key) + ':')
+            write("[{}]".format(key) + ':' + (' frozen' if not joinable else ''))
             self.format_columns(ent.data.items(), stream, indent,  # + len(key) + 4,
                                 allowance if last else 1,
                                 context, level)
@@ -244,13 +244,9 @@ class Table:
             array_to_change.data = as_numpy_array(referenced_table.primary_ids)[array_to_change.data]
         else:
             self.data[name] = as_same(
-                as_array(
-                    referenced_table.primary_ids,
-                    t=type(referenced_table.primary_ids),
-                    device=getattr(referenced_table.primary_ids, 'device', None)
-                )[self.data[relative_name]],
+                referenced_table.primary_ids,
                 t=type(self.data[relative_name]),
-                device=getattr(self.data[relative_name], 'device', None))
+                device=getattr(self.data[relative_name], 'device', None))[self.data[relative_name]]
         return self.data[name]
 
     def get_col(self, name):
@@ -342,13 +338,16 @@ class Table:
         # TODO checks
         # del table["mention_id"]
         if isinstance(key, str):
-            assert not key.startswith('@'), 'You should directly delete column {} instead of {}'.format(key.strip('@'), key)
-            del self.data[key]
-            if key in self.foreign_ids and '@' + key in self.data:
-                del self.data['@' + key]
-            if key in self.foreign_ids:
-                del self.foreign_ids[key]
-            self.masks = {col_name: mask_name for col_name, mask_name in self.masks.items() if mask_name != key}
+            if key.startswith('@'):
+                del self.data[key]
+                self.masks = {col_name: mask_name for col_name, mask_name in self.masks.items() if mask_name != key and col_name != key}
+            else:
+                del self.data[key]
+                if '@' + key in self.data:
+                    del self.data['@' + key]
+                if key in self.foreign_ids:
+                    del self.foreign_ids[key]
+                self.masks = {col_name: mask_name for col_name, mask_name in self.masks.items() if mask_name not in (key, '@'+key) and col_name not in (key, '@'+key)}
         # del table[["mention_id", "features", "label"]]
         elif isinstance(key, tuple):
             assert len(key) == 1
@@ -411,8 +410,8 @@ class Table:
         densified_masks = {}
         sparsified_masks = {}
         for col_name, mask_name in self.masks.items():
-            mask = self.data[mask_name]
-            col = self.data[col_name]
+            mask = self[mask_name]
+            col = self[col_name]
             if issparse(mask) and not issparse(col):
                 if mask_name not in densified_masks:
                     densified_masks[mask_name] = mask.toarray()
@@ -495,7 +494,25 @@ class Table:
 
 
 class Batcher:
-    def __init__(self, tables, main_table=None, masks=None, subcolumn_names=None, foreign_ids=None, primary_ids=None, check=True):
+    def set_join_order_(self, partial_order=(), complete=False):
+        if not complete:
+            self.join_order = list(partial_order)
+            return
+        queried_tables = set(partial_order)
+        self.join_order = []
+        queue = list(partial_order)
+        for name in queue:
+            self.join_order.append(name)
+            for table_id, referenced_table in self.tables[name].foreign_ids.items():
+                if referenced_table not in queue and referenced_table not in self.join_order:
+                    queue.append(referenced_table)
+
+    def set_join_order(self, partial_order=(), complete=False):
+        self = self.copy()
+        self.set_join_order_(partial_order=partial_order, complete=complete)
+        return self
+
+    def __init__(self, tables, join_order=None, masks=None, subcolumn_names=None, foreign_ids=None, primary_ids=None, check=True):
         """
 
         Parameters
@@ -503,11 +520,14 @@ class Batcher:
 
         tables: dict[str, dict]
         """
-        self.main_table = main_table or next(iter(tables.keys()))
         if isinstance(next(iter(tables.values())), Table):
             self.tables = tables
             for table in tables.values():
                 table.batcher = self
+            if join_order is not None:
+                self.join_order = join_order
+            else:
+                self.set_join_order_([next(iter(tables.keys()))], complete=True)
             return
         subcolumn_names = {table_name: dict(cols) for table_name, cols in subcolumn_names.items()} if subcolumn_names is not None else {}
         if check:
@@ -587,26 +607,33 @@ class Batcher:
                        batcher=self)
             for key, table_data in tables.items()
         }  # type: dict[str, Table]
+        if join_order is None:
+            join_order = next(iter(tables.keys()))
+        if isinstance(join_order, str):
+            self.set_join_order_([join_order], complete=True)
+        else:
+            assert isinstance(join_order, (tuple, list))
+            self.join_order = join_order
 
     @property
     def primary_ids(self):
-        return self.tables[self.main_table].primary_ids
+        return self.tables[self.join_order[0]].primary_ids
 
     @property
     def device(self):
-        return getattr(next(iter(self.tables[self.main_table].values())), 'device', None)
+        return getattr(next(iter(self.tables[self.join_order[0]].values())), 'device', None)
 
     def __len__(self):
-        return len(self.tables[self.main_table])
+        return len(self.tables[self.join_order[0]])
 
     def keys(self):
-        return self.tables[self.main_table].keys()
+        return self.tables[self.join_order[0]].keys()
 
     def values(self):
-        return self.tables[self.main_table].values()
+        return self.tables[self.join_order[0]].values()
 
     def items(self):
-        return self.tables[self.main_table].items()
+        return self.tables[self.join_order[0]].items()
 
     def __iter__(self):
         return iter(self.values())
@@ -617,10 +644,10 @@ class Batcher:
             key = (key,)
         if isinstance(key, tuple):
             if key[0] not in self.tables:
-                key = (self.main_table, *key)
+                key = (self.join_order[0], *key)
             if len(key) == 1:
                 self = self.copy()
-                self.main_table = key[0]
+                self.set_join_order_(key, complete=True)
                 return self
             elif isinstance(key[1], str):
                 if len(key) == 2:
@@ -628,7 +655,7 @@ class Batcher:
                 return self.tables[key[0]][key[1:]]
             elif isinstance(key[1], list) and isinstance(key[1][0], str):
                 assert len(key) == 2
-                return Batcher({key[0]: self.tables[key[0]][key[1]]})
+                return Batcher({key[0]: self.tables[key[0]][key[1]]}, join_order=[key[0]])
             else:
                 assert len(key) == 2
                 table, indexer = key
@@ -653,13 +680,20 @@ class Batcher:
                 indexer = torch.nonzero(indexer, as_tuple=True)[0]
             elif dtype == np.bool:
                 indexer = np.nonzero(indexer)[0]
-        return self.query_ids(indexer, table=table)
+        if table is not None:
+            self = self[table]
+        return self.query_ids(indexer)
 
     def __setitem__(self, key, value):
         if isinstance(key, str):
-            assert isinstance(value, Batcher) and len(value.tables.keys()) == 1
-            self.tables[key] = next(iter(value.tables.values()))
-            self.tables[key].batcher = self
+            if isinstance(value, Batcher) and len(value.tables.keys()) == 1:
+                self.tables[key] = next(iter(value.tables.values()))
+                self.tables[key].batcher = self
+            elif isinstance(value, Table):
+                self.tables[key] = value
+                self.tables[key].batcher = self
+            else:
+                raise Exception()
         elif isinstance(key, tuple):
             if len(key) == 2:
                 self.tables[key[0]][key[1]] = value
@@ -693,29 +727,22 @@ class Batcher:
         raise Exception()
 
     def copy(self):
-        return Batcher({key: table.copy() for key, table in self.tables.items()}, main_table=self.main_table)
+        return Batcher({key: table.copy() for key, table in self.tables.items()}, join_order=self.join_order)
 
-    def query_ids(self, ids, table=None, inplace=False, **densify_kwargs):
+    def query_ids(self, ids, inplace=False, **densify_kwargs):
         if not inplace:
             self = self.copy()
-        if table is None:
-            table = self.main_table
-        else:
-            self.main_table = table
-        selected_ids = {table: ids}
+        selected_ids = {self.join_order[0]: ids}
         queried_tables = set()
-        queue = [table]
-        while len(queue):
-            table_name = queue.pop(0)
+        for table_name in self.join_order:
             # Ex: table_name = relations
-            print("Querying", table_name, len(selected_ids[table_name]), selected_ids[table_name])
-            # print("Querying", table_name, len(selected_ids[table_name]))
+            # print("Querying", table_name, len(selected_ids[table_name]), selected_ids[table_name])
             table = self.tables[table_name][selected_ids[table_name]]
             table.prune_()
             self.tables[table_name] = table
             queried_tables.add(table_name)
             for foreign_id, reference_table in table.foreign_ids.items():
-                print("   Processing foreign", foreign_id, "->", reference_table)
+                # print("   Processing foreign", foreign_id, "->", reference_table)
                 # Ex: col_name = from_mention_id
                 #     foreign_table_name = mention
                 #     foreign_table_id = mention_id
@@ -741,9 +768,7 @@ class Batcher:
                 table['@' + foreign_id] = relative_ids
                 if mask_name is not None and new_mask is not None:
                     table['@' + mask_name] = new_mask
-                if reference_table not in queried_tables and reference_table not in queue:
-                    queue.append(reference_table)
-                    print("  Adding table", reference_table, "to queue")
+                    # print("  Adding table", reference_table, "to queue")
 
         if len(densify_kwargs):
             self.densify_(**densify_kwargs)
@@ -772,8 +797,7 @@ class Batcher:
         return new_self
 
     def slice_tables_(self, names):
-        if self.main_table not in names:
-            self.main_table = names[0]
+        self.join_order = [name for name in self.join_order if name in names]
         for name in names:
             table = self.tables[name]
             new_foreign_ids = {}
@@ -781,7 +805,7 @@ class Batcher:
                 if referenced_table_name not in names:
                     table.compute_foreign_absolute_(foreign_id)
                     if '@' + foreign_id in table.keys():
-                        del table.data['@' + foreign_id]
+                        del table['@' + foreign_id]
                 else:
                     new_foreign_ids[foreign_id] = referenced_table_name
             table.foreign_ids = new_foreign_ids
@@ -836,6 +860,11 @@ class Batcher:
         else:
             kwargs['batch_size'] = batch_size
             kwargs['shuffle'] = shuffle
+        if batch_sampler is not None:
+            kwargs.pop("batch_size", None)
+            kwargs.pop("shuffle", None)
+            kwargs.pop("sampler", None)
+            kwargs.pop("drop_last", None)
         return DataLoader(range(len(self)),  # if self._idx is None else self._idx,
                           collate_fn=lambda ids: self.query_ids(ids, device=device),
                           batch_sampler=batch_sampler,
