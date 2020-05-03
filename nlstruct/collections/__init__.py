@@ -1,2 +1,2 @@
-from .batcher import Batcher
+from .batcher import Batcher, Table
 from .dataset import Dataset
