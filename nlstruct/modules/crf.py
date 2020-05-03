@@ -211,6 +211,17 @@ class BIODecoder(LinearChainCRF):
                          with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
+    def spans_to_tags(spans, sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+        positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
+        mention_tags = (
+            # I tags
+              (((positions >= begins.unsqueeze(1)) & (positions < ends.unsqueeze(1))).long() * (ner_labels.unsqueeze(1) * 2 + 2))
+              # B tags (= I tag - 1)
+              - ((positions == begins.unsqueeze(1).long()) * 1)
+        )
+        return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
+
+    @staticmethod
     def tags_to_spans(tag, mask=None):
         if mask is not None:
             tag = tag.masked_fill(~mask, 0)
@@ -285,6 +296,22 @@ class BIOULDecoder(LinearChainCRF):
                          transitions_mask=transitions_mask,
                          end_transitions_mask=end_transitions_mask,
                          with_start_end_transitions=with_start_end_transitions)
+
+    @staticmethod
+    def spans_to_tags(spans, sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+        B, I, L, U = 0, 1, 2, 3
+        positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
+        mention_tags = (
+            # I tags
+              (((positions >= begins.unsqueeze(1)) & (positions < ends.unsqueeze(1))).long() * (ner_labels.unsqueeze(1) * 4 + I))
+              # B tags
+              + ((positions == begins.unsqueeze(1).long()) * (B-I))
+              # L tags
+              + ((positions == ends.unsqueeze(1).long()) * (L-I))
+              # U tags
+              + ((((positions == begins) & (positions == ends)).unsqueeze(1).long()) * (U - (B-I) - (L-I)))
+        )
+        return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
     @staticmethod
     def tags_to_spans(tag, mask=None):
