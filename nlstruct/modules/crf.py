@@ -211,7 +211,7 @@ class BIODecoder(LinearChainCRF):
                          with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
-    def spans_to_tags(spans, sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+    def spans_to_tags(sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
         positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
         mention_tags = (
             # I tags
@@ -298,7 +298,7 @@ class BIOULDecoder(LinearChainCRF):
                          with_start_end_transitions=with_start_end_transitions)
 
     @staticmethod
-    def spans_to_tags(spans, sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+    def spans_to_tags(sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
         B, I, L, U = 0, 1, 2, 3
         positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
         mention_tags = (
