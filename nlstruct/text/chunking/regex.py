@@ -17,6 +17,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                      reg_token=TOKEN_REGEX,
                      text_col="text",
                      doc_id_col="doc_id",
+                     balance_parenthesis=True,
                      with_tqdm=False, verbose=0):
     """
     Simple split MIMIC docs into sentences:
@@ -78,7 +79,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                     queued_spans = queued_spans[max_sentence_length_:]
                     sentences.append(txt[b:e])
                     sentence_idx += 1
-                if min_sentence_length is not None and len(queued_spans) < min_sentence_length:
+                if min_sentence_length is not None and len(queued_spans) < min_sentence_length or (balance_parenthesis and part.count("(") > part.count(")")):
                     idx += len(part)
                     continue
                 if len(queued_spans):
