@@ -253,7 +253,7 @@ def get_deduplicator(values):
 
 def index_slice(values, indices):
     if issparse(values):
-        return values[indices]
+        return values[indices].astype(values.dtype)
     if hasattr(values, 'shape'):
         return values[indices]
     elif hasattr(indices, 'shape'):
