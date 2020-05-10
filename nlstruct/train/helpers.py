@@ -274,4 +274,4 @@ def run_optimization(
                     state[name] = dumped[name]
         else:
             print(f"Could not restore model to its best state: {monitor.best_epoch}")
-    return {**history[monitor.best_epoch - 1], "best_epoch": monitor.best_epoch}
+    return [{**history[monitor.best_epoch - 1], "best_epoch": monitor.best_epoch}, history]
