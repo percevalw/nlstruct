@@ -205,11 +205,13 @@ class Table:
                 freeze_reference=True,
             )[:2]
 
-            assert (new_mask is None or new_mask.sum() == np.prod(new_mask.shape)) or not (mask_name is None), \
-                f"Unkown ids were found in {name} and no existing mask could be found to mask these values"
+            #assert (new_mask is None or new_mask.sum() == np.prod(new_mask.shape)) or not (mask_name is None), \
+            #    f"Unkown ids were found in {name} and no existing mask could be found to mask these values"
+            self.data['@' + name] = relative_ids
             if new_mask is not None and mask_name is not None:
                 self.data['@' + mask_name] = new_mask
-                self.data['@' + name] = relative_ids
+            elif new_mask is not None:
+                relative_ids[~new_mask] = -1
             return relative_ids
         elif name in self.masks:
             mask_name = name
@@ -752,6 +754,7 @@ class Batcher:
                 mask_name = table.masks.get(foreign_id, None)
                 table_iloc = selected_ids.get(reference_table, None)
                 if reference_table in queried_tables:
+                    # print("   Frozen")
                     relative_ids, new_mask, unique_ids = factorize(
                         values=table[foreign_id],
                         mask=table[mask_name],
@@ -759,15 +762,18 @@ class Batcher:
                         freeze_reference=True,
                     )
                 else:
+                    # print("   Adding new ids to ids to query")
                     relative_ids, new_mask, selected_ids[reference_table] = factorize(
                         values=table['@' + foreign_id],
-                        mask=table[mask_name],
+                        mask=table[mask_name] if mask_name is not None else (table['@' + foreign_id] != -1),
                         reference_values=selected_ids.get(reference_table, None),
                         freeze_reference=False,
                     )
                 table['@' + foreign_id] = relative_ids
                 if mask_name is not None and new_mask is not None:
                     table['@' + mask_name] = new_mask
+                elif mask_name is None and new_mask is not None:
+                    relative_ids[~new_mask] = -1
                     # print("  Adding table", reference_table, "to queue")
 
         if len(densify_kwargs):
