@@ -217,7 +217,7 @@ class BIODecoder(LinearChainCRF):
             # I tags
               (((positions >= begins.unsqueeze(1)) & (positions < ends.unsqueeze(1))).long() * (ner_labels.unsqueeze(1) * 2 + 2))
               # B tags (= I tag - 1)
-              - ((positions == begins.unsqueeze(1).long()) * 1)
+              - ((positions == begins.unsqueeze(1)).long() * 1)
         )
         return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
@@ -270,6 +270,7 @@ class BIOULDecoder(LinearChainCRF):
             transitions_mask[B + STRIDE, I + STRIDE] = 0  # B-i to I-i
             transitions_mask[I + STRIDE, I + STRIDE] = 0  # I-i to I-i
             transitions_mask[I + STRIDE, L + STRIDE] = 0  # I-i to L-i
+            transitions_mask[B + STRIDE, L + STRIDE] = 0  # B-i to L-i
             transitions_mask[L + STRIDE, O] = 0  # L-i to O
             transitions_mask[O, U + STRIDE] = 0  # O to U-i
             transitions_mask[U + STRIDE, O] = 0  # U-i to O
@@ -301,15 +302,17 @@ class BIOULDecoder(LinearChainCRF):
     def spans_to_tags(sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
         B, I, L, U = 0, 1, 2, 3
         positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
+        begins = begins.unsqueeze(1)
+        ends = ends.unsqueeze(1)
         mention_tags = (
             # I tags
-              (((positions >= begins.unsqueeze(1)) & (positions < ends.unsqueeze(1))).long() * (ner_labels.unsqueeze(1) * 4 + I))
+              (((positions >= begins) & (positions < ends)).long() * (1 + ner_labels.unsqueeze(1) * 4 + I))
               # B tags
-              + ((positions == begins.unsqueeze(1).long()) * (B-I))
+              + ((positions == begins).long() * (B-I))
               # L tags
-              + ((positions == ends.unsqueeze(1).long()) * (L-I))
+              + ((positions == (ends - 1)).long() * (L-I))
               # U tags
-              + ((((positions == begins) & (positions == ends)).unsqueeze(1).long()) * (U - (B-I) - (L-I)))
+              + (((positions == begins) & (positions == (ends - 1))).long() * ((U-I) - (B-I) - (L-I)))
         )
         return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
