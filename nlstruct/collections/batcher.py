@@ -147,7 +147,7 @@ class Table:
         self.subcolumn_names = subcolumn_names or {}
         self.foreign_ids = foreign_ids or {}
         self.batcher = batcher
-        for col_name in foreign_ids:
+        for col_name in self.foreign_ids:
             mask_name = self.masks.get(col_name, None)
             if mask_name is not None:
                 self.masks.setdefault('@' + col_name, mask_name)
