@@ -17,7 +17,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                      reg_token=TOKEN_REGEX,
                      text_col="text",
                      doc_id_col="doc_id",
-                     balance_parenthesis=True,
+                     balance_parentheses=True,
                      with_tqdm=False, verbose=0):
     """
     Simple split MIMIC docs into sentences:
@@ -30,6 +30,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     max_sentence_length: int
     with_tqdm: bool
     verbose: int
+    balance_parentheses: bool
     doc_id_col: str
     text_col: str
 
