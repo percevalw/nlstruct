@@ -80,7 +80,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                     queued_spans = queued_spans[max_sentence_length_:]
                     sentences.append(txt[b:e])
                     sentence_idx += 1
-                if min_sentence_length is not None and len(queued_spans) < min_sentence_length or (balance_parenthesis and part.count("(") > part.count(")")):
+                if min_sentence_length is not None and len(queued_spans) < min_sentence_length or (balance_parentheses and part.count("(") > part.count(")")):
                     idx += len(part)
                     continue
                 if len(queued_spans):
