@@ -144,6 +144,8 @@ def load_genia_ner(resource_path="genia_ner", version="3.02", doc_attributes={},
         mentions = mentions.query('~sem.isna()').copy()
         mentions["label"] = mentions["sem"].apply(lambda x: agg_type(x, merge_composite_types=merge_composite_types))
         mentions = mentions.query("~label.isna()").copy()
+    else:
+        mentions["label"] = mentions["sem"]
 
     mentions["mention_id"] = np.arange(len(mentions))
     mentions["fragment_id"] = np.arange(len(mentions))
