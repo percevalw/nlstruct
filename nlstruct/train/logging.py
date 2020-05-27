@@ -7,6 +7,7 @@ class TrainingLogger(object):
         int: (5, lambda x: x),
         float: (10, "{:.2E}".format),
         bool: (3, lambda x: ("YES" if x else " NO")),
+        type(None): (5, lambda x: str(x)),
     }
 
     def __init__(self, key, formatter, patience_warmup=None, patience=None):
