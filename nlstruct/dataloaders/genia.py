@@ -113,7 +113,6 @@ def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}
     filename = {"3.02": "GENIAcorpus3.02.merged.xml", "3.02p": "GENIAcorpus3.02.merged.xml"}
 
     root_node = ET.parse(path / filename[version]).getroot()
-    print(path / f'GENIAcorpus{version}.merged.xml')
     all_mentions = []
     all_docs = []
     seen_docs = set()
