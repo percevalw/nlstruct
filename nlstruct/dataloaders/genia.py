@@ -58,10 +58,15 @@ def load_genia_events(resource_path="genia", doc_attributes={}):
 
 
 GENIA_NER_REMOTE_FILES = {
-    "3.02": RemoteFileMetadata(
+    "3.02p": RemoteFileMetadata(
         url="http://www.nactem.ac.uk/GENIA/current/GENIA-corpus/Part-of-speech/GENIAcorpus3.02p.tgz",
         checksum="8faa7813641cf41d24dfa13f24382ef73a94654bff2297f763fc6b19102c8b74",
-        filename="GENIAcorpus3.02p.tgz")
+        filename="GENIAcorpus3.02p.tgz"),
+    "3.02": RemoteFileMetadata(
+        url="http://www.nactem.ac.uk/GENIA/current/GENIA-corpus/Term/GENIAcorpus3.02.tgz",
+        checksum="85b2aede313308c33783ba508d054d0af0ff9c7e48490f0db5168a9f88d74d1c",
+        filename="GENIAcorpus3.02.tgz"
+    ),
 }
 
 
@@ -99,14 +104,16 @@ def agg_type(x, merge_composite_types=True):
     return None
 
 
-def load_genia_ner(resource_path="genia_ner", version="3.02", doc_attributes={}, raw=False, merge_composite_types=True):
+def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}, raw=False, merge_composite_types=True):
     path = root.resource(resource_path)
     [file] = ensure_files(path, [GENIA_NER_REMOTE_FILES[version]], mode=NetworkLoadMode.AUTO)
     with tarfile.open(file, "r:gz") as tar:
         tar.extractall(path)
 
-    root_node = ET.parse(path / f'GENIAcorpus{version}.merged.xml').getroot()
+    filename = {"3.02": "GENIAcorpus3.02.merged.xml", "3.02p": "GENIAcorpus3.02.merged.xml"}
 
+    root_node = ET.parse(path / filename[version]).getroot()
+    print(path / f'GENIAcorpus{version}.merged.xml')
     all_mentions = []
     all_docs = []
     seen_docs = set()
