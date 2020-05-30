@@ -85,7 +85,7 @@ def regex_sub_with_spans(pattern, replacement, text):
     begins = []
     ends = []
     deltas = []
-    for match in reversed(list(re.finditer(pattern, text))):
+    for match in reversed(list(re.finditer(pattern, text, flags=re.DOTALL))):
         middle = make_str_from_groups(replacement, [match.group(i) for i in needed_groups])
         start = match.start()
         end = match.end()
