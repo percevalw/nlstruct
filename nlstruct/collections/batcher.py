@@ -888,7 +888,7 @@ class Batcher:
 
 class DataloaderMixer(object):
     def __init__(self, dataloaders):
-        if not isinstance(dataloaders, list):
+        if not isinstance(dataloaders, dict):
             dataloaders = dict(enumerate(dataloaders))
         self.dataloaders = list(dataloaders.values())
         self.tasks = np.concatenate([
