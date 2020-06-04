@@ -890,10 +890,10 @@ class DataloaderMixer(object):
     def __init__(self, dataloaders):
         if not isinstance(dataloaders, list):
             dataloaders = dict(enumerate(dataloaders))
-        self.dataloaders = dataloaders
+        self.dataloaders = list(dataloaders.values())
         self.tasks = np.concatenate([
             np.full(len(dataloader), fill_value=i)
-            for i, dataloader in enumerate(dataloaders.values())
+            for i, dataloader in enumerate(self.dataloaders)
         ])
         self.task_names = list(dataloaders.keys())
 
