@@ -674,6 +674,67 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
     return dfs, vocabularies
 
 
+def assign_sorted_id(df, name, groupby, sort_on):
+    """
+    Assign a sorted id grouped by the values in `groupby`
+
+    Parameters
+    ----------
+    df:  pd.DataFrame
+    name: str
+        Name of the new id
+    groupby: (list of str) or str
+    sort_on: (list of str) or str
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    df = df.sort_values(sort_on)
+    df[name] = np.arange(len(df))
+    return df.nlstruct.groupby_assign(groupby, {name: lambda x: tuple(np.argsort(np.argsort(x)))})
+
+
+def encode_ids(dfs, names=None, inplace=True):
+    """
+    Encode multiple columns of several dataframes into a unique shared id
+
+    Parameters
+    ----------
+    dfs: list of pd.DataFrame or pd.DataFrame
+        DataFrame on which we want to replace ids by a unique code
+    names: str or tuple or list
+        Tuple of columns to transform into a unique ids, or list to specify names for each dataframe
+    inplace: bool
+        Inplace
+    Returns
+    -------
+    pd.DataFrame or (pd.DataFrame, pd.DataFrame)
+    """
+    if isinstance(names, str):
+        names = (names,)
+    if isinstance(names, tuple):
+        names = [names for _ in dfs]
+    if isinstance(dfs, pd.DataFrame):
+        dfs = [dfs]
+    assert len(names) == len(dfs)
+    all_encoded_ids, unique_ids = factorize_rows([frame[list(n)] for n, frame in zip(names, dfs)])
+    res = []
+    if not inplace:
+        id_to_frame = {}
+        for i, frame in enumerate(list(dfs)):
+            if id(frame) not in id_to_frame:
+                id_to_frame[id(frame)] = frame.copy()
+            dfs[i] = id_to_frame[id(frame)]
+    for frame, n, frame_encoded_id in zip(dfs, names, all_encoded_ids):
+        frame[n[-1]] = frame_encoded_id
+        if not inplace:
+            res.append(frame)
+    if not inplace:
+        return res, unique_ids
+    return unique_ids
+
+
 class FasterGroupBy:
     def __init__(self, groupby_object, dtypes, name=None):
         self.groupby_object = groupby_object
