@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from termcolor import colored
 
 
@@ -17,9 +19,11 @@ class TrainingLogger(object):
         self.key = key
         self.patience_warmup = patience_warmup
         self.patience = patience
-        if "epoch" not in formatter:
-            formatter["epoch"] = {}
-        self.formatter = formatter
+        if isinstance(formatter, dict):
+            self.formatter = defaultdict(lambda: False)
+            self.formatter.update(formatter)
+        if "epoch" not in self.formatter:
+            self.formatter["epoch"] = {}
 
     def display(self, info):
         if self.fields is None:
