@@ -205,7 +205,7 @@ class Table:
                 freeze_reference=True,
             )[:2]
 
-            #assert (new_mask is None or new_mask.sum() == np.prod(new_mask.shape)) or not (mask_name is None), \
+            # assert (new_mask is None or new_mask.sum() == np.prod(new_mask.shape)) or not (mask_name is None), \
             #    f"Unkown ids were found in {name} and no existing mask could be found to mask these values"
             self.data['@' + name] = relative_ids
             if new_mask is not None and mask_name is not None:
@@ -349,7 +349,7 @@ class Table:
                     del self.data['@' + key]
                 if key in self.foreign_ids:
                     del self.foreign_ids[key]
-                self.masks = {col_name: mask_name for col_name, mask_name in self.masks.items() if mask_name not in (key, '@'+key) and col_name not in (key, '@'+key)}
+                self.masks = {col_name: mask_name for col_name, mask_name in self.masks.items() if mask_name not in (key, '@' + key) and col_name not in (key, '@' + key)}
         # del table[["mention_id", "features", "label"]]
         elif isinstance(key, tuple):
             assert len(key) == 1
@@ -493,6 +493,15 @@ class Table:
             new_self.compute_foreign_absolute_(name)
         new_self.drop_relative_data_()
         return new_self.__dict__
+
+
+class QueryFunction:
+    def __init__(self, batcher, **kwargs):
+        self.batcher = batcher
+        self.kwargs = kwargs
+
+    def __call__(self, ids):
+        return self.batcher.query_ids(ids, **self.kwargs)
 
 
 class Batcher:
@@ -803,7 +812,7 @@ class Batcher:
         return new_self
 
     def slice_tables_(self, names):
-        self.join_order = [name for name in self.join_order if name in names]
+        self.join_order = names
         for name in names:
             table = self.tables[name]
             new_foreign_ids = {}
@@ -872,9 +881,28 @@ class Batcher:
             kwargs.pop("sampler", None)
             kwargs.pop("drop_last", None)
         return DataLoader(range(len(self)),  # if self._idx is None else self._idx,
-                          collate_fn=lambda ids: self.query_ids(ids, device=device),
+                          collate_fn=QueryFunction(self, device=device),
                           batch_sampler=batch_sampler,
                           **kwargs)
+
+
+class DataloaderMixer(object):
+    def __init__(self, dataloaders):
+        self.dataloaders = dataloaders
+        self.tasks = np.concatenate([
+            np.full(len(dataloader), fill_value=i)
+            for i, dataloader in enumerate(dataloaders)
+        ])
+
+    def __len__(self):
+        return len(self.tasks)
+
+    def __iter__(self):
+        tasks = self.tasks.copy()
+        np.random.shuffle(tasks)
+        iterators = [iter(dataloader) for dataloader in self.dataloaders]
+        for task_id in tasks:
+            yield task_id, next(iterators[task_id])
 
 
 if __name__ == "__main__":
