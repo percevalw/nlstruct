@@ -888,11 +888,14 @@ class Batcher:
 
 class DataloaderMixer(object):
     def __init__(self, dataloaders):
+        if not isinstance(dataloaders, list):
+            dataloaders = dict(enumerate(dataloaders))
         self.dataloaders = dataloaders
         self.tasks = np.concatenate([
             np.full(len(dataloader), fill_value=i)
-            for i, dataloader in enumerate(dataloaders)
+            for i, dataloader in enumerate(dataloaders.values())
         ])
+        self.task_names = list(dataloaders.keys())
 
     def __len__(self):
         return len(self.tasks)
@@ -902,7 +905,7 @@ class DataloaderMixer(object):
         np.random.shuffle(tasks)
         iterators = [iter(dataloader) for dataloader in self.dataloaders]
         for task_id in tasks:
-            yield task_id, next(iterators[task_id])
+            yield self.task_names[task_id], next(iterators[task_id])
 
 
 if __name__ == "__main__":
