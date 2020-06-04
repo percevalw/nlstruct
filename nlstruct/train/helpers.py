@@ -1,15 +1,17 @@
 import itertools
 import threading
 import time
+from warnings import warn
 
 import regex
 import sh
 
 from nlstruct.environment.cache import yaml_load, yaml_dump
-from nlstruct.utils.deep_attributes import set_deep_attr
+from nlstruct.train.helpers import TrainingState, StoppableThread
 from nlstruct.train.logging import TrainingLogger
 from nlstruct.train.random import seed_all
 from nlstruct.train.schedule import ConcatSchedule
+from nlstruct.utils.deep_attributes import set_deep_attr
 from nlstruct.utils.torch import torch_global as tg
 
 
@@ -49,7 +51,7 @@ class TrainingState(object):
             self.best_epoch = self.epoch
         if self.patience is not None and (self.last_patience_reset_best_loss is None or abs(self.goal - loss) < abs(
               self.goal - self.last_patience_reset_best_loss) * (
-              1 - self.patience_rate)):
+                                                1 - self.patience_rate)):
             self.patience_counter = 0
             self.last_patience_reset_best_loss = self.best_loss
         elif self.patience is not None and self.epoch >= self.patience_warmup:
@@ -100,7 +102,7 @@ class StoppableThread(threading.Thread):
     """Thread class with a stop() method. The thread itself has to check
     regularly for the stopped() condition."""
 
-    def __init__(self,  *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super(StoppableThread, self).__init__(*args, **kwargs)
         self._stop_event = threading.Event()
 
@@ -109,6 +111,161 @@ class StoppableThread(threading.Thread):
 
     def stopped(self):
         return self._stop_event.is_set()
+
+
+class OptimizationIterator:
+    def __init__(self,
+                 metrics_info,
+                 max_epoch,
+                 main_score=None,
+                 patience_warmup=None,
+                 patience_rate=None,
+                 patience=None,
+                 state=None,
+                 n_save_checkpoints=1,
+                 exit_on_score=None,
+                 cache=None,
+                 cache_policy="all",
+                 with_writer=False,
+                 seed=42,
+                 mutable_state_policy="warn",
+                 ):
+        self.state = {} if state is None else state
+
+        # Check state
+        for key, val in state.items():
+            if not isinstance(val, (int, float, complex, str, tuple, frozenset, bytes)) and not hasattr(val, 'load_state_dict'):
+                if mutable_state_policy == "warn":
+                    warn(f"Entry '{key}' in the state seems to be mutable but has no load_state_dict/state_dict methods. This could lead to unpredictable behaviors.")
+                elif mutable_state_policy == "raise":
+                    raise Exception(f"Entry '{key}' in the state seems to be mutable but has no load_state_dict/state_dict methods. This could lead to unpredictable behaviors.")
+                else:
+                    assert mutable_state_policy is False, "mutable_state_policy must be 'warn', 'raise' or False"
+
+        if cache is None:
+            cache_policy = []
+        elif cache_policy is None:
+            cache_policy = []
+        elif cache_policy == "all":
+            cache_policy = ["read_history", "write_history", "read_checkpoints", "write_checkpoints"]
+        elif isinstance(cache_policy, str):
+            cache_policy = [cache_policy, ]
+        if "all_history" in cache_policy:
+            cache_policy.remove("all_history")
+            cache_policy.extend(["read_history", "write_history"])
+        if "all_checkpoints" in cache_policy:
+            cache_policy.remove("all_checkpoints")
+            cache_policy.extend(["read_checkpoints", "write_checkpoints"])
+
+        self.seed = seed
+        self.main_score = main_score
+        self.n_save_checkpoints = n_save_checkpoints
+        if with_writer and cache is not None:
+            from tensorboardX import SummaryWriter
+            self.writer = SummaryWriter(logdir=self.cache.entry('logs'))
+        else:
+            self.writer = None
+        self.cache_policy = cache_policy
+        self.cache = cache
+        self.history = (cache.load("history.yaml", loader=yaml_load) if "read_history" in cache_policy else []) or []
+        self.score_logger = TrainingLogger(key=main_score,
+                                           patience_warmup=patience_warmup, patience=patience,
+                                           formatter=metrics_info)
+        self.monitor = TrainingState(goal=metrics_info[main_score]['goal'] if main_score is not None else main_score,
+                                     patience_warmup=patience_warmup, patience=patience,
+                                     patience_rate=patience_rate, max_epoch=max_epoch,
+                                     exit_on_score=exit_on_score)
+        assert self.state.setdefault("epoch", 0) == 0, "Init epoch must be 0"
+        self.dumps = {}
+
+    def __iter__(self):
+        while self.monitor.keep_going:
+            # Example 1: self.monitor.epoch = 12, self.state["epoch"] = 7, len(self.history) == 12
+            # -> no more scores in self.history: we must train the model, so we go the "else"
+            scores = {}
+            model_has_been_trained = False
+            if len(self.history) > self.monitor.epoch:
+                scores = self.history[self.monitor.epoch]
+            else:
+                # Try to find the closest checkpointed model, starting from the required epoch
+                # Iterate over (13, 12, 11, 10, 9, 8) to try and find a checkpointed model
+                # region load closest checkpoint to required epoch
+                for epoch in range(self.monitor.epoch + 1, self.state["epoch"], -1):
+                    dumped = self.cache.load(f"checkpoint-{str(epoch)}.pt", map_location=tg.device) if "read_checkpoints" in self.cache_policy else None
+                    if dumped is not None:
+                        for name in dumped.keys():
+                            persistable = self.state.get(name, None)
+                            if name in self.state and hasattr(persistable, 'load_state_dict'):
+                                persistable.load_state_dict(dumped[name])
+                            else:
+                                self.state[name] = dumped[name]
+                            del persistable
+                        # ex: now self.state["epoch"] = 11
+                        self.state["epoch"] = epoch
+                        del dumped
+                        break
+
+                # endregion
+                # Train over the remaining epochs if needed
+                # Iterate over self.state["epoch"] (11, 12)
+                # region train until required epoch
+                while self.state["epoch"] < self.monitor.epoch + 1:
+                    seed_all(self.seed + self.state["epoch"])
+                    time_start = time.time()
+                    epoch_before = self.state["epoch"]
+                    epoch_scores = {}
+                    yield epoch_before, self.state, self.history, lambda update: epoch_scores.update(update)
+
+                    time_end = time.time()
+                    scores = {
+                        **{key: value.item() if hasattr(value, 'item') else value for key, value in epoch_scores.items()},
+                        "duration": time_end - time_start}
+                    if self.writer is not None:
+                        for score_name, score in scores.items():
+                            self.writer.add_scalar(score_name, score, self.state["epoch"])
+
+                    # Update epoch and declare that we have some changes to checkpoint
+                    self.state["epoch"] = epoch_before + 1
+                    model_has_been_trained = True
+
+                    # Update the scheduler with the computed metrics (might lower LR or weight decay)
+                    # scheduler.step(metrics=scores.get(self.main_score, 0), epoch=self.state["epoch"])
+                # endregion
+                # region update training self.state and dump model and self.history
+            self.history = self.history[:self.monitor.epoch] + [scores] + self.history[self.monitor.epoch + 1:]
+            self.monitor.record(scores[self.main_score] if self.main_score is not None else None)
+            if "write_history" in self.cache_policy:
+                self.cache.dump(self.history, "self.history.yaml", dumper=yaml_dump)
+            if model_has_been_trained:
+                dump_dict = {}
+                for name, persistable in self.state.items():
+                    if hasattr(persistable, 'state_dict'):
+                        dump_dict[name] = persistable.state_dict()
+                    else:
+                        dump_dict[name] = persistable
+                if "write_checkpoints" in self.cache_policy:
+                    self.dumps[self.state["epoch"]] = self.cache.dump(dump_dict, dest="checkpoint-{}.pt".format(self.state["epoch"]))
+            # Delete other self.dumps except the best one
+            for dump_epoch, dest in list(self.dumps.items()):
+                if dump_epoch <= self.state["epoch"] - self.n_save_checkpoints and dump_epoch != self.monitor.best_epoch:
+                    sh.rm(dest)
+                    self.dumps.pop(dump_epoch)
+            self.score_logger.display({"epoch": self.monitor.epoch, **scores})
+        if self.state["epoch"] != self.monitor.best_epoch and "read_checkpoints" in self.cache_policy:
+            dumped = self.cache.load(f"checkpoint-{str(self.monitor.best_epoch)}.pt", map_location=tg.device) if self.cache is not None else None
+            if dumped is not None:
+                print(f"Model restored to its best self.state: {self.monitor.best_epoch}")
+                for name in dumped.keys():
+                    persistable = self.state.get(name, None)
+                    if name in self.state and hasattr(persistable, 'load_state_dict'):
+                        persistable.load_state_dict(dumped[name])
+                    else:
+                        self.state[name] = dumped[name]
+            else:
+                print(f"Could not restore model to its best self.state: {self.monitor.best_epoch}")
+
+
+iter_optimization = OptimizationIterator
 
 
 def run_optimization(
@@ -124,8 +281,9 @@ def run_optimization(
       exit_on_score=None,
       cache=None,
       cache_policy="all",
-      with_writer=False,
+      with_writer=None,
       seed=42,
+      mutable_state_policy="warn",
       as_thread=False,
       _thread_should_stop=None,
 ):
@@ -146,132 +304,29 @@ def run_optimization(
                 cache_policy,
                 with_writer,
                 seed,
+                mutable_state_policy,
                 False,  # as_thread
                 lambda: x.stopped()  # _thread_should_stop
             ))
         x.start()
         return x
-    if state is None:
-        state = {}
-
-    if cache is None:
-        cache_policy = []
-    elif cache_policy is None:
-        cache_policy = []
-    elif cache_policy == "all":
-        cache_policy = ["read_history", "write_history", "read_checkpoints", "write_checkpoints"]
-    elif isinstance(cache_policy, str):
-        cache_policy = [cache_policy, ]
-    if "all_history" in cache_policy:
-        cache_policy.remove("all_history")
-        cache_policy.extend(["read_history", "write_history"])
-    if "all_checkpoints" in cache_policy:
-        cache_policy.remove("all_checkpoints")
-        cache_policy.extend(["read_checkpoints", "write_checkpoints"])
-
-    writer = None
-    history = (cache.load("history.yaml", loader=yaml_load) if "read_history" in cache_policy else []) or []
-    score_logger = TrainingLogger(key=main_score,
-                                  patience_warmup=patience_warmup, patience=patience,
-                                  formatter=metrics_info)
-    monitor = TrainingState(goal=metrics_info[main_score]['goal'] if main_score is not None else main_score,
-                            patience_warmup=patience_warmup, patience=patience,
-                            patience_rate=patience_rate, max_epoch=max_epoch,
-                            exit_on_score=exit_on_score)
-
-    assert state.setdefault("epoch", 0) == 0, "Init epoch must be 0"
-    dumps = {}
-
-    while monitor.keep_going:
-        # Example 1: monitor.epoch = 12, state["epoch"] = 7, len(history) == 12
-        # -> no more scores in history: we must train the model, so we go the "else"
-        scores = {}
-        model_has_been_trained = False
-        if len(history) > monitor.epoch:
-            scores = history[monitor.epoch]
-        else:
-            # Try to find the closest checkpointed model, starting from the required epoch
-            # Iterate over (13, 12, 11, 10, 9, 8) to try and find a checkpointed model
-            # region load closest checkpoint to required epoch
-            for epoch in range(monitor.epoch + 1, state["epoch"], -1):
-                dumped = cache.load(f"checkpoint-{str(epoch)}.pt", map_location=tg.device) if "read_checkpoints" in cache_policy else None
-                if dumped is not None:
-                    for name in dumped.keys():
-                        persistable = state.get(name, None)
-                        if name in state and hasattr(persistable, 'load_state_dict'):
-                            persistable.load_state_dict(dumped[name])
-                        else:
-                            state[name] = dumped[name]
-                        del persistable
-                    # ex: now state["epoch"] = 11
-                    state["epoch"] = epoch
-                    del dumped
-                    break
-
-            # endregion
-            # Train over the remaining epochs if needed
-            # Iterate over state["epoch"] (11, 12)
-            # region train until required epoch
-            while state["epoch"] < monitor.epoch + 1:
-                if _thread_should_stop is not None and _thread_should_stop():
-                    raise KeyboardInterrupt()
-                if writer is None and with_writer and cache is not None:
-                    from tensorboardX import SummaryWriter
-                    writer = SummaryWriter(logdir=cache.entry('logs'))
-
-                seed_all(seed + state["epoch"])
-                time_start = time.time()
-                epoch_before = state["epoch"]
-                if with_writer:
-                    epoch_scores = epoch_fn(writer)
-                else:
-                    epoch_scores = epoch_fn()
-
-                time_end = time.time()
-                scores = {
-                    **{key: value.item() if hasattr(value, 'item') else value for key, value in epoch_scores.items()},
-                    "duration": time_end - time_start}
-                if writer is not None:
-                    for score_name, score in scores.items():
-                        writer.add_scalar(score_name, score, state["epoch"])
-
-                # Update epoch and declare that we have some changes to checkpoint
-                state["epoch"] = epoch_before + 1
-                model_has_been_trained = True
-
-                # Update the scheduler with the computed metrics (might lower LR or weight decay)
-                # scheduler.step(metrics=scores.get(main_score, 0), epoch=state["epoch"])
-            # endregion
-            # region update training state and dump model and history
-        history = history[:monitor.epoch] + [scores] + history[monitor.epoch + 1:]
-        monitor.record(scores[main_score] if main_score is not None else None)
-        if "write_history" in cache_policy:
-            cache.dump(history, "history.yaml", dumper=yaml_dump)
-        if model_has_been_trained:
-            dump_dict = {}
-            for name, persistable in state.items():
-                if hasattr(persistable, 'state_dict'):
-                    dump_dict[name] = persistable.state_dict()
-                else:
-                    dump_dict[name] = persistable
-            if "write_checkpoints" in cache_policy:
-                dumps[state["epoch"]] = cache.dump(dump_dict, dest="checkpoint-{}.pt".format(state["epoch"]))
-        # Delete other dumps except the best one
-        for dump_epoch, dest in list(dumps.items()):
-            if dump_epoch <= state["epoch"] - n_save_checkpoints and dump_epoch != monitor.best_epoch:
-                sh.rm(dest)
-                dumps.pop(dump_epoch)
-        score_logger.display({"epoch": monitor.epoch, **scores})
-    if state["epoch"] != monitor.best_epoch and "read_checkpoints" in cache_policy:
-        dumped = cache.load(f"checkpoint-{str(monitor.best_epoch)}.pt", map_location=tg.device) if cache is not None else None
-        if dumped is not None:
-            print(f"Model restored to its best state: {monitor.best_epoch}")
-            for name in dumped.keys():
-                persistable = state.get(name, None)
-                if name in state and hasattr(persistable, 'load_state_dict'):
-                    persistable.load_state_dict(dumped[name])
-                else:
-                    state[name] = dumped[name]
-        else:
-            print(f"Could not restore model to its best state: {monitor.best_epoch}")
-    return [{**history[monitor.best_epoch - 1], "best_epoch": monitor.best_epoch}, history]
+    iterator = iter_optimization(
+        metrics_info,
+        max_epoch,
+        main_score,
+        patience_warmup,
+        patience_rate,
+        patience,
+        state,
+        n_save_checkpoints,
+        exit_on_score,
+        cache,
+        cache_policy,
+        with_writer,
+        seed,
+        mutable_state_policy,
+    )
+    for epoch_before, state, history, record in iterator:
+        epoch_scores = epoch_fn()
+        record(epoch_scores)
+    return [{**iterator.history[iterator.monitor.best_epoch - 1], "best_epoch": iterator.monitor.best_epoch}, iterator.history]
