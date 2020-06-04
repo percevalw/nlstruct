@@ -7,7 +7,6 @@ import regex
 import sh
 
 from nlstruct.environment.cache import yaml_load, yaml_dump
-from nlstruct.train.helpers import TrainingState, StoppableThread
 from nlstruct.train.logging import TrainingLogger
 from nlstruct.train.random import seed_all
 from nlstruct.train.schedule import ConcatSchedule
