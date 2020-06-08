@@ -234,7 +234,7 @@ class OptimizationIterator:
             self.history = self.history[:self.monitor.epoch] + [scores] + self.history[self.monitor.epoch + 1:]
             self.monitor.record(scores[self.main_score] if self.main_score is not None else None)
             if "write_history" in self.cache_policy:
-                self.cache.dump(self.history, "self.history.yaml", dumper=yaml_dump)
+                self.cache.dump(self.history, "history.yaml", dumper=yaml_dump)
             if model_has_been_trained:
                 dump_dict = {}
                 for name, persistable in self.state.items():
