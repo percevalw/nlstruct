@@ -20,7 +20,6 @@ from pandas import DataFrame
 import torch
 import xxhash
 import yaml
-from joblib._compat import PY3_OR_LATER
 from joblib.hashing import Hasher, _MyHash
 from joblib.numpy_pickle import NumpyArrayWrapper, NumpyUnpickler
 from joblib.numpy_pickle_compat import NDArrayWrapper
@@ -32,6 +31,7 @@ from nlstruct.environment.path import RelativePath, root
 
 logger = logging.getLogger()
 
+PY3_OR_LATER = sys.version_info[0] >= 3
 if PY3_OR_LATER:
     Pickler = pickle._Pickler
 else:
