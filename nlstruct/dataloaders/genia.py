@@ -104,7 +104,7 @@ def agg_type(x, merge_composite_types=True):
     return None
 
 
-def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}, raw=False, merge_composite_types=True):
+def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}, raw=False, merge_composite_types=True, drop_duplicates=False):
     path = root.resource(resource_path)
     [file] = ensure_files(path, [GENIA_NER_REMOTE_FILES[version]], mode=NetworkLoadMode.AUTO)
     with tarfile.open(file, "r:gz") as tar:
@@ -119,7 +119,10 @@ def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}
     for article in root_node.findall('article'):
         doc_id = article.findall('articleinfo/bibliomisc')[0].text
         if doc_id in seen_docs:
-            continue
+            if drop_duplicates:
+                continue
+            else:
+                doc_id = doc_id + "-bis"
         seen_docs.add(doc_id)
         title = article.findall('title/sentence')
         abstract = article.findall('abstract/sentence')
