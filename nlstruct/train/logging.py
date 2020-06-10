@@ -34,7 +34,6 @@ class TrainingLogger(object):
             for field in [*info.keys(), "patience_warmup", "patience"]:
                 if field not in info:
                     continue
-                i += 1
                 try:
                     format_info = self.formatter[field]
                 except KeyError:
@@ -42,7 +41,7 @@ class TrainingLogger(object):
                 if format_info is False:
                     continue
                 self.fields.append(field)
-                if i >= 1:
+                if i > 0:
                     s += " | "
                 if field in ("patience_warmup", "patience"):
                     min_width, field_formatter = format_info.get("format", self.default_format_map[str])
@@ -60,6 +59,7 @@ class TrainingLogger(object):
                 if field == self.key:
                     name = colored(name, "red")
                 s += " " * (width - name_length) + name
+                i += 1
             print(s)
 
         s = ""
