@@ -42,7 +42,7 @@ class TrainingLogger(object):
                 if format_info is False:
                     continue
                 self.fields.append(field)
-                if i > 0:
+                if i >= 1:
                     s += " | "
                 if field in ("patience_warmup", "patience"):
                     min_width, field_formatter = format_info.get("format", self.default_format_map[str])
