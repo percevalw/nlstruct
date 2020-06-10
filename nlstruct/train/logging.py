@@ -30,9 +30,11 @@ class TrainingLogger(object):
             print("\n")
             s = ""
             self.fields = []
-            for i, field in enumerate([*info.keys(), "patience_warmup", "patience"]):
+            i = 0
+            for field in [*info.keys(), "patience_warmup", "patience"]:
                 if field not in info:
                     continue
+                i += 1
                 try:
                     format_info = self.formatter[field]
                 except KeyError:
