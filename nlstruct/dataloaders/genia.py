@@ -104,7 +104,7 @@ def agg_type(x, merge_composite_types=True):
     return None
 
 
-def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}, raw=False, merge_composite_types=True, drop_duplicates=False):
+def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}, raw=False, merge_composite_types=True, drop_duplicates=False, test_split=0.1):
     path = root.resource(resource_path)
     [file] = ensure_files(path, [GENIA_NER_REMOTE_FILES[version]], mode=NetworkLoadMode.AUTO)
     with tarfile.open(file, "r:gz") as tar:
@@ -148,6 +148,7 @@ def load_genia_ner(resource_path="genia_ner", version="3.02p", doc_attributes={}
     mentions = pd.DataFrame(all_mentions)
     del mentions["lex"]
     docs = pd.DataFrame(all_docs)
+    docs["split"] = ["train"] * (len(docs) - int(len(docs) * 0.1)) + ["test"] * int(len(docs) * 0.1)
 
     if not raw:
         mentions = mentions.query('~sem.isna()').copy()
