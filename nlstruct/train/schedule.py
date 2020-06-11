@@ -113,6 +113,28 @@ class ConcatSchedule(Schedule):
         self.schedules = schedules
         self.current_schedule_i = 0
 
+    def state_dict(self):
+        """Returns the state of the scheduler as a :class:`dict`.
+
+        It contains an entry for every variable in self.__dict__ which
+        is not the optimizer.
+        """
+        return {
+            "schedules": [schedule.state_dict() for schedule in self.schedules],
+            "current_schedule_i": self.current_schedule_i,
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the schedulers state.
+
+        Arguments:
+            state_dict (dict): scheduler state. Should be an object returned
+                from a call to :meth:`state_dict`.
+        """
+        for schedule, schedule_state_dict in zip(self.schedules, state_dict["schedules"]):
+            schedule.load_state_dict(schedule_state_dict)
+        self.current_schedule_i = state_dict["current_schedule_i"]
+
     def step(self, metrics=None, epoch=None):
         if self.schedules[self.current_schedule_i].done():
             if self.current_schedule_i + 1 >= len(self.schedules):
