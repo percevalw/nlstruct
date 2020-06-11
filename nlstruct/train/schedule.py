@@ -31,6 +31,8 @@ class Schedule(object):
             state_dict (dict): scheduler state. Should be an object returned
                 from a call to :meth:`state_dict`.
         """
+        if hasattr(state_dict, 'state_dict'):
+            state_dict = state_dict.state_dict()
         if "optimizer" in state_dict:
             del state_dict["optimizer"]
         self.__dict__.update(state_dict)
