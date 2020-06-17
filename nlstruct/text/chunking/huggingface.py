@@ -32,7 +32,7 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True
                     striped_piece = striped_piece.replace(special, "")
                 piece_size = len(striped_piece)
                 delta = len(re.search(r"^\s*", text[i:]).group(0))
-                if striped_piece != text[i+delta:i+delta + piece_size]:
+                if striped_piece.lower() != text[i+delta:i+delta + piece_size].lower():
                     raise Exception(f"During processing of doc {doc_id}, wordpiece tokenizer replaced {repr(text[i+delta:i+delta + piece_size])} (in {repr(text[i:i+delta + piece_size + 5])}) "
                                     f"with {repr(striped_piece)} (or multiple pieces). "
                                     f"You must perform substitutions before to ensure that this does not happen, otherwise wordpieces characters cannot be computed.")
