@@ -1,10 +1,11 @@
 from collections import Iterable, Sequence, Mapping
-from logging import warn, warning
+from logging import warning
 
 import pandas as pd
 from pandas.core.computation.ops import UndefinedVariableError
 
-from nlstruct.core.pandas import merge_with_spans
+from nlstruct.utils.pandas import merge_with_spans
+
 
 class Dataset(Mapping):
     def __init__(self, **dfs):
@@ -35,7 +36,6 @@ class Dataset(Mapping):
                 other_group = other_table[querier]
         pass
 
-
     def query(self, query, names=None, propagate=False, keyerror='ignore'):
         if names is None:
             names = list(self.dfs.keys())
@@ -56,7 +56,7 @@ class Dataset(Mapping):
                 if propagate:
                     for name2, df2 in dfs.items():
                         if name2 not in seen:
-                            dfs[name2] = merge_with_spans(dfs[name1][[c for c in dfs[name1].columns if c in df2.columns and c.endswith("_id")]], df2, how="inner")
+                            dfs[name2] = merge_with_spans(dfs[name1][[c for c in dfs[name1].columns if c in df2.columns and c.endswith("_id")]].drop_duplicates(), df2, how="inner")
                             seen.add(name2)
         # main_df = self.dfs[self.main].query(query).reset_index(drop=True)
         # dfs = [main_df, *((merge_with_spans(main_df[[c for c in main_df.columns if c in df.columns and c.endswith("_id")]], df, how="inner")

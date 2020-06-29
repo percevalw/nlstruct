@@ -1,13 +1,9 @@
-import re
-from functools import reduce
-from itertools import repeat
-from logging import warn
+from logging import warning
+
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from unidecode import unidecode
 
-from nlstruct.core.pandas import make_merged_names_map, merge_with_spans, make_id_from_merged, flatten
+from nlstruct.utils.pandas import merge_with_spans, make_id_from_merged, join_cols
 
 
 def make_tag_scheme(length, entity, scheme='bio'):
@@ -18,261 +14,6 @@ def make_tag_scheme(length, entity, scheme='bio'):
     elif scheme == "bioul":
         return [f"B-{entity}", *(f"I-{entity}" for _ in range(length - 2)), f"L-{entity}"] if length >= 2 else [f"U-{entity}"]
     raise ValueError(f"'{scheme}' scheme is not supported")
-
-
-class DeltaCollection(object):
-    def __init__(self, begins, ends, deltas):
-        self.begins = np.asarray(begins, dtype=int)
-        self.ends = np.asarray(ends, dtype=int)
-        self.deltas = np.asarray(deltas, dtype=int)
-
-    @classmethod
-    def from_absolute(cls, begins, ends, deltas):
-        deltas = np.asarray(deltas)
-        shift = np.roll(deltas, 1)
-        shift[0] = 0
-        deltas -= shift
-        return DeltaCollection(begins, ends, deltas)
-
-    def __repr__(self):
-        return "DeltaCollection([{}], [{}], [{}])".format(", ".join(map(str, self.begins)),
-                                                          ", ".join(map(str, self.ends)),
-                                                          ", ".join(map(str, self.deltas)))
-
-    def apply(self, positions, side='left'):
-        positions = np.asarray(positions)
-        to_add = ((positions.reshape(-1, 1) >= self.ends.reshape(1, -1)) * self.deltas).sum(axis=1)
-        between = np.logical_and(self.begins.reshape(1, -1) < positions.reshape(-1, 1),
-                                 positions.reshape(-1, 1) < self.ends.reshape(1, -1))
-        between_mask = between.any(axis=1)
-        between = between[between_mask]
-        between_i = between.argmax(axis=1)
-        if side == 'right':
-            to_add[between_mask] += self.ends[between_i] - positions[between_mask] + self.deltas[between_i]
-        elif side == 'left':
-            to_add[between_mask] += self.begins[between_i] - positions[between_mask]
-        return positions + to_add
-
-    def unapply(self, positions, side='left'):
-        positions = np.asarray(positions)
-        begins = self.apply(self.begins, side='left')
-        ends = self.apply(self.ends, side='right')
-        to_remove = -((positions.reshape(-1, 1) >= ends.reshape(1, -1)) * self.deltas).sum(axis=1)
-        between = np.logical_and(begins.reshape(1, -1) < positions.reshape(-1, 1),
-                                 positions.reshape(-1, 1) < ends.reshape(1, -1))
-        between_mask = between.any(axis=1)
-        between = between[between_mask]
-        between_i = between.argmax(axis=1)
-        if side == 'right':
-            to_remove[between_mask] += ends[between_i] - positions[between_mask] - self.deltas[between_i]
-        elif side == 'left':
-            to_remove[between_mask] += begins[between_i] - positions[between_mask]
-        pos = positions + to_remove
-        return pos
-
-    def __add__(self, other):
-        if len(self.begins) == 0:
-            return other
-        if len(other.begins) == 0:
-            return self
-        begins = self.unapply(other.begins, side='left')
-        ends = self.unapply(other.ends, side='right')
-        new_begins = np.concatenate([begins, self.begins])
-        new_ends = np.concatenate([ends, self.ends])
-        new_deltas = np.concatenate([other.deltas, self.deltas])
-        sorter = np.lexsort((new_ends, new_begins))
-        return DeltaCollection(new_begins[sorter], new_ends[sorter], new_deltas[sorter])
-
-
-def make_str_from_groups(replacement, groups):
-    for i, group in enumerate(groups):
-        replacement = replacement.replace(f"\\{i+1}", group)
-    return replacement
-
-
-def regex_sub_with_spans(pattern, replacement, text):
-    needed_groups = [int(i) for i in re.findall(r"\\([0-9]+)", replacement)]
-    begins = []
-    ends = []
-    deltas = []
-    for match in reversed(list(re.finditer(pattern, text))):
-        middle = make_str_from_groups(replacement, [match.group(i) for i in needed_groups])
-        start = match.start()
-        end = match.end()
-        text = text[:start] + middle + text[end:]
-        begins.append(start)
-        ends.append(end)
-        deltas.append(len(middle) - end + start)
-    return text, DeltaCollection(begins, ends, deltas)
-
-
-def regex_multisub_with_spans(patterns, replacements, text, deltas=None):
-    if deltas is None:
-        deltas = DeltaCollection([], [], [])
-    for pattern, replacement in zip(patterns, replacements):
-        text, new_deltas = regex_sub_with_spans(pattern, replacement, text)
-        if deltas is not None:
-            deltas += new_deltas
-        else:
-            deltas = new_deltas
-    return text, deltas
-
-
-def run_unidecode(text):
-    begins, ends, deltas = [], [], []
-    new_text = ""
-    for i, (old_char, new_char) in enumerate((char, unidecode(char)) for char in text):
-        if len(old_char) != len(new_char):
-            begins.append(i)
-            ends.append(i+1)
-            deltas.append(len(new_char)-1)
-        new_text += new_char
-    return new_text, DeltaCollection(begins, ends, deltas)
-
-
-def transform_text(dataset,
-                   global_patterns=None,
-                   global_replacements=None,
-                   apply_unidecode=False,
-                   return_deltas=True, with_tqdm=False):
-    assert (global_patterns is None) == (global_replacements is None)
-    if global_patterns is None:
-        global_patterns = []
-        global_replacements = []
-
-    def process_text(text, doc_patterns, doc_replacements):
-        deltas = None
-        if apply_unidecode:
-            text, deltas = run_unidecode(text)
-        text, deltas = regex_multisub_with_spans(
-            [*doc_patterns, *global_patterns],
-            [*doc_replacements, *global_replacements],
-            text,
-            deltas=deltas,
-        )
-        return text, deltas.begins, deltas.ends, deltas.deltas
-
-    if return_deltas:
-        text, delta_begins, delta_ends, deltas = zip(*[
-            process_text(text, doc_patterns, doc_replacements) for text, doc_patterns, doc_replacements in
-            tqdm(zip(
-                dataset["text"],
-                dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
-                dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm)
-        ])
-        dataset = pd.DataFrame({
-            "text": text,
-            "begin": delta_begins,
-            "end": delta_ends,
-            "delta": deltas,
-            **{c: dataset[c] for c in dataset.columns if c not in ("text", "begin", "end", "delta")}
-        })
-        return (
-            dataset[[c for c in dataset.columns if c not in ("begin", "end", "delta")]],
-            flatten(dataset[["doc_id", "begin", "end", "delta"]]))
-    else:
-        new_texts = []
-        for text, doc_patterns, doc_replacements in tqdm(zip(
-              dataset["text"],
-              dataset["patterns"] if "patterns" in dataset.columns else repeat([]),
-              dataset["replacements"] if "replacements" in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm):
-            if apply_unidecode:
-                text = unidecode(text)
-            for pattern, replacement in zip([*doc_patterns, *global_patterns], [*doc_replacements, *global_replacements]):
-                text = re.sub(pattern, replacement, text)
-            new_texts.append(text)
-        dataset = pd.DataFrame({"text": new_texts,
-                                **{c: dataset[c] for c in dataset.columns if c not in ("text",)}})
-        return dataset[[c for c in dataset.columns if c not in ("begin", "end", "delta")]]
-
-
-def apply_deltas(positions, deltas, on, position_columns=None):
-    if not isinstance(on, (tuple, list)):
-        on = [on]
-    if position_columns is None:
-        position_columns = {'begin': 'left', 'end': 'right'}
-
-    positions = positions.copy()
-    positions['_id_col'] = np.arange(len(positions))
-
-    mention_deltas = merge_with_spans(positions[[*position_columns, *on, '_id_col']], deltas, on=on,
-                                      suffixes=('_pos', '_delta'), how='inner')
-    # To be faster, we remove categorical columns (they may only be in 'on') before the remaining ops
-    mention_deltas = mention_deltas[[c for c in mention_deltas.columns if c not in on]]
-    positions = positions.set_index('_id_col')
-    mention_deltas = mention_deltas.set_index('_id_col')
-
-    delta_col_map, positions_col_map = make_merged_names_map(deltas.columns, [*position_columns, *on, '_id_col'],
-                                                             left_on=on, right_on=on, suffixes=('_delta', '_pos'))
-    for col, side in position_columns.items():
-        mention_deltas.eval(f"shift = ({delta_col_map['end']} <= {positions_col_map[col]}) * {delta_col_map['delta']}",
-                            inplace=True)
-        mention_deltas.eval(
-            f"between_magnet = {delta_col_map['begin']} < {positions_col_map[col]} and {positions_col_map[col]} < {delta_col_map['end']}",
-            inplace=True)
-        if side == "left":
-            mention_deltas.eval(
-                f"between_magnet = between_magnet * ({delta_col_map['begin']} - {positions_col_map[col]})",
-                inplace=True)
-        elif side == "right":
-            mention_deltas.eval(
-                f"between_magnet = between_magnet * ({delta_col_map['end']} + {delta_col_map['delta']} - {positions_col_map[col]})",
-                inplace=True)
-        order = "first" if side == "left" else "last"
-        tmp = mention_deltas.sort_values(['_id_col', delta_col_map['begin' if side == 'left' else 'end']]).groupby(
-            '_id_col').agg({
-            "shift": "sum",
-            **{n: order for n in mention_deltas.columns if n not in ("shift", "_id_col")}})
-        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0)
-    positions = positions.reset_index(drop=True)
-    return positions
-
-
-def reverse_deltas(positions, deltas, on, position_columns=None):
-    if not isinstance(on, (tuple, list)):
-        on = [on]
-    if position_columns is None:
-        position_columns = {'begin': 'left', 'end': 'right'}
-
-    positions = positions.copy()
-    positions['_id_col'] = np.arange(len(positions))
-
-    deltas = apply_deltas(deltas, deltas, on, position_columns={'begin': 'left', 'end': 'right'})
-    mention_deltas = merge_with_spans(positions[[*position_columns, *on, '_id_col']], deltas, on=on,
-                                      suffixes=('_pos', '_delta'), how='left')
-
-    positions = positions.set_index('_id_col')
-    mention_deltas = mention_deltas.set_index('_id_col')
-
-    # To be faster, we remove categorical columns (they may only be in 'on') before the remaining ops
-    # mention_deltas = mention_deltas[[c for c in mention_deltas.columns if c not in on]]
-    delta_col_map, positions_col_map = make_merged_names_map(deltas.columns, [*position_columns, *on, '_id_col'],
-                                                             left_on=on, right_on=on, suffixes=('_delta', '_pos'))
-    for col, side in position_columns.items():
-        mention_deltas.eval(
-            f"shift = ({delta_col_map['end']} <= {positions_col_map[col]}) * (-{delta_col_map['delta']})",
-            inplace=True)
-        mention_deltas.eval(
-            f"between_magnet = {delta_col_map['begin']} < {positions_col_map[col]} and {positions_col_map[col]} < {delta_col_map['end']}",
-            inplace=True)
-        if side == "left":
-            mention_deltas.eval(
-                f"between_magnet = between_magnet * ({delta_col_map['begin']} - {positions_col_map[col]})",
-                inplace=True)
-        elif side == "right":
-            mention_deltas.eval(
-                f"between_magnet = between_magnet * ({delta_col_map['end']} - {delta_col_map['delta']} - {positions_col_map[col]})",
-                inplace=True)
-        order = "first" if side == "left" else "last"
-
-        tmp = mention_deltas.sort_values(['_id_col', delta_col_map['begin' if side == 'left' else 'end']])
-
-        tmp = tmp.groupby('_id_col').agg({
-            "shift": "sum",
-            **{n: order for n in mention_deltas.columns if n not in ("shift", "_id_col")}})
-        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0).astype(int)
-    positions = positions.reset_index(drop=True)
-    return positions
 
 
 def preprocess_ids(large, small, large_id_cols=None, small_id_cols=None):
@@ -331,16 +72,16 @@ def encode_as_tag(small, large, label_cols=None, tag_names=None, tag_scheme="bio
         assert label not in large_val_cols, f"Cannot groupby {label} value because there is already a column with this name"
         group_tag_names = ["/".join(s for s in (label, tag_name) if s is not None) for tag_name in tag_names]
         if use_token_idx:
-            merged = merge_with_spans(mentions_of_group, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols, suffixes=('_large', '')).query(
-                "begin <= token_idx and token_idx < end")
+            merged = merge_with_spans(mentions_of_group, small[[*doc_id_cols, *small_id_cols, *(c for c in small_val_cols if c != "token_idx"), "token_idx"]], on=doc_id_cols,
+                                      suffixes=('_large', '')).query("begin <= token_idx and token_idx < end")
         else:
             merged = merge_with_spans(mentions_of_group, small, span_policy='partial_strict', on=[*doc_id_cols, ("begin", "end")], suffixes=('_large', ''))
 
         # If a token overlap multiple mentions, assign it to the last mention
         len_before = len(merged)
         merged = merged.drop_duplicates([*doc_id_cols, *small_id_cols], keep='last')
-        if len_before-len(merged) > 0:
-            warn(f"Dropped {len_before-len(merged)} duplicated tags caused by overlapping mentions")
+        if len_before - len(merged) > 0:
+            warning(f"Dropped {len_before-len(merged)} duplicated tags caused by overlapping mentions")
         merged_id_cols = doc_id_cols + large_id_cols + small_id_cols
 
         # Encode mention labels as a tag
@@ -366,7 +107,7 @@ def encode_as_tag(small, large, label_cols=None, tag_names=None, tag_scheme="bio
         if tag_scheme != "raw":
             try:
                 for tag_name, label_col in zip(group_tag_names, label_cols):
-                    unique_labels = sorted(set(label for label in mentions_of_group[label_col] if label is not None))\
+                    unique_labels = sorted(set(label for label in mentions_of_group[label_col] if label is not None)) \
                         if not hasattr(mentions_of_group[label_col], 'cat') else mentions_of_group[label_col].cat.categories
                     label_categories[tag_name] = unique_labels
                     small[tag_name] = small[tag_name].fillna("O").astype(pd.CategoricalDtype(
@@ -517,11 +258,6 @@ def partition_spans(smalls, large,
                 del old_to_new[new_id_name]
         new_smalls = [small.astype({original_new_id_name: large[original_new_id_name].dtype}) for small in new_smalls]
     return new_smalls, large, old_to_new
-
-
-def join_cols(df, sep="/"):
-    df = df.astype(str)
-    return reduce(lambda x, y: x + sep + y, (df.iloc[:, i] for i in range(1, len(df.columns))), df.iloc[:, 0])
 
 
 def split_into_spans(large, small, overlap_policy="split_small", pos_col=None):

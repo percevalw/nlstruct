@@ -1,7 +1,7 @@
 import pandas as pd
 
-from nlstruct.core.dataset import Dataset
-from nlstruct.core.environment import env
+from nlstruct.collections.dataset import Dataset
+from nlstruct.environment.path import root
 
 
 # remote_files = [
@@ -19,9 +19,9 @@ from nlstruct.core.environment import env
 
 
 def load_bc5cdr():
-    train_file = env.resource(env['BC5CDR_TRAIN_PATH'])
-    dev_file = env.resource(env['BC5CDR_DEV_PATH'])
-    test_file = env.resource(env['BC5CDR_TEST_PATH'])
+    train_file = root.resource(root['BC5CDR_TRAIN_PATH'])
+    dev_file = root.resource(root['BC5CDR_DEV_PATH'])
+    test_file = root.resource(root['BC5CDR_TEST_PATH'])
 
     entries = []
     # Load full datasets with concept annotations

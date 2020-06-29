@@ -20,17 +20,18 @@ from pandas import DataFrame
 import torch
 import xxhash
 import yaml
-from joblib._compat import PY3_OR_LATER
 from joblib.hashing import Hasher, _MyHash
 from joblib.numpy_pickle import NumpyArrayWrapper, NumpyUnpickler
 from joblib.numpy_pickle_compat import NDArrayWrapper
 from joblib.numpy_pickle_utils import _read_fileobject
+from scipy.sparse import spmatrix
 from sklearn.base import BaseEstimator
 
-from nlstruct.core.environment import RelativePath, env
+from nlstruct.environment.path import RelativePath, root
 
 logger = logging.getLogger()
 
+PY3_OR_LATER = sys.version_info[0] >= 3
 if PY3_OR_LATER:
     Pickler = pickle._Pickler
 else:
@@ -340,6 +341,9 @@ class TruncatedNumpyHasher(Hasher):
     def save_tensor(self, obj):
         self.save(obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)])
 
+    def save_spmatrix(self, obj):
+        self.save(obj.tocsr(), bypass_dispatch=True)
+
     def save_parameter(self, obj):
         obj = (obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)],
                obj.requires_grad)
@@ -384,6 +388,7 @@ class TruncatedNumpyHasher(Hasher):
     dispatch[BlockManager] = save_blockmanager
     dispatch[PandasObject] = save_pandas_object
     dispatch[np.ndarray] = save_ndarray
+    dispatch[spmatrix] = save_spmatrix
     dispatch[np.dtype] = save_ndtype
     dispatch[torch.nn.Parameter] = save_parameter
     dispatch[torch.Tensor] = save_tensor
@@ -414,7 +419,7 @@ class CacheHandle(RelativePath):
         return RelativePath(os.path.join(str(self), name))
 
     def tmp(self, item):
-        return env.tmp(os.path.join(item))
+        return root.tmp(os.path.join(item))
 
     def load(self, source="output.pkl", loader=None, **kwargs):
         path = str(self / source)
@@ -490,9 +495,9 @@ class CustomUnpickler(NumpyUnpickler):
             inst.suffix = state['suffix']
             inst.source = state['source']
             if state['source'] == "resource":
-                inst.prefix = env['RESOURCES_PATH']
+                inst.prefix = root['RESOURCES_PATH']
             elif state['source'] == "source":
-                inst.prefix = env.basedir
+                inst.prefix = root.basedir
             elif state['source'] == "cache":
                 if self.current_cache is not None:
                     inst.prefix = self.current_cache
@@ -731,7 +736,6 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
     ----------
     keys: (typing.Sequence of str) or str or int or RelativePath
     args: Any
-    kwargs: Any
     loader:
     dumper:
 
@@ -740,16 +744,16 @@ def get_cache(keys, args=None, loader=None, dumper=None, on_ram=False):
     CacheHandle
     """
     if isinstance(keys, RelativePath):
-        keys = str(keys.relative_to(Path(env["CACHE_PATH"])))
+        keys = str(keys.relative_to(Path(root["CACHE_PATH"])))
     if isinstance(keys, str):
         keys = [*str(keys).split("/")]
     elif not hasattr(keys, '__len__'):
         keys = [str(keys)]
     keys = list(keys) + [hash_object(args, mmap_mode=None)]
     if on_ram:
-        cache_handle = RAMCacheHandle(os.path.join(env['CACHE_PATH'], *keys))
+        cache_handle = RAMCacheHandle(os.path.join(root['CACHE_PATH'], *keys))
     else:
-        cache_handle = CacheHandle(os.path.join(env['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
+        cache_handle = CacheHandle(os.path.join(root['CACHE_PATH'], *keys), loader=loader, dumper=dumper)
         inputs_path = cache_handle.entry("inputs.txt")
         # TODO print input files top structures like dist / lists into an inputs.txt file
         if not inputs_path.exists() and args is not None:

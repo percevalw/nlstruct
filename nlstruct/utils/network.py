@@ -6,7 +6,7 @@ import urllib.request
 import tqdm as tqdm
 from sklearn.datasets._base import _sha256
 
-from nlstruct.core.environment import env
+from nlstruct.environment import root
 
 
 class NetworkLoadMode(enum.Enum):
@@ -42,7 +42,7 @@ def ensure_files(path, remotes, mode):
     for remote in remotes:
         file_path = path / remote.filename
         file_exist = os.path.exists(str(file_path))
-        tmp_file_path = env.tmp(remote.filename)
+        tmp_file_path = root.tmp(remote.filename)
         if not file_exist and mode == NetworkLoadMode.CACHE_ONLY:
             raise IOError("Could not find cached file {} in {}".format(file_path, tmp_file_path, path))
         elif mode == NetworkLoadMode.FETCH_ONLY or (not file_exist and mode == NetworkLoadMode.AUTO):

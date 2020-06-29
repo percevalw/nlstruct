@@ -3,8 +3,8 @@ import os
 import pandas as pd
 from sklearn.utils import check_random_state
 
-from nlstruct.core.dataset import Dataset
-from nlstruct.core.environment import RelativePath
+from nlstruct.collections.dataset import Dataset
+from nlstruct.environment.path import RelativePath
 
 
 def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True, doc_attributes=None):
@@ -48,6 +48,12 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     if doc_attributes is not None:
         for key, val in doc_attributes.items():
             docs[key] = val
+            
+    # Test if path contains any .ann files
+    # If not: only return docs
+    if not any(fname.endswith('.ann') for fname in os.listdir('.')):
+        return Dataset(docs=docs)
+            
     # Extract annotations from path and make multiple dataframe from it
     for filename in sorted(os.listdir(path)):
         if filename.endswith('.ann'):

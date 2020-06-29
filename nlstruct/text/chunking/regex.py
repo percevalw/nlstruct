@@ -5,15 +5,19 @@ import pandas as pd
 from pathos.multiprocessing import ProcessPool
 from tqdm import tqdm
 
-from nlstruct.core.cache import cached
-from nlstruct.core.text import join_cols
+from nlstruct.utils.pandas import join_cols
+
+MIMIC_SENTENCE_REGEX = r"(\s*\n\s*\n\s*)"
+NEWLINE_SENTENCE_REGEX = r"((?:\s*\n)+\s*)"
+TOKEN_REGEX = r"[\w*]+|[^\w\s\n*]"
 
 
 def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n_threads=1,
-                     reg_split=r"((?:\s*\n)+\s*)",
-                     reg_token=r"[\w*]+|[^\w\s\n*]",
+                     reg_split=NEWLINE_SENTENCE_REGEX,
+                     reg_token=TOKEN_REGEX,
                      text_col="text",
                      doc_id_col="doc_id",
+                     balance_parentheses=True,
                      with_tqdm=False, verbose=0):
     """
     Simple split MIMIC docs into sentences:
@@ -26,6 +30,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     max_sentence_length: int
     with_tqdm: bool
     verbose: int
+    balance_parentheses: bool
     doc_id_col: str
     text_col: str
 
@@ -75,7 +80,7 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                     queued_spans = queued_spans[max_sentence_length_:]
                     sentences.append(txt[b:e])
                     sentence_idx += 1
-                if min_sentence_length is not None and len(queued_spans) < min_sentence_length:
+                if min_sentence_length is not None and len(queued_spans) < min_sentence_length or (balance_parentheses and part.count("(") > part.count(")")):
                     idx += len(part)
                     continue
                 if len(queued_spans):
@@ -103,15 +108,3 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     df = df.merge(docs[[doc_id_col] + [col for col in docs.columns if col not in df.columns and col != "text"]])
     df["sentence_id"] = join_cols(df[[doc_id_col, "sentence_idx"]], "/")
     return df
-
-
-@cached.will_ignore(("n_threads", "with_tqdm"))
-def mimic_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, text_col="text", doc_id_col="doc_id", verbose=0):
-    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"(\s*\n\s*\n\s*)", n_threads=n_threads, with_tqdm=with_tqdm, text_col=text_col, doc_id_col=doc_id_col,
-                            verbose=verbose)
-
-
-@cached.will_ignore(("n_threads", "with_tqdm"))
-def newline_sentencize(texts, max_sentence_length=None, min_sentence_length=None, n_threads=1, with_tqdm=False, text_col="text", doc_id_col="doc_id", verbose=0):
-    return regex_sentencize(texts, max_sentence_length, min_sentence_length, reg_split=r"((?:\s*\n){1,}\s*)", n_threads=n_threads, with_tqdm=with_tqdm, text_col=text_col, doc_id_col=doc_id_col,
-                            verbose=verbose)

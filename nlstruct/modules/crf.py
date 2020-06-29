@@ -1,17 +1,17 @@
 import torch
 
-from nlstruct.core.torch import torch_global as tg
+from nlstruct.utils.torch import torch_global as tg
 
 IMPOSSIBLE = -10000
 
 
-class CRF(torch.nn.Module):
+class LinearChainCRF(torch.nn.Module):
     def __init__(self, num_tags, start_transitions_mask=None, transitions_mask=None, end_transitions_mask=None, with_start_end_transitions=True):
         super().__init__()
         self.num_tags = num_tags
 
         # Make masks to buffer, since they are not parameters, but we want pytorch to know they are part of
-        # the model and should be moved to the new device when module.to(...) is called on the CRF
+        # the model and should be moved to the new device when module.to(...) is called on the LinearChainCRF
         self.register_buffer('start_transitions_mask', start_transitions_mask)
         self.register_buffer('transitions_mask', transitions_mask)
         self.register_buffer('end_transitions_mask', end_transitions_mask)
@@ -180,7 +180,7 @@ class CRF(torch.nn.Module):
         return z, log_probs, backtrack
 
 
-class BIODecoder(CRF):
+class BIODecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True):
         num_tags = 1 + num_labels * 2
         O, B, I = 0, 1, 2
@@ -209,6 +209,17 @@ class BIODecoder(CRF):
                          transitions_mask=transitions_mask,
                          end_transitions_mask=end_transitions_mask,
                          with_start_end_transitions=with_start_end_transitions)
+
+    @staticmethod
+    def spans_to_tags(sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+        positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
+        mention_tags = (
+            # I tags
+              (((positions >= begins.unsqueeze(1)) & (positions < ends.unsqueeze(1))).long() * (ner_labels.unsqueeze(1) * 2 + 2))
+              # B tags (= I tag - 1)
+              - ((positions == begins.unsqueeze(1)).long() * 1)
+        )
+        return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
     @staticmethod
     def tags_to_spans(tag, mask=None):
@@ -245,7 +256,8 @@ class BIODecoder(CRF):
             "span_doc_id": begin_tag[:, 0],
         }
 
-class BIOULDecoder(CRF):
+
+class BIOULDecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True):
         O, B, I, L, U = 0, 1, 2, 3, 4
 
@@ -258,6 +270,7 @@ class BIOULDecoder(CRF):
             transitions_mask[B + STRIDE, I + STRIDE] = 0  # B-i to I-i
             transitions_mask[I + STRIDE, I + STRIDE] = 0  # I-i to I-i
             transitions_mask[I + STRIDE, L + STRIDE] = 0  # I-i to L-i
+            transitions_mask[B + STRIDE, L + STRIDE] = 0  # B-i to L-i
             transitions_mask[L + STRIDE, O] = 0  # L-i to O
             transitions_mask[O, U + STRIDE] = 0  # O to U-i
             transitions_mask[U + STRIDE, O] = 0  # U-i to O
@@ -284,6 +297,24 @@ class BIOULDecoder(CRF):
                          transitions_mask=transitions_mask,
                          end_transitions_mask=end_transitions_mask,
                          with_start_end_transitions=with_start_end_transitions)
+
+    @staticmethod
+    def spans_to_tags(sample_ids, begins, ends, ner_labels, n_samples, n_tokens):
+        B, I, L, U = 0, 1, 2, 3
+        positions = torch.arange(n_tokens, device=begins.device).unsqueeze(0)
+        begins = begins.unsqueeze(1)
+        ends = ends.unsqueeze(1)
+        mention_tags = (
+            # I tags
+              (((positions >= begins) & (positions < ends)).long() * (1 + ner_labels.unsqueeze(1) * 4 + I))
+              # B tags
+              + ((positions == begins).long() * (B-I))
+              # L tags
+              + ((positions == (ends - 1)).long() * (L-I))
+              # U tags
+              + (((positions == begins) & (positions == (ends - 1))).long() * ((U-I) - (B-I) - (L-I)))
+        )
+        return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
     @staticmethod
     def tags_to_spans(tag, mask=None):

@@ -1,14 +1,14 @@
 import pandas as pd
 
-from nlstruct.core.text import transform_text, reverse_deltas
+from nlstruct.text.sub import apply_substitutions, reverse_deltas
 
 
-def spm_tokenize(docs, path):
+def sentencepiece_tokenize(docs, path):
     subs = [
         (r"\s+", " "),
         ("^([^\s])", r" \1"),
     ]
-    docs, deltas = transform_text.nocache(docs, *zip(*subs), return_deltas=True)
+    docs, deltas = apply_substitutions(docs, *zip(*subs), return_deltas=True)
 
     import sentencepiece as spm
     sp = spm.SentencePieceProcessor()
@@ -48,7 +48,7 @@ def spm_tokenize(docs, path):
         token_idx.append(token_id)
         token_id += 1
     tokens = pd.DataFrame({"doc_id": doc_ids, "token_id": range(len(token_idx)), "token_idx": token_idx, "token": tokens, "begin": begins, "end": ends})
-    token_voc = pd.CategoricalDtype(["<pad>", *(sp.IdToPiece(id) for id in range(sp.GetPieceSize()))])
+    token_voc = pd.CategoricalDtype(["<pad>", *(sp.IdToPiece(piece_id) for piece_id in range(sp.GetPieceSize()))])
     tokens = tokens.astype({"doc_id": docs["doc_id"].dtype, "token": token_voc})
     tokens = reverse_deltas(tokens, deltas, "doc_id")
     return tokens

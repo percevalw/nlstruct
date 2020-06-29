@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from termcolor import colored
 
 
@@ -7,6 +9,7 @@ class TrainingLogger(object):
         int: (5, lambda x: x),
         float: (10, "{:.2E}".format),
         bool: (3, lambda x: ("YES" if x else " NO")),
+        type(None): (5, lambda x: str(x)),
     }
 
     def __init__(self, key, formatter, patience_warmup=None, patience=None):
@@ -16,16 +19,21 @@ class TrainingLogger(object):
         self.key = key
         self.patience_warmup = patience_warmup
         self.patience = patience
-        if "epoch" not in formatter:
-            formatter["epoch"] = {}
-        self.formatter = formatter
+        if isinstance(formatter, dict):
+            self.formatter = defaultdict(lambda: False)
+            self.formatter.update(formatter)
+        if "epoch" not in self.formatter:
+            self.formatter["epoch"] = {}
 
     def display(self, info):
         if self.fields is None:
             print("\n")
             s = ""
             self.fields = []
-            for i, field in enumerate([*info.keys(), "patience_warmup", "patience"]):
+            i = 0
+            for field in [*info.keys(), "patience_warmup", "patience"]:
+                if field not in info:
+                    continue
                 try:
                     format_info = self.formatter[field]
                 except KeyError:
@@ -51,6 +59,7 @@ class TrainingLogger(object):
                 if field == self.key:
                     name = colored(name, "red")
                 s += " " * (width - name_length) + name
+                i += 1
             print(s)
 
         s = ""

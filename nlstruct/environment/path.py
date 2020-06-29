@@ -90,12 +90,12 @@ def create_config_if_not_exist():
             print("please modify it and change values to your prefered paths.")
             print("You can change the config file location by setting the NLSTRUCT_CONFIG_PATH environment variable.")
             print("""Once you're done, execute the following lines:
-from os import load_dotenv
+from dotenv import load_dotenv
 load_dotenv({}, override=True)""".format(repr(config_path)))
     return config_path
 
 
-class Environment(object):
+class DataRoot(object):
     def __init__(self, config_file_path=None):
         if 'NLSTRUCT_CONFIG_PATH' in os.environ:
             self.config_file_path = os.environ['NLSTRUCT_CONFIG_PATH']
@@ -163,7 +163,7 @@ def import_obj(obj_str):
     return getattr(importlib.import_module(f".{parts[-2]}", '.'.join(parts[:-2])), parts[-1])
 
 
-env = Environment()
-env.define_basedir()
-_resource_path = Path(env["RESOURCES_PATH"])
-_cache_path = Path(env["CACHE_PATH"])
+root = DataRoot()
+root.define_basedir()
+_resource_path = Path(root["RESOURCES_PATH"])
+_cache_path = Path(root["CACHE_PATH"])

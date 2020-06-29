@@ -13,7 +13,7 @@ if __name__ == "__main__":
         description="Natural language structuring library",
         long_description=long_description,
         long_description_content_type="text/markdown",
-        url="https://github.com/perceval/nlstruct",
+        url="https://github.com/percevalw/nlstruct",
         packages=setuptools.find_packages(),
         package_data={'': ['example.env']},
         include_package_data=True,
@@ -38,5 +38,6 @@ if __name__ == "__main__":
             'torch>=1.3.1',
             'tqdm>=4.40.2',
             'xxhash>=1.4.3',
+            'unidecode',
         ]
     )

@@ -3,9 +3,9 @@ import zipfile
 import pandas as pd
 from sklearn.datasets._base import RemoteFileMetadata
 
-from nlstruct.core.cache import get_cache
-from nlstruct.core.network import ensure_files, NetworkLoadMode
-from nlstruct.core.dataset import Dataset
+from nlstruct.environment.cache import get_cache
+from nlstruct.utils.network import ensure_files, NetworkLoadMode
+from nlstruct.collections.dataset import Dataset
 
 remote_files = [
     RemoteFileMetadata(
@@ -96,7 +96,7 @@ def load_ncbi_disease():
     fragments = mentions[["doc_id", "mention_id", "begin", "end"]].copy()
     fragments["fragment_id"] = fragments["mention_id"]
     return Dataset(
-        docs=raw[["doc_id", "text"]],
+        docs=raw[["doc_id", "text", "split"]],
         mentions=mentions[["doc_id", "mention_id", "category"]],
         labels=mentions_label,
         fragments=fragments,

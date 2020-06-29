@@ -1,12 +1,12 @@
 import pandas as pd
 
-from nlstruct.core.cache import cached, get_cache
-from nlstruct.core.environment import env
-from nlstruct.core.pandas import flatten
+from nlstruct.environment.cache import cached
+from nlstruct.environment.path import root
+from nlstruct.utils.pandas import flatten
 
 
 def get_raw_medic(version):
-    file = env.resource("medic") / f"{version}.csv.gz"
+    file = root.resource("medic") / f"{version}.csv.gz"
     df = pd.read_csv(file, comment='#',
                      names=['DiseaseName', 'DiseaseID', 'AltDiseaseIDs', 'Definition', 'ParentIDs', 'TreeNumbers',
                             'ParentTreeNumbers', 'Synonyms', 'SlimMappings'])

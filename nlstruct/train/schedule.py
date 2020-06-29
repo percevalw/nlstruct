@@ -3,7 +3,7 @@ from math import inf
 
 from torch.optim.optimizer import Optimizer
 
-from nlstruct.core.collections import get_deep_attr, set_deep_attr
+from nlstruct.utils.deep_attributes import get_deep_attr, set_deep_attr
 
 
 class Schedule(object):
@@ -31,6 +31,10 @@ class Schedule(object):
             state_dict (dict): scheduler state. Should be an object returned
                 from a call to :meth:`state_dict`.
         """
+        if hasattr(state_dict, 'state_dict'):
+            state_dict = state_dict.state_dict()
+        if "optimizer" in state_dict:
+            del state_dict["optimizer"]
         self.__dict__.update(state_dict)
 
     def get_val(self):
@@ -112,6 +116,30 @@ class ConcatSchedule(Schedule):
     def __init__(self, schedules):
         self.schedules = schedules
         self.current_schedule_i = 0
+
+    def state_dict(self):
+        """Returns the state of the scheduler as a :class:`dict`.
+
+        It contains an entry for every variable in self.__dict__ which
+        is not the optimizer.
+        """
+        return {
+            "schedules": [schedule.state_dict() for schedule in self.schedules],
+            "current_schedule_i": self.current_schedule_i,
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the schedulers state.
+
+        Arguments:
+            state_dict (dict): scheduler state. Should be an object returned
+                from a call to :meth:`state_dict`.
+        """
+        if hasattr(state_dict, 'state_dict'):
+            state_dict = state_dict.state_dict()
+        for schedule, schedule_state_dict in zip(self.schedules, state_dict["schedules"]):
+            schedule.load_state_dict(schedule_state_dict)
+        self.current_schedule_i = state_dict["current_schedule_i"]
 
     def step(self, metrics=None, epoch=None):
         if self.schedules[self.current_schedule_i].done():
@@ -307,5 +335,7 @@ class ScaleOnPlateauSchedule(Schedule):
         return {key: value for key, value in self.__dict__.items() if key not in {'optimizer', 'is_better'}}
 
     def load_state_dict(self, state_dict):
+        if "optimizer" in state_dict:
+            del state_dict["optimizer"]
         self.__dict__.update(state_dict)
         self._init_is_better(mode=self.mode, threshold=self.threshold, threshold_mode=self.threshold_mode)
