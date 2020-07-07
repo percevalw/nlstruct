@@ -477,7 +477,7 @@ class Table:
             for name, col in table.non_relative_data.items():
                 data[name].append(col)
         new_data = {name: concat(cols) for name, cols in data.items()}
-        new_table = tables[0]
+        new_table = tables[0].copy()
         new_table.data = new_data
         new_table.batcher = None
         return new_table
