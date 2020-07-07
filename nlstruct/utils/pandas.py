@@ -651,6 +651,8 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
                         df[voc_name].fillna(unk[voc_name], inplace=True)
         else:
             voc = vocabularies.get(voc_name)
+            if voc is None:
+                continue
             if not hasattr(voc, 'categories'):
                 voc = pd.CategoricalDtype(voc)
             for df in dfs:
