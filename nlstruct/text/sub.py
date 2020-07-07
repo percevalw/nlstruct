@@ -174,7 +174,7 @@ def apply_substitutions(
         for text, doc_patterns, doc_replacements in tqdm(zip(
               dataset[text_col],
               dataset[pattern_col] if pattern_col in dataset.columns else repeat([]),
-              dataset[replacements_col] if replacements_col in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm):
+              dataset[replacements_col] if replacements_col in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm, desc="Performing regex subs"):
             if apply_unidecode:
                 text = unidecode(text)
             for pattern, replacement in zip([*doc_patterns, *global_patterns], [*doc_replacements, *global_replacements]):
