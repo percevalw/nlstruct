@@ -1,21 +1,31 @@
 import re
+import warnings
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 
-def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True, doc_id_col="doc_id", text_col="text", **kwargs):
+def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True, text_col="text", **kwargs):
+    if "doc_id_col" in kwargs:
+        warnings.warn("doc_id_col is not used anymore in the huggingface_tokenize function", FutureWarning)
+        kwargs.pop("doc_id_col")
+    doc_id_col = "id"
+    while doc_id_col in docs.columns:
+        doc_id_col += "_"
+
     doc_ids = []
     tokens = []
     begins = []
     ends = []
     token_idx = []
+    docs = docs.copy()
+    docs[doc_id_col] = np.arange(len(docs))
 
     if with_token_spans:
         special_tokens = [t for token in tokenizer.special_tokens_map.values() for t in ((token,) if isinstance(token, str) else token)]
         special_tokens += ["▁", "##", "</w>"]
-        for doc_id, text in tqdm(zip(docs[doc_id_col], docs[text_col]), disable=not with_tqdm, total=len(docs), leave=False, desc="Tokenizing"):
+        for doc_id, text in tqdm(zip(docs[doc_id_col], docs[text_col]), disable=not with_tqdm, total=len(docs), leave=True, desc="Tokenizing"):
             i = 0
             token_id = 0
 
@@ -60,6 +70,7 @@ def huggingface_tokenize(docs, tokenizer, with_tqdm=False, with_token_spans=True
         if counts[token] > 1:
             voc[i] = token + "-{}".format(i)
     token_voc = pd.CategoricalDtype(voc)
-    tokens = tokens.astype({doc_id_col: docs[doc_id_col].dtype, "token": token_voc})
+    tokens = tokens.astype({"token": token_voc})
     tokens = tokens.merge(docs[[doc_id_col] + [col for col in docs.columns if col not in tokens.columns and col != "text"]])
+    del docs[doc_id_col]
     return tokens

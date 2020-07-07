@@ -1,4 +1,5 @@
 import re
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -12,27 +13,30 @@ NEWLINE_SENTENCE_REGEX = r"((?:\s*\n)+\s*)"
 TOKEN_REGEX = r"[\w*]+|[^\w\s\n*]"
 
 
-def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n_threads=1,
+def regex_sentencize(docs,
+                     max_sentence_length=None,
+                     min_sentence_length=None,
+                     n_threads=1,
                      reg_split=NEWLINE_SENTENCE_REGEX,
                      reg_token=TOKEN_REGEX,
                      text_col="text",
-                     doc_id_col="doc_id",
                      balance_parentheses=True,
-                     with_tqdm=False, verbose=0):
+                     with_tqdm=False, verbose=0, **kwargs):
     """
-    Simple split MIMIC docs into sentences:
-    - sentences bounds are found when multiple newline occurs
-    - sentences too long are cut into `max_sentence_length` length sentences
-      by splitting each sentence into the tokens using a dumb regexp.
+    Simple split docs into sentences using regexes
+
     Parameters
     ----------
     docs: pd.DataFrame
+    reg_split: str
+    reg_token: str
     max_sentence_length: int
+    min_sentence_length: int
     with_tqdm: bool
     verbose: int
     balance_parentheses: bool
-    doc_id_col: str
     text_col: str
+    n_threads: int
 
     Returns
     -------
@@ -47,6 +51,13 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
         results = [r.get() for r in results]
         pool.close()
         return pd.concat(results, ignore_index=True)
+
+    if "doc_id_col" in kwargs:
+        warnings.warn("doc_id_col is not used anymore in the regex_sentencize function", FutureWarning)
+        kwargs.pop("doc_id_col")
+    doc_id_col = "id"
+    while doc_id_col in docs.columns:
+        doc_id_col += "_"
 
     reg_split = re.compile(reg_split)
     reg_token = re.compile(reg_token)
@@ -94,6 +105,8 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
                     queued_spans = []
                     sentences.append(txt[b:e])
                     sentence_idx += 1
+            else:
+                queued_spans.extend([(m.start() + idx, m.end() + idx) for m in reg_token.finditer(part)])
             if part is not None:
                 idx += len(part)
     if verbose:
@@ -107,4 +120,5 @@ def regex_sentencize(docs, max_sentence_length=None, min_sentence_length=None, n
     }).astype({doc_id_col: docs[doc_id_col].dtype})
     df = df.merge(docs[[doc_id_col] + [col for col in docs.columns if col not in df.columns and col != "text"]])
     df["sentence_id"] = join_cols(df[[doc_id_col, "sentence_idx"]], "/")
+    del df[doc_id_col]
     return df
