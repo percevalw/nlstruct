@@ -5,7 +5,7 @@ import pandas as pd
 from nlstruct.utils import encode_ids
 
 
-def export_to_brat(dataset, dest=None):
+def export_to_brat(dataset, dest=None, filename_prefix=""):
     doc_id_to_text = dict(zip(dataset["docs"]["doc_id"], dataset["docs"]["text"]))
     counter = 0
     mention_counter = 0
@@ -21,6 +21,10 @@ def export_to_brat(dataset, dest=None):
         except FileExistsError:
             pass
     for doc_id, text in doc_id_to_text.items():
+        if not os.path.exists("{}/{}.txt"):
+            with open("{}/{}.txt".format(dest, filename_prefix + doc_id), "w") as f:
+                f.write(text)
+
         doc_mentions = mentions.query(f'doc_id == "{doc_id}"').sort_values(["doc_id", "begin"])
         doc_attributes = attributes.query(f'doc_id == "{doc_id}"')
         doc_relations = relations.query(f'doc_id == "{doc_id}"')
@@ -29,10 +33,9 @@ def export_to_brat(dataset, dest=None):
         encode_ids([doc_mentions, doc_attributes, doc_relations, doc_relations],
                    [("doc_id", "mention_id"), ("doc_id", "mention_id"), ("doc_id", "from_mention_id"), ("doc_id", "to_mention_id")])
         counter += 1
-        print(doc_id)
         f = None
         if dest is not None:
-            f = open("{}/{}.ann".format(dest, doc_id), "w")
+            f = open("{}/{}.ann".format(dest, filename_prefix + doc_id), "w")
         try:
             for _, row in doc_mentions.iterrows():
                 mention_text = text[row["begin"]:row["end"]]
@@ -59,12 +62,12 @@ def export_to_brat(dataset, dest=None):
                         i + 1,
                         str(row["label"]),
                         mention_i,
-                        row["value"], file=f))
+                        row["value"]), file=f)
                 else:
                     print("A{}\t{} T{}".format(
                         i + 1,
                         str(row["label"]),
-                        mention_i, file=f))
+                        mention_i), file=f)
             for i, (_, row) in enumerate(doc_relations.iterrows()):
                 mention_from = row["from_mention_id"] + 1
                 mention_to = row["to_mention_id"] + 1
@@ -72,7 +75,7 @@ def export_to_brat(dataset, dest=None):
                     i + 1,
                     str(row["relation_label"]),
                     mention_from,
-                    mention_to, file=f))
+                    mention_to), file=f)
         finally:
             if f is not None:
                 f.close()
