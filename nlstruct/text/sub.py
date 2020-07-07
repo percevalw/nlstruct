@@ -157,7 +157,7 @@ def apply_substitutions(
             tqdm(zip(
                 dataset[text_col],
                 dataset[pattern_col] if pattern_col in dataset.columns else repeat([]),
-                dataset[replacements_col] if replacements_col in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm)
+                dataset[replacements_col] if replacements_col in dataset.columns else repeat([])), total=len(dataset), disable=not with_tqdm, desc="Performing regex subs")
         ])
         dataset = pd.DataFrame({
             text_col: text,
