@@ -494,6 +494,10 @@ class Table:
         new_self.drop_relative_data_()
         return new_self.__dict__
 
+    def merge(self, other):
+        self.primary_ids
+        pass
+
 
 class QueryFunction:
     def __init__(self, batcher, **kwargs):
@@ -860,6 +864,24 @@ class Batcher:
             table = self.tables[name].fill_absolute_data()
             index = get_deduplicator(table.primary_ids)
             self.tables[name] = table[index]
+        return self
+
+    def merge(self, other):
+        names = list(set(self.tables.keys()) | set(other.tables.keys()))
+        self = self.drop_duplicates(names)
+        other = other.drop_duplicates(names)
+        self_other_ids, mask = factorize(self.primary_ids, reference_values=other.primary_ids)[:2]
+        self = self[mask]
+        other = other[self_other_ids[mask]]
+        for name in names:
+            self.tables[name].data.update({k: v for k, v in other.tables[name].data.items() if k not in self.tables[name].data})
+            self.tables[name].masks.update({k: v for k, v in other.tables[name].masks.items() if k not in self.tables[name].masks})
+            self.tables[name].subcolumn_names.update({k: v for k, v in other.tables[name].subcolumn_names.items() if k not in self.tables[name].subcolumn_names})
+            self.tables[name].foreign_ids.update({k: v for k, v in other.tables[name].foreign_ids.items() if k not in self.tables[name].foreign_ids})
+        for name in other.tables:
+            if name not in names:
+                self.tables[name] = other.tables[name]
+                self.tables[name].batcher = self
         return self
 
     def dataloader(self,
