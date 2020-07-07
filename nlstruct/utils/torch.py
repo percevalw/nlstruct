@@ -120,74 +120,83 @@ def no_subset():
     subset_list = [redo() for redo in redos]
 
 
-def slice_parameters(obj, names, indexer, optimizer, device=None):
-    subset_module_params = {}
+class slice_parameters:
+    def __init__(self, obj, names, indexer, optimizer, device=None):
+        subset_module_params = {}
 
-    def do_subset():
-        subset_module_params.clear()
-        for module_param_name in names:
-            module_param = getattr(obj, module_param_name)
-            if module_param is None:
-                continue
+        def do_subset():
+            subset_module_params.clear()
+            for module_param_name in names:
+                module_param = getattr(obj, module_param_name)
+                if module_param is None:
+                    continue
 
-            subset_module_param = torch.nn.Parameter(module_param[indexer].to(device), requires_grad=module_param.requires_grad)
-            optimizer_saved_state = None
-            optimizer_subset_state = None
-            if optimizer is not None and optimizer.state[module_param]:
-                optimizer_saved_state = optimizer.state[module_param]
-                for group in optimizer.param_groups:
-                    group['params'] = [subset_module_param if x is module_param else x for x in group['params']]
-                optimizer_subset_state = {}
-                for optim_param_name, optim_param in optimizer_saved_state.items():
-                    param_device = device or optim_param.device
-                    if hasattr(optim_param, 'shape') and optim_param.shape == module_param.shape:
-                        optimizer_subset_state[optim_param_name] = optim_param[indexer].to(param_device)
-                    elif hasattr(optim_param, 'to'):
-                        optimizer_subset_state[optim_param_name] = optim_param.to(param_device)
-                    else:
-                        optimizer_subset_state[optim_param_name] = optim_param
-                optimizer.state[subset_module_param] = optimizer_subset_state
-                del optimizer.state[module_param]
+                subset_module_param = torch.nn.Parameter(module_param[indexer].to(device), requires_grad=module_param.requires_grad)
+                optimizer_saved_state = None
+                optimizer_subset_state = None
+                if optimizer is not None and optimizer.state[module_param]:
+                    optimizer_saved_state = optimizer.state[module_param]
+                    for group in optimizer.param_groups:
+                        group['params'] = [subset_module_param if x is module_param else x for x in group['params']]
+                    optimizer_subset_state = {}
+                    for optim_param_name, optim_param in optimizer_saved_state.items():
+                        param_device = device or optim_param.device
+                        if hasattr(optim_param, 'shape') and optim_param.shape == module_param.shape:
+                            optimizer_subset_state[optim_param_name] = optim_param[indexer].to(param_device)
+                        elif hasattr(optim_param, 'to'):
+                            optimizer_subset_state[optim_param_name] = optim_param.to(param_device)
+                        else:
+                            optimizer_subset_state[optim_param_name] = optim_param
+                    optimizer.state[subset_module_param] = optimizer_subset_state
+                    del optimizer.state[module_param]
 
-            subset_module_params[module_param_name] = (subset_module_param,
-                                                       module_param.device,
-                                                       module_param, # .detach().cpu(),
-                                                       optimizer_saved_state,
-                                                       optimizer_subset_state)
-            setattr(obj, module_param_name, subset_module_param)
+                subset_module_params[module_param_name] = (subset_module_param,
+                                                           module_param.device,
+                                                           module_param, # .detach().cpu(),
+                                                           optimizer_saved_state,
+                                                           optimizer_subset_state)
+                setattr(obj, module_param_name, subset_module_param)
 
-        subset_list.append(undo_subset)
-        return undo_subset
+            subset_list.append(undo_subset)
+            return undo_subset
 
-    def undo_subset():
-        for module_param_name, (subset_module_param,
-                                device,
-                                module_param_detached,
-                                optimizer_saved_state,
-                                optimizer_subset_state) in subset_module_params.items():
-            module_param_detached.data[indexer] = subset_module_param.detach().to(module_param_detached.device)
-            restored_param = module_param_detached  # torch.nn.Parameter(module_param_detached.to(device), requires_grad=subset_module_param.requires_grad)
+        def undo_subset():
+            for module_param_name, (subset_module_param,
+                                    device,
+                                    module_param_detached,
+                                    optimizer_saved_state,
+                                    optimizer_subset_state) in subset_module_params.items():
+                module_param_detached.data[indexer] = subset_module_param.detach().to(module_param_detached.device)
+                restored_param = module_param_detached  # torch.nn.Parameter(module_param_detached.to(device), requires_grad=subset_module_param.requires_grad)
 
-            # Update old embeddings with new ones
+                # Update old embeddings with new ones
 
-            if optimizer_saved_state is not None:
-                for group in optimizer.param_groups:
-                    group['params'] = [restored_param if x is subset_module_param else x for x in group['params']]
+                if optimizer_saved_state is not None:
+                    for group in optimizer.param_groups:
+                        group['params'] = [restored_param if x is subset_module_param else x for x in group['params']]
 
-                for optim_param_name, optim_param in optimizer_subset_state.items():
-                    if hasattr(optim_param, 'shape') and optim_param.shape == subset_module_param.shape:
-                        subset_param = optimizer_subset_state[optim_param_name]
-                        optimizer_subset_state[optim_param_name] = optimizer_saved_state[optim_param_name]
-                        optimizer_subset_state[optim_param_name][indexer] = subset_param.to(optimizer_subset_state[optim_param_name].device)
-                    optimizer.state[restored_param] = optimizer_subset_state
-                del optimizer.state[subset_module_param]
-            setattr(obj, module_param_name, restored_param)
+                    for optim_param_name, optim_param in optimizer_subset_state.items():
+                        if hasattr(optim_param, 'shape') and optim_param.shape == subset_module_param.shape:
+                            subset_param = optimizer_subset_state[optim_param_name]
+                            optimizer_subset_state[optim_param_name] = optimizer_saved_state[optim_param_name]
+                            optimizer_subset_state[optim_param_name][indexer] = subset_param.to(optimizer_subset_state[optim_param_name].device)
+                        optimizer.state[restored_param] = optimizer_subset_state
+                    del optimizer.state[subset_module_param]
+                setattr(obj, module_param_name, restored_param)
 
-        subset_list.remove(undo_subset)
+            subset_list.remove(undo_subset)
 
-        return do_subset
+            return do_subset
+        self.undo_subset = do_subset()
 
-    return do_subset()
+    def __call__(self, *args, **kwargs):
+        return self.undo_subset()
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.undo_subset()
 
 
 def torch_clone(obj, device=None):
