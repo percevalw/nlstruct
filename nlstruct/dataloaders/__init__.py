@@ -2,7 +2,7 @@ from nlstruct.dataloaders.brat import load_from_brat
 from nlstruct.dataloaders.ncbi_disease import load_ncbi_disease
 from nlstruct.dataloaders.medic import load_medic_synonyms, load_alt_medic_mapping
 from nlstruct.dataloaders.bc5cdr import load_bc5cdr
-from nlstruct.dataloaders.quaero import load_quaero
+from nlstruct.dataloaders.quaero import load_quaero, describe_quaero
 from nlstruct.dataloaders.n2c2_2019_task3 import load_n2c2_2019_task3
 from nlstruct.dataloaders.genia import load_genia_events, load_genia_ner
 from nlstruct.dataloaders.i2b2_2012_temporal_relations import load_i2b2_2012_temporal_relations
