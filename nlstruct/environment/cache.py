@@ -568,7 +568,7 @@ dump = joblib.dump
 def yaml_dump(obj, dest=None):
     if isinstance(dest, str):
         with open(dest, "w") as f:
-            return yaml.dump(obj, f)
+            return yaml.dump(obj, f, sort_keys=False)
     else:
         return yaml.dump(obj, dest, sort_keys=False)
 
