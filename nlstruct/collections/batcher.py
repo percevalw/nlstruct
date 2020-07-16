@@ -871,8 +871,10 @@ class Batcher:
         self = self.drop_duplicates(names)
         other = other.drop_duplicates(names)
         self_other_ids, mask = factorize(self.primary_ids, reference_values=other.primary_ids)[:2]
-        self = self[mask]
-        other = other[self_other_ids[mask]]
+        skip_in_self = not mask.all()
+        if skip_in_self:
+            self = self[mask]
+        other = other[self_other_ids[mask] if skip_in_self else self_other_ids]
         for name in names:
             self.tables[name].data.update({k: v for k, v in other.tables[name].data.items() if k not in self.tables[name].data})
             self.tables[name].masks.update({k: v for k, v in other.tables[name].masks.items() if k not in self.tables[name].masks})
