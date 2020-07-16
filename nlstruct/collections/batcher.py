@@ -1,5 +1,6 @@
 import pprint
 from collections import defaultdict
+from math import ceil
 
 import numpy as np
 import pandas as pd
@@ -97,35 +98,82 @@ class BatcherPrinter(pprint.PrettyPrinter):
         super()._format(obj, stream, indent, allowance, context, level)
 
 
-class SparseBatchSampler(BatchSampler):
-    def __init__(self, batcher, on, batch_size=32, shuffle=False, drop_last=False):
-        self.batch_size = batch_size
-        self.drop_last = drop_last
+class SortedBatchSampler(BatchSampler):
+    def __init__(self,
+                 batcher,
+                 keys_name,
+                 sort_keys="ascending",
+                 batch_size=None,
+                 shuffle=False,
+                 drop_last=False,
+                 keys_noise=1):
+        assert not drop_last
+
+        keys = []
+        for key_name in keys_name:
+            key = batcher[key_name]
+            if hasattr(key, 'getnnz'):
+                key = key.getnnz(1)
+            elif hasattr(key, 'shape') and len(key.shape) > 1:
+                key = key.reshape(key.shape[0], -1).sum(1)
+            keys.append(key)
+        self.keys = np.stack(keys, axis=0)
+        self.sort_keys = sort_keys
         self.shuffle = shuffle
-        self.batcher = batcher
-        self.on = on
+        if not shuffle:
+            self.keys_noise = np.asarray([0 for name in keys_name])
+        elif isinstance(keys_noise, (int, float)):
+            self.keys_noise = np.asarray([keys_noise for name in keys_name])
+        elif isinstance(keys_noise, dict):
+            self.keys_noise = np.asarray([keys_noise.get(name, 0) for name in keys_name])
+        else:
+            self.keys_noise = np.asarray(keys_noise)
+        self.length = len(batcher)
+        self.compute_blocks(batch_size)
+
+    def compute_blocks(self, batch_size):
+        self.block_begins = np.arange(ceil(len(self.keys) / batch_size)) * batch_size
+        self.block_ends = np.roll(self.block_begins, -1)
+        self.block_ends[-1] = self.block_begins[-1] + batch_size
 
     def __iter__(self):
-        length = len(self.batcher)
-        block_begins = np.arange(len(self)) * self.batch_size
-        block_ends = np.roll(block_begins, -1)
-        block_ends[-1] = block_begins[-1] + self.batch_size
+        init_permut = None
+        sorter = None
+
         if self.shuffle:
-            init_permut = np.random.permutation(length)
-            sorter = np.argsort(
-                (getattr(self.batcher[self.on], "getnnz", self.batcher[self.on].sum)(1) + np.random.poisson(1, size=length))[init_permut])
-            for i in np.random.permutation(len(block_begins)):
-                yield init_permut[sorter[block_begins[i]:block_ends[i]]]
+            init_permut = np.random.permutation(self.length)
+            if self.sort_keys:
+                sorter = np.lexsort(self.keys[init_permut] + np.random.poisson(self.keys_noise, size=self.keys.shape), axis=1)
+                if self.sort_keys == "descending":
+                    sorter = np.flip(sorter)
         else:
-            sorter = np.argsort(getattr(self.batcher[self.on], "getnnz", self.batcher[self.on].sum)(1))
-            for i in range(len(block_begins)):
-                yield sorter[block_begins[i]:block_ends[i]]
+            if self.sort_keys:
+                sorter = np.lexsort(self.keys, axis=1)
+                if self.sort_keys == "descending":
+                    sorter = np.flip(sorter)
+
+        if self.shuffle:
+            perm = np.random.permutation(len(self.block_begins))
+            block_begins = self.block_begins[perm]
+            block_ends = self.block_ends[perm]
+        else:
+            block_begins = self.block_begins
+            block_ends = self.block_ends
+
+        for i in range(len(block_begins)):
+            if init_permut is not None:
+                if sorter is not None:
+                    yield init_permut[sorter[block_begins[i]:block_ends[i]]]
+                else:
+                    yield init_permut[block_begins[i]:block_ends[i]]
+            else:
+                if sorter is not None:
+                    yield sorter[block_begins[i]:block_ends[i]]
+                else:
+                    yield np.arange(block_begins[i], block_ends[i])
 
     def __len__(self):
-        if self.drop_last:
-            return len(self.batcher) // self.batch_size
-        else:
-            return (len(self.batcher) + self.batch_size - 1) // self.batch_size
+        return len(self.block_begins)
 
 
 class Table:
@@ -888,14 +936,20 @@ class Batcher:
 
     def dataloader(self,
                    batch_size=32,
-                   sparse_sort_on=None,
+                   sort_on=None,
+                   sort_keys=False,
                    shuffle=False,
                    device=None,
                    dtypes=None,
                    **kwargs):
         batch_sampler = kwargs.pop("batch_sampler", None)
-        if sparse_sort_on is not None:
-            batch_sampler = SparseBatchSampler(self, on=sparse_sort_on, batch_size=batch_size, shuffle=shuffle, drop_last=False)
+        sparse_sort_on = kwargs.pop("sparse_sort_on", None)
+        assert sort_on is None or sparse_sort_on is None
+        sort_on = sparse_sort_on or sort_on
+        if sort_on is not None:
+            sort_keys = kwargs.pop("sort_keys", "ascending")
+            keys_noise = kwargs.pop("keys_noise", 0)
+            batch_sampler = SortedBatchSampler(self, keys_name=sort_on, sort_keys=sort_keys, batch_size=batch_size, shuffle=shuffle, keys_noise=keys_noise, drop_last=False)
         else:
             kwargs['batch_size'] = batch_size
             kwargs['shuffle'] = shuffle
