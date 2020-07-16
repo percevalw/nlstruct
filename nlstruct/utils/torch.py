@@ -131,30 +131,33 @@ class slice_parameters:
                 if module_param is None:
                     continue
 
-                subset_module_param = torch.nn.Parameter(module_param[indexer].to(device), requires_grad=module_param.requires_grad)
-                optimizer_saved_state = None
-                optimizer_subset_state = None
-                if optimizer is not None and optimizer.state[module_param]:
-                    optimizer_saved_state = optimizer.state[module_param]
-                    for group in optimizer.param_groups:
-                        group['params'] = [subset_module_param if x is module_param else x for x in group['params']]
-                    optimizer_subset_state = {}
-                    for optim_param_name, optim_param in optimizer_saved_state.items():
-                        param_device = device or optim_param.device
-                        if hasattr(optim_param, 'shape') and optim_param.shape == module_param.shape:
-                            optimizer_subset_state[optim_param_name] = optim_param[indexer].to(param_device)
-                        elif hasattr(optim_param, 'to'):
-                            optimizer_subset_state[optim_param_name] = optim_param.to(param_device)
-                        else:
-                            optimizer_subset_state[optim_param_name] = optim_param
-                    optimizer.state[subset_module_param] = optimizer_subset_state
-                    del optimizer.state[module_param]
+                if isinstance(module_param, torch.nn.Parameter):
+                    subset_module_param = torch.nn.Parameter(module_param[indexer].to(device), requires_grad=module_param.requires_grad)
+                    optimizer_saved_state = None
+                    optimizer_subset_state = None
+                    if optimizer is not None and optimizer.state[module_param]:
+                        optimizer_saved_state = optimizer.state[module_param]
+                        for group in optimizer.param_groups:
+                            group['params'] = [subset_module_param if x is module_param else x for x in group['params']]
+                        optimizer_subset_state = {}
+                        for optim_param_name, optim_param in optimizer_saved_state.items():
+                            param_device = device or optim_param.device
+                            if hasattr(optim_param, 'shape') and optim_param.shape == module_param.shape:
+                                optimizer_subset_state[optim_param_name] = optim_param[indexer].to(param_device)
+                            elif hasattr(optim_param, 'to'):
+                                optimizer_subset_state[optim_param_name] = optim_param.to(param_device)
+                            else:
+                                optimizer_subset_state[optim_param_name] = optim_param
+                        optimizer.state[subset_module_param] = optimizer_subset_state
+                        del optimizer.state[module_param]
 
-                subset_module_params[module_param_name] = (subset_module_param,
-                                                           module_param.device,
-                                                           module_param, # .detach().cpu(),
-                                                           optimizer_saved_state,
-                                                           optimizer_subset_state)
+                    subset_module_params[module_param_name] = (subset_module_param,
+                                                               module_param.device,
+                                                               module_param, # .detach().cpu(),
+                                                               optimizer_saved_state,
+                                                               optimizer_subset_state)
+                else:
+                    subset_module_param = module_param[indexer]
                 setattr(obj, module_param_name, subset_module_param)
 
             subset_list.append(undo_subset)
