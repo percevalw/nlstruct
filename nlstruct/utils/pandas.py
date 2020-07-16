@@ -600,6 +600,8 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
         unk = {}
     if vocabularies is None:
         vocabularies = {}
+    elif isinstance(vocabularies, dict):
+        vocabularies = dict(vocabularies)
     voc_order = list(vocabularies.keys())
 
     if train_vocabularies is False:
