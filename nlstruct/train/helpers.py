@@ -132,7 +132,7 @@ class OptimizationIterator:
         self.state = {} if state is None else state
 
         # Check state
-        for key, val in state.items():
+        for key, val in self.state.items():
             if not isinstance(val, (int, float, complex, str, tuple, frozenset, bytes)) and not hasattr(val, 'load_state_dict'):
                 if mutable_state_policy == "warn":
                     warn(f"Entry '{key}' in the state seems to be mutable but has no load_state_dict/state_dict methods. This could lead to unpredictable behaviors.")
