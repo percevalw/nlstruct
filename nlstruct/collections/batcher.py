@@ -106,7 +106,7 @@ class SortedBatchSampler(BatchSampler):
                  batch_size=None,
                  shuffle=False,
                  drop_last=False,
-                 keys_noise=1):
+                 keys_noise=1.):
         assert not drop_last
         if isinstance(keys_name, str):
             keys_name = [keys_name]
@@ -949,7 +949,7 @@ class Batcher:
         sort_on = sparse_sort_on or sort_on
         if sort_on is not None:
             sort_keys = kwargs.pop("sort_keys", "ascending")
-            keys_noise = kwargs.pop("keys_noise", 0)
+            keys_noise = kwargs.pop("keys_noise", 1.)
             batch_sampler = SortedBatchSampler(self, keys_name=sort_on, sort_keys=sort_keys, batch_size=batch_size, shuffle=shuffle, keys_noise=keys_noise, drop_last=False)
         else:
             kwargs['batch_size'] = batch_size
