@@ -144,12 +144,12 @@ class SortedBatchSampler(BatchSampler):
         if self.shuffle:
             init_permut = np.random.permutation(self.length)
             if self.sort_keys:
-                sorter = np.lexsort(self.keys[init_permut] + np.random.poisson(self.keys_noise, size=self.keys.shape), axis=0)
+                sorter = np.lexsort((self.keys[init_permut] + np.random.poisson(self.keys_noise, size=self.keys.shape)).T, axis=0)
                 if self.sort_keys == "descending":
                     sorter = np.flip(sorter)
         else:
             if self.sort_keys:
-                sorter = np.lexsort(self.keys, axis=0)
+                sorter = np.lexsort(self.keys.T, axis=0)
                 if self.sort_keys == "descending":
                     sorter = np.flip(sorter)
 
