@@ -108,7 +108,8 @@ class SortedBatchSampler(BatchSampler):
                  drop_last=False,
                  keys_noise=1):
         assert not drop_last
-
+        if isinstance(keys_name, str):
+            keys_name = [keys_name]
         keys = []
         for key_name in keys_name:
             key = batcher[key_name]
@@ -117,7 +118,7 @@ class SortedBatchSampler(BatchSampler):
             elif hasattr(key, 'shape') and len(key.shape) > 1:
                 key = key.reshape(key.shape[0], -1).sum(1)
             keys.append(key)
-        self.keys = np.stack(keys, axis=0)
+        self.keys = np.stack(keys, axis=1)
         self.sort_keys = sort_keys
         self.shuffle = shuffle
         if not shuffle:
@@ -143,12 +144,12 @@ class SortedBatchSampler(BatchSampler):
         if self.shuffle:
             init_permut = np.random.permutation(self.length)
             if self.sort_keys:
-                sorter = np.lexsort(self.keys[init_permut] + np.random.poisson(self.keys_noise, size=self.keys.shape), axis=1)
+                sorter = np.lexsort(self.keys[init_permut] + np.random.poisson(self.keys_noise, size=self.keys.shape), axis=0)
                 if self.sort_keys == "descending":
                     sorter = np.flip(sorter)
         else:
             if self.sort_keys:
-                sorter = np.lexsort(self.keys, axis=1)
+                sorter = np.lexsort(self.keys, axis=0)
                 if self.sort_keys == "descending":
                     sorter = np.flip(sorter)
 
