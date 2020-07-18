@@ -764,9 +764,10 @@ class cached(object):
                         filename = handle.dump(result)
                 else:
                     old_log = handle.load("info.log", loader=text_load, verbose=False)
-                    for line in old_log.split("\n"):
-                        if line:
-                            logger.info(line)
+                    if old_log is not None:
+                        for line in old_log.split("\n"):
+                            if line:
+                                logger.info(line)
                 return result
         else:
             func = args[0]
