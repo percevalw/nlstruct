@@ -461,13 +461,13 @@ class RAMCacheHandle(RelativePath):
     def tmp(self, item):
         raise NotImplementedError()
 
-    def load(self, name="output.pkl", loader=None):
+    def load(self, name="output.pkl", **kwargs):
         path = str(self / name)
         if str(path) in self.records:
             return self.records[str(path)]
         return None
 
-    def dump(self, obj, name="output.pkl", dumper=None):
+    def dump(self, obj, name="output.pkl", **kwargs):
         assert obj is not None
         path = str(self / name)
         self.records[str(path)] = obj
