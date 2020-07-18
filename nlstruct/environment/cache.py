@@ -452,7 +452,6 @@ class CacheHandle(RelativePath):
 
 class RAMCacheHandle(RelativePath):
     records = {}
-    ios = {}
 
     def __init__(self, path):
         super(RAMCacheHandle, self).__init__(path)
@@ -469,6 +468,7 @@ class RAMCacheHandle(RelativePath):
             record, is_io = self.records[str(path)]
             if is_io:
                 record = record.getvalue()
+            return record
         return None
 
     def open(self, mode='r', buffering=-1, encoding=None,
