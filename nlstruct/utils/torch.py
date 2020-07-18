@@ -1,8 +1,12 @@
 import io
+import logging
+import sys
 import warnings
 from contextlib import contextmanager
 
 import torch
+
+logger = logging.getLogger("nlstruct")
 
 
 class torch_global:
@@ -12,9 +16,9 @@ class torch_global:
         def __init__(self, device, error='ignore'):
             try:
                 count = torch.cuda.device_count()
-                print('Available CUDA devices', count)
+                logger.info(f'Available CUDA devices: {count}')
             except:
-                print('No available CUDA devices')
+                logger.error('No available CUDA devices')
             self.previous = torch_global.device
             try:
                 new_device = torch.device(device) if isinstance(device, str) else device
@@ -22,12 +26,12 @@ class torch_global:
             except:
                 msg = f"Device {device} is not available"
                 if error == "ignore":
-                    print(msg)
+                    logger.error(msg)
                 else:
-                    raise Exception(msg)
+                    raise
             else:
                 torch_global.device = new_device
-            print('Current device', torch_global.device)
+            logger.info(f'Current device: {torch_global.device}')
 
         def __enter__(self):
             pass
@@ -248,18 +252,18 @@ def extract_slices(sequences, flat_begins, flat_ends, flat_sample_idx):
     print("Cannot be here, already raised and exception")
 
 
-def print_optimized_params(net, optim):
+def print_optimized_params(net, optim, stream=sys.stdout):
     inv_dict = {id(p): name for name, p in net.named_parameters()}
     seen_params = set()
     for group_idx, group in enumerate(optim.param_groups):
-        print("Group", group_idx)
+        stream.write(f"Group {group_idx}\n")
         for p in group["params"]:
-            print("   " if not p.requires_grad else " x ", inv_dict[id(p)])
+            stream.write("   " if not p.requires_grad else " x " + inv_dict[id(p)] + "\n")
             seen_params.add(id(p))
     found_unoptimized = False
     for id_p, name in inv_dict.items():
         if id_p not in seen_params:
-            print("Unoptimized param", name)
+            stream.write(f"Unoptimized param '{name}'\n")
             found_unoptimized = True
     if not found_unoptimized:
-        print("All parameters are in the optimizer")
+        stream.write("All parameters are in the optimizer\n")

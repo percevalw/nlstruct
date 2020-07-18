@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict, Sized
 from functools import reduce
 
@@ -8,6 +9,8 @@ from pandas._libs.parsers import union_categoricals
 from pandas.core.dtypes.common import is_numeric_dtype
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph._traversal import connected_components
+
+logger = logging.getLogger("nlstruct")
 
 
 def join_cols(df, sep="/"):
@@ -626,12 +629,12 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
                     train_vocabularies[col_name] = False
     for col_name, will_train in train_vocabularies.items():
         if will_train and verbose:
-            print(f"Will train vocabulary for {col_name}")
+            logger.info(f"Will train vocabulary for {col_name}")
     for df in dfs:
         for col_name in df:
             if hasattr(df[col_name], 'cat') and col_name not in vocabularies and not col_name.endswith('_id'):
                 if verbose:
-                    print(f"Discovered existing vocabulary ({len(df[col_name].cat.categories)} entities) for {col_name}")
+                    logger.info(f"Discovered existing vocabulary ({len(df[col_name].cat.categories)} entities) for {col_name}")
                 vocabularies[col_name] = list(df[col_name].dtype.categories)
     for voc_name, train_voc in train_vocabularies.items():
         if train_voc:
@@ -662,7 +665,7 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
                     df[voc_name] = df[voc_name].astype(voc)
                     if verbose:
                         unk_msg = f"unk {unk[voc_name]}" if voc_name in unk else "no unk"
-                        print(f"Normalized {voc_name}, with given vocabulary and {unk_msg}")
+                        logger.info(f"Normalized {voc_name}, with given vocabulary and {unk_msg}")
                     if voc_name in unk:
                         df[voc_name].fillna(unk[voc_name], inplace=True)
 

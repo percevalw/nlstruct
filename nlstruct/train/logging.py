@@ -1,6 +1,9 @@
+import logging
 from collections import defaultdict
 
 from termcolor import colored
+
+logger = logging.getLogger("nlstruct")
 
 
 class TrainingLogger(object):
@@ -27,7 +30,6 @@ class TrainingLogger(object):
 
     def display(self, info):
         if self.fields is None:
-            print("\n")
             s = ""
             self.fields = []
             i = 0
@@ -60,7 +62,7 @@ class TrainingLogger(object):
                     name = colored(name, "red")
                 s += " " * (width - name_length) + name
                 i += 1
-            print(s)
+            logger.info(s)
 
         s = ""
         for i, (field, width) in enumerate(zip(self.fields, self.widths)):
@@ -93,4 +95,4 @@ class TrainingLogger(object):
             width = max(obj_width, width)
 
             s += " " * (width - obj_width) + formatted
-        print(s)
+        logger.info(s)

@@ -800,13 +800,11 @@ class Batcher:
         queried_tables = set()
         for table_name in self.join_order:
             # Ex: table_name = relations
-            # print("Querying", table_name, len(selected_ids[table_name]), selected_ids[table_name])
             table = self.tables[table_name][selected_ids[table_name]]
             table.prune_()
             self.tables[table_name] = table
             queried_tables.add(table_name)
             for foreign_id, reference_table in table.foreign_ids.items():
-                # print("   Processing foreign", foreign_id, "->", reference_table)
                 # Ex: col_name = from_mention_id
                 #     foreign_table_name = mention
                 #     foreign_table_id = mention_id
@@ -816,7 +814,6 @@ class Batcher:
                 mask_name = table.masks.get(foreign_id, None)
                 table_iloc = selected_ids.get(reference_table, None)
                 if reference_table in queried_tables:
-                    # print("   Frozen")
                     relative_ids, new_mask, unique_ids = factorize(
                         values=table[foreign_id],
                         mask=table[mask_name],
@@ -824,7 +821,6 @@ class Batcher:
                         freeze_reference=True,
                     )
                 else:
-                    # print("   Adding new ids to ids to query")
                     relative_ids, new_mask, selected_ids[reference_table] = factorize(
                         values=table['@' + foreign_id],
                         mask=table[mask_name] if mask_name is not None else (table['@' + foreign_id] != -1),
@@ -836,7 +832,6 @@ class Batcher:
                     table['@' + mask_name] = new_mask
                 elif mask_name is None and new_mask is not None:
                     relative_ids[~new_mask] = -1
-                    # print("  Adding table", reference_table, "to queue")
 
         if len(densify_kwargs):
             self.densify_(**densify_kwargs)
@@ -1008,7 +1003,6 @@ if __name__ == "__main__":
             "word": np.asarray([0, 1, 0, 2, 3, 4, 2, 5, 6]),
         },
     })
-    # print(batcher["doc", "@token_id"].toarray())
     print(Batcher.concat([
         batcher["doc", [0, 0, 2]],
         batcher["doc", [1, 0, 2]]

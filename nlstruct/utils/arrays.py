@@ -123,7 +123,6 @@ def factorize(values, mask=None, reference_values=None, freeze_reference=True):
     #         unique_values, relative_values = torch.unique(torch.cat(all_flat_values).unsqueeze(0), dim=1, sorted=False, return_inverse=True)
     #     elif freeze_reference:
     #         relative_values, unique_values = torch.unique(torch.cat((reference_values, *all_flat_values)).unsqueeze(0), dim=1, sorted=False, return_inverse=True)[1], reference_values
-    #         print(all_flat_values[0], "VS", reference_values, "=>", relative_values)
     #     else:
     #         unique_values, relative_values = torch.unique(torch.cat((reference_values, *all_flat_values)).unsqueeze(0), dim=1, sorted=False, return_inverse=True)
     #     relative_values = relative_values.squeeze(0)

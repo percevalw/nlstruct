@@ -1,9 +1,12 @@
+import logging
 from functools import partial
 from math import inf
 
 from torch.optim.optimizer import Optimizer
 
 from nlstruct.utils.deep_attributes import get_deep_attr, set_deep_attr
+
+logger = logging.getLogger("nlstruct")
 
 
 class Schedule(object):
@@ -293,8 +296,8 @@ class ScaleOnPlateauSchedule(Schedule):
             if old_val - new_val > self.eps:
                 vals.append(new_val)
                 if self.verbose:
-                    print('Epoch {:5d}: reducing learning rate'
-                          ' of group {} to {:.4e}.'.format(self.last_epoch, i, new_val))
+                    logger.info('Epoch {:5d}: reducing learning rate'
+                                ' of group {} to {:.4e}.'.format(self.last_epoch, i, new_val))
             else:
                 vals.append(old_val)
         return vals

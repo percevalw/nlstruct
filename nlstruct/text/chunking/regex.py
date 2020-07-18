@@ -21,7 +21,7 @@ def regex_sentencize(docs,
                      reg_token=TOKEN_REGEX,
                      text_col="text",
                      balance_parentheses=True,
-                     with_tqdm=False, verbose=0, **kwargs):
+                     with_tqdm=False, **kwargs):
     """
     Simple split docs into sentences using regexes
 
@@ -33,7 +33,6 @@ def regex_sentencize(docs,
     max_sentence_length: int
     min_sentence_length: int
     with_tqdm: bool
-    verbose: int
     balance_parentheses: bool
     text_col: str
     n_threads: int
@@ -109,8 +108,6 @@ def regex_sentencize(docs,
                 queued_spans.extend([(m.start() + idx, m.end() + idx) for m in reg_token.finditer(part)])
             if part is not None:
                 idx += len(part)
-    if verbose:
-        print("Sentence size: max = {}, min = {}".format(max_size, min_size))
     df = pd.DataFrame({
         doc_id_col: doc_ids,
         "sentence_idx": sentence_idx_list,

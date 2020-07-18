@@ -29,7 +29,7 @@ from sklearn.base import BaseEstimator
 
 from nlstruct.environment.path import RelativePath, root
 
-logger = logging.getLogger()
+logger = logging.getLogger("nlstruct")
 
 PY3_OR_LATER = sys.version_info[0] >= 3
 if PY3_OR_LATER:
@@ -412,7 +412,7 @@ class CacheHandle(RelativePath):
         super(CacheHandle, self).__init__(path)
         self.loader = loader if loader is not None else load
         self.dumper = dumper if dumper is not None else dump
-        print(f"Using cache {self}")
+        logging.info(f"Using cache {self}")
 
     def entry(self, name):
         os.makedirs(str(self), exist_ok=True)
@@ -421,15 +421,15 @@ class CacheHandle(RelativePath):
     def tmp(self, item):
         return root.tmp(os.path.join(item))
 
-    def load(self, source="output.pkl", loader=None, **kwargs):
+    def load(self, source="output.pkl", loader=None, verbose=True, **kwargs):
         path = str(self / source)
         if os.path.exists(str(path)):
-            print(f"Loading {path}... ", end="", flush=True)
+            if verbose:
+                logging.info(f"Loading {path}... ")
             if loader is None:
                 res = self.loader(path, **kwargs)
             else:
                 res = loader(path, **kwargs)
-            print("Done", flush=True)
             return res
         return None
 
@@ -580,6 +580,20 @@ def yaml_load(dest):
     return yaml.unsafe_load(dest)
 
 
+def text_dump(obj, dest=None):
+    if isinstance(dest, str):
+        with open(dest, "w") as f:
+            return f.write(obj)
+    dest.write(obj)
+
+
+def text_load(dest):
+    if isinstance(dest, str):
+        with open(dest, "r") as f:
+            return f.read()
+    return dest.read()
+
+
 def get_class_that_defined_method(meth):
     if inspect.ismethod(meth):
         for cls in inspect.getmro(meth.__self__.__class__):
@@ -599,13 +613,14 @@ class cached(object):
 
         return apply_on_func
 
-    def __init__(self, with_state=False, hash_only=None, ram=False, ignore=None, loader=None, dumper=None, default_cache_mode="rw"):
+    def __init__(self, with_state=False, hash_only=None, ram=False, save_log=True, ignore=None, loader=None, dumper=None, default_cache_mode="rw"):
         self.ready = False
         self.with_state = with_state
         self.cls = None
         self.ignore = ignore
         self.hash_only = hash_only
         self.ram = ram
+        self.save_log = save_log
         self.loader = loader
         self.dumper = dumper
         self.default_cache_mode = default_cache_mode
@@ -674,15 +689,31 @@ class cached(object):
                                        loader=self.loader,
                                        dumper=self.dumper, )
                 cached_result = handle.load() if "r" in cache_mode else None
+                old_log = handle.load("info.log", loader=text_load, verbose=False)
 
                 if cached_result is None:
+
+                    root_logger = handler = None
+                    if "w" in cache_mode and self.save_log:
+                        root_logger = logging.getLogger()
+                        handler = logging.FileHandler(str(handle / "info.log"), mode="w")
+                        handler.setFormatter("")
+                        root_logger.addHandler(handler)
+
                     if expect_cache_handle:
                         result = self.func(caller_self, *args, _cache=handle, **kwargs)
                     else:
                         result = self.func(caller_self, *args, **kwargs)
+
                     if "w" in cache_mode:
+                        if handler is not None:
+                            root_logger.removeHandler(handler)
                         filename = handle.dump((caller_self, result))
                 else:
+                    if old_log:
+                        for line in old_log.split("\n"):
+                            if line:
+                                logger.info(line)
                     cached_self, result = cached_result
                     caller_self.__dict__ = cached_self.__dict__
                 return result
@@ -702,19 +733,36 @@ class cached(object):
                                        loader=self.loader,
                                        dumper=self.dumper, )
                 result = handle.load() if "r" in cache_mode else None
+                old_log = handle.load("info.log", loader=text_load, verbose=False)
+
                 if result is None:
+
+                    root_logger = handler = None
+                    if "w" in cache_mode and self.save_log:
+                        root_logger = logging.getLogger()
+                        handler = logging.FileHandler(str(handle / "info.log"), mode="w")
+                        handler.setFormatter("")
+                        root_logger.addHandler(handler)
+
                     if expect_cache_handle:
                         result = self.func(*args, _cache=handle, **kwargs)
                     else:
                         result = self.func(*args, **kwargs)
+
                     if "w" in cache_mode:
+                        if handler is not None:
+                            root_logger.removeHandler(handler)
                         filename = handle.dump(result)
+                if old_log:
+                    for line in old_log.split("\n"):
+                        if line:
+                            logger.info(line)
                 return result
         else:
             func = args[0]
             if self.ignore is None:
                 self.ignore = getattr(func, '_ignore_args', ())
-            cache_key = (func, self.with_state, self.ram, self.ignore, self.loader, self.dumper, self.default_cache_mode)
+            cache_key = (func, self.with_state, self.ram, self.save_log, self.ignore, self.loader, self.dumper, self.default_cache_mode)
             if cache_key in cached.MAP:
                 return cached.MAP[cache_key]
             self.cls = get_class_that_defined_method(func)
