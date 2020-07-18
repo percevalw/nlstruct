@@ -62,8 +62,10 @@ class LinearSchedule(Schedule):
     iterations.
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.
-        end_val (float, optional): the initial value (ex: learning rate) of the schedule
-        num_iter (int, optional): the number of iterations over which the schedule occurs
+        end_val (float, optional): the initial learning rate which is the lower
+            boundary of the test. Default: 10.
+        num_iter (int, optional): the number of iterations over which the test
+            occurs. Default: 100.
     """
 
     def __init__(self, name, optimizer, end_val, num_iter):
@@ -89,8 +91,10 @@ class ExponentialSchedule(Schedule):
     iterations.
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.
-        end_val (float, optional): the initial value (ex: learning rate) of the schedule
-        num_iter (int, optional): the number of iterations over which the schedule occurs
+        end_val (float, optional): the initial learning rate which is the lower
+            boundary of the test. Default: 10.
+        num_iter (int, optional): the number of iterations over which the test
+            occurs. Default: 100.
     """
 
     def __init__(self, name, optimizer, end_val, num_iter):
@@ -112,14 +116,15 @@ class ExponentialSchedule(Schedule):
 
 
 class CosineSchedule(Schedule):
-    """Cosine annealing schedule as described in
-            Loshchilov and Hutter, SGDR: Stochastic Gradient Descent with Warm Restarts.
-            ICLR 2017. https://arxiv.org/abs/1608.03983
+    """Cosine annealing schedule as introduced in
+    SGDR: Stochastic Gradient Descent With Warm Restarts, Ilya Loshchilov & Frank Hutter
 
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.
-        end_val (float, optional): the initial value (ex: learning rate) of the schedule
-        num_iter (int, optional): the number of iterations over which the schedule occurs
+        end_val (float, optional): the initial learning rate which is the lower
+            boundary of the test
+        num_iter (int, optional): the number of iterations over which the test
+            occurs
     """
 
     def __init__(self, name, optimizer, end_val, num_iter):
