@@ -14,6 +14,8 @@ from nlstruct.train.schedule import ConcatSchedule
 from nlstruct.utils.deep_attributes import set_deep_attr
 from nlstruct.utils.torch import torch_global as tg
 
+logging.getLogger("sh").setLevel(logging.WARNING)
+
 
 class TrainingState(object):
     def __init__(self,
