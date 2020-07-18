@@ -1,5 +1,6 @@
 import glob
 import inspect
+import io
 import logging
 import os
 import pickle
@@ -451,6 +452,7 @@ class CacheHandle(RelativePath):
 
 class RAMCacheHandle(RelativePath):
     records = {}
+    ios = {}
 
     def __init__(self, path):
         super(RAMCacheHandle, self).__init__(path)
@@ -464,13 +466,21 @@ class RAMCacheHandle(RelativePath):
     def load(self, name="output.pkl", **kwargs):
         path = str(self / name)
         if str(path) in self.records:
-            return self.records[str(path)]
+            record, is_io = self.records[str(path)]
+            if is_io:
+                record = record.getvalue()
         return None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        f = io.BytesIO() if 'b' in mode else io.StringIO()
+        self.records[str(self)] = (f, True)
+        return f
 
     def dump(self, obj, name="output.pkl", **kwargs):
         assert obj is not None
         path = str(self / name)
-        self.records[str(path)] = obj
+        self.records[str(path)] = (obj, False)
         return path
 
     def listdir(self, glob_expr="*"):
@@ -692,13 +702,12 @@ class cached(object):
                 old_log = handle.load("info.log", loader=text_load, verbose=False)
 
                 if cached_result is None:
-
-                    root_logger = handler = None
+                    root_logger = log_file_handler = None
                     if "w" in cache_mode and self.save_log:
                         root_logger = logging.getLogger()
-                        handler = logging.FileHandler(str(handle / "info.log"), mode="w")
-                        handler.setFormatter("")
-                        root_logger.addHandler(handler)
+                        log_file_handler = logging.StreamHandler((handle/"info.log").open(mode="w"))
+                        log_file_handler.setFormatter("")
+                        root_logger.addHandler(log_file_handler)
 
                     if expect_cache_handle:
                         result = self.func(caller_self, *args, _cache=handle, **kwargs)
@@ -706,8 +715,9 @@ class cached(object):
                         result = self.func(caller_self, *args, **kwargs)
 
                     if "w" in cache_mode:
-                        if handler is not None:
-                            root_logger.removeHandler(handler)
+                        if log_file_handler is not None:
+                            root_logger.removeHandler(log_file_handler)
+                            log_file_handler.close()
                         filename = handle.dump((caller_self, result))
                 else:
                     if old_log:
@@ -737,12 +747,12 @@ class cached(object):
 
                 if result is None:
 
-                    root_logger = handler = None
+                    root_logger = log_file_handler = None
                     if "w" in cache_mode and self.save_log:
                         root_logger = logging.getLogger()
-                        handler = logging.FileHandler(str(handle / "info.log"), mode="w")
-                        handler.setFormatter("")
-                        root_logger.addHandler(handler)
+                        log_file_handler = logging.StreamHandler((handle / "info.log").open(mode="w"))
+                        log_file_handler.setFormatter("")
+                        root_logger.addHandler(log_file_handler)
 
                     if expect_cache_handle:
                         result = self.func(*args, _cache=handle, **kwargs)
@@ -750,8 +760,9 @@ class cached(object):
                         result = self.func(*args, **kwargs)
 
                     if "w" in cache_mode:
-                        if handler is not None:
-                            root_logger.removeHandler(handler)
+                        if log_file_handler is not None:
+                            root_logger.removeHandler(log_file_handler)
+                            log_file_handler.close()
                         filename = handle.dump(result)
                 if old_log:
                     for line in old_log.split("\n"):
