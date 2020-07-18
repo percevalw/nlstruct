@@ -1,6 +1,6 @@
 import logging
 from functools import partial
-from math import inf
+from math import inf, pi, cos
 
 from torch.optim.optimizer import Optimizer
 
@@ -62,10 +62,8 @@ class LinearSchedule(Schedule):
     iterations.
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.
-        end_val (float, optional): the initial learning rate which is the lower
-            boundary of the test. Default: 10.
-        num_iter (int, optional): the number of iterations over which the test
-            occurs. Default: 100.
+        end_val (float, optional): the initial value (ex: learning rate) of the schedule
+        num_iter (int, optional): the number of iterations over which the schedule occurs
     """
 
     def __init__(self, name, optimizer, end_val, num_iter):
@@ -91,10 +89,8 @@ class ExponentialSchedule(Schedule):
     iterations.
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.
-        end_val (float, optional): the initial learning rate which is the lower
-            boundary of the test. Default: 10.
-        num_iter (int, optional): the number of iterations over which the test
-            occurs. Default: 100.
+        end_val (float, optional): the initial value (ex: learning rate) of the schedule
+        num_iter (int, optional): the number of iterations over which the schedule occurs
     """
 
     def __init__(self, name, optimizer, end_val, num_iter):
@@ -110,6 +106,35 @@ class ExponentialSchedule(Schedule):
         else:
             end_vals = self.end_val
         return [base_val * (end_val / base_val) ** r for end_val, base_val in zip(end_vals, self.base_vals)]
+
+    def done(self):
+        return self.num_iter <= self.last_epoch + 1
+
+
+class CosineSchedule(Schedule):
+    """Cosine annealing schedule as described in
+            Loshchilov and Hutter, SGDR: Stochastic Gradient Descent with Warm Restarts.
+            ICLR 2017. https://arxiv.org/abs/1608.03983
+
+    Arguments:
+        optimizer (torch.optim.Optimizer): wrapped optimizer.
+        end_val (float, optional): the initial value (ex: learning rate) of the schedule
+        num_iter (int, optional): the number of iterations over which the schedule occurs
+    """
+
+    def __init__(self, name, optimizer, end_val, num_iter):
+        self.end_val = end_val
+        self.num_iter = num_iter
+        super(CosineSchedule, self).__init__(name, optimizer)
+
+    def get_val(self):
+        curr_iter = self.last_epoch + 1
+        r = curr_iter / self.num_iter
+        if not isinstance(self.end_val, (tuple, list)):
+            end_vals = [self.end_val for _ in self.base_vals]
+        else:
+            end_vals = self.end_val
+        return [end_val + (base_val - end_val) / 2 * (1 + cos(r * pi)) for end_val, base_val in zip(end_vals, self.base_vals)]
 
     def done(self):
         return self.num_iter <= self.last_epoch + 1
