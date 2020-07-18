@@ -45,7 +45,7 @@ class FAISSIndex(object):
         if self.use_bias:
             self.dim += 1
         self.device = torch.device("cpu")
-        self.index = faiss.index_factory(metric, factory_str, self.dim)
+        self.index = faiss.index_factory(self.dim, factory_str, metric)
         self.positions = None
         self.to(device)
         self.index.nprobe = nprobe
