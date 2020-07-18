@@ -699,7 +699,6 @@ class cached(object):
                                        loader=self.loader,
                                        dumper=self.dumper, )
                 cached_result = handle.load() if "r" in cache_mode else None
-                old_log = handle.load("info.log", loader=text_load, verbose=False)
 
                 if cached_result is None:
                     root_logger = log_file_handler = None
@@ -720,6 +719,7 @@ class cached(object):
                             log_file_handler.close()
                         filename = handle.dump((caller_self, result))
                 else:
+                    old_log = handle.load("info.log", loader=text_load, verbose=False)
                     if old_log:
                         for line in old_log.split("\n"):
                             if line:
@@ -743,10 +743,8 @@ class cached(object):
                                        loader=self.loader,
                                        dumper=self.dumper, )
                 result = handle.load() if "r" in cache_mode else None
-                old_log = handle.load("info.log", loader=text_load, verbose=False)
 
                 if result is None:
-
                     root_logger = log_file_handler = None
                     if "w" in cache_mode and self.save_log:
                         root_logger = logging.getLogger()
@@ -764,7 +762,8 @@ class cached(object):
                             root_logger.removeHandler(log_file_handler)
                             log_file_handler.close()
                         filename = handle.dump(result)
-                if old_log:
+                else:
+                    old_log = handle.load("info.log", loader=text_load, verbose=False)
                     for line in old_log.split("\n"):
                         if line:
                             logger.info(line)
