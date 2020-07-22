@@ -543,10 +543,6 @@ class Table:
         new_self.drop_relative_data_()
         return new_self.__dict__
 
-    def merge(self, other):
-        self.primary_ids
-        pass
-
 
 class QueryFunction:
     def __init__(self, batcher, **kwargs):
@@ -933,7 +929,6 @@ class Batcher:
     def dataloader(self,
                    batch_size=32,
                    sort_on=None,
-                   sort_keys=False,
                    shuffle=False,
                    device=None,
                    dtypes=None,
