@@ -57,6 +57,7 @@ def regex_sentencize(docs,
     doc_id_col = "id"
     while doc_id_col in docs.columns:
         doc_id_col += "_"
+    docs = docs.assign(**{doc_id_col: np.arange(len(docs))})
 
     reg_split = re.compile(reg_split)
     reg_token = re.compile(reg_token)
