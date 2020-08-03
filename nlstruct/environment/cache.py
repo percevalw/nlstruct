@@ -378,6 +378,9 @@ class TruncatedNumpyHasher(Hasher):
         else:
             self.save(obj, bypass_dispatch=True)
 
+    def no_save(self, obj):
+        pass
+
     dispatch = Dispatcher()
     dispatch[tuple] = save_tuple
     dispatch[type] = save_type
@@ -393,6 +396,7 @@ class TruncatedNumpyHasher(Hasher):
     dispatch[np.dtype] = save_ndtype
     dispatch[torch.nn.Parameter] = save_parameter
     dispatch[torch.Tensor] = save_tensor
+    dispatch[torch.device] = no_save
     dispatch[Mapping] = save_mapping
     dispatch[Sequence] = save_sequence
     dispatch[torch.optim.Optimizer] = save_optimizer
