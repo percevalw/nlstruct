@@ -8,7 +8,7 @@ from nlstruct.environment.path import root
 from nlstruct.utils.pandas import merge_with_spans
 
 
-def load_n2c2_2019_task3(validation_split=0.2, random_state=42, split="train"):
+def load_n2c2_2019_task3_split(validation_split=0.2, random_state=42, split="train"):
     path = root.resource("n2c2/".format(split))
     dataset = []
     for filename in sorted(os.listdir(path / '{}_norm'.format(split))):
@@ -48,3 +48,10 @@ def load_n2c2_2019_task3(validation_split=0.2, random_state=42, split="train"):
         mentions=mentions[["doc_id", "mention_id", "label"]],
         fragments=fragments[["doc_id", "mention_id", "fragment_id", "begin", "end"]]
     )
+
+
+def load_n2c2_2019_task3(validation_split=0.2, random_state=42):
+    return Dataset.concat([
+        load_n2c2_2019_task3_split(validation_split=validation_split, random_state=random_state, split="train"),
+        load_n2c2_2019_task3_split(split="test"),
+    ])

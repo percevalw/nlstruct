@@ -27,7 +27,6 @@ def load_medic_synonyms(version, _cache=None):
     return df
 
 
-@cached
 def load_alt_medic_mapping(version, _cache=None):
     df = get_raw_medic(version)
     alt_medic_mapping = df[['AltDiseaseIDs', 'DiseaseID']].copy()
