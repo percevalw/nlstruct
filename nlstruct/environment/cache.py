@@ -720,7 +720,7 @@ class cached(object):
                     if "w" in cache_mode:
                         if log_file_handler is not None:
                             root_logger.removeHandler(log_file_handler)
-                            log_file_handler.close()
+                            log_file_handler.stream.close()
                         filename = handle.dump((caller_self, result))
                 else:
                     old_log = handle.load("info.log", loader=text_load, verbose=False)
@@ -764,7 +764,7 @@ class cached(object):
                     if "w" in cache_mode:
                         if log_file_handler is not None:
                             root_logger.removeHandler(log_file_handler)
-                            log_file_handler.close()
+                            log_file_handler.stream.close()
                         filename = handle.dump(result)
                 else:
                     old_log = handle.load("info.log", loader=text_load, verbose=False)
