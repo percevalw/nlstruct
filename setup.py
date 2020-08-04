@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 if __name__ == "__main__":
     setuptools.setup(
         name="nlstruct",  # Replace with your own username
-        version="0.0.1",
+        version="0.0.2",
         author="Perceval Wajsburt",
         author_email="perceval.wajsburt@sorbonne-universite.fr",
         license='BSD 3-Clause',
