@@ -85,7 +85,7 @@ Dataset(
 3  10192393         0/4  10192393-3  10192393-3  SpecificDisease   61.0   87.0
 4  10192393         0/4  10192393-4  10192393-4  SpecificDisease   89.0   92.0
 
->>> tokens = huggingface_tokenize(sentences, AutoTokenizer.from_pretrained('/export/home/opt/data/camembert/v0/camembert-base'))
+>>> tokens = huggingface_tokenize(sentences, AutoTokenizer.from_pretrained('camembert-base'))
 >>> # Express mentions as token spans instead of char spans
 >>> mentions = split_into_spans(mentions, tokens, pos_col="token_idx")
 >>> mentions = assign_sorted_id(mentions, "mention_idx", groupby=["doc_id", "sentence_id"], sort_on="begin")
@@ -183,8 +183,8 @@ torch.Size([22, 74])
 ```
 ## Install
 
-This project is still under development and has therefore not been released on the pypi repository.
+This project is still under development and subject to changes.
 
 ```bash
-pip install git+https://github.com/percevalw/nlstruct.git
+pip install nlstruct
 ```
