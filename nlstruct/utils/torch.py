@@ -124,6 +124,15 @@ def no_subset():
     subset_list = [redo() for redo in redos]
 
 
+def index_shape(tensor, index, sliced_shape):
+    indexer = tuple(None if d != sliced_shape else index for d in tensor.shape)
+    return tensor[indexer]
+
+def index_shape_put(tensor, index, sliced_shape, values):
+    indexer = tuple(None if d != sliced_shape else index for d in tensor.shape)
+    tensor[indexer] = values
+
+
 class slice_parameters:
     def __init__(self, obj, names, indexer, optimizer, device=None):
         subset_module_params = {}
@@ -138,6 +147,8 @@ class slice_parameters:
                 if module_param is None:
                     continue
 
+                sliced_shape = module_param.shape[dim]
+
                 optimizer_saved_state = None
                 optimizer_subset_state = None
                 if isinstance(module_param, torch.nn.Parameter):
@@ -151,8 +162,8 @@ class slice_parameters:
                         optimizer_subset_state = {}
                         for optim_param_name, optim_param in optimizer_saved_state.items():
                             param_device = device or optim_param.device
-                            if hasattr(optim_param, 'shape') and optim_param.shape == module_param.shape:
-                                optimizer_subset_state[optim_param_name] = optim_param[tuple(slice(None) for _ in range(dim)) + (indexer,)].to(param_device)
+                            if hasattr(optim_param, 'shape') and sliced_shape in optim_param.shape:
+                                optimizer_subset_state[optim_param_name] = index_shape(optim_param, indexer, sliced_shape).to(param_device)
                             elif hasattr(optim_param, 'to'):
                                 optimizer_subset_state[optim_param_name] = optim_param.to(param_device)
                             else:
@@ -181,7 +192,8 @@ class slice_parameters:
                                     optimizer_saved_state,
                                     optimizer_subset_state,
                                     dim) in subset_module_params.items():
-                module_param_detached.data[tuple(slice(None) for _ in range(dim)) + (indexer,)] = subset_module_param.detach().to(module_param_detached.device)
+                sliced_shape = module_param_detached.data.shape[dim]
+                index_shape_put(module_param_detached.data, indexer, sliced_shape, subset_module_param.detach().to(module_param_detached.device))
                 restored_param = module_param_detached  # torch.nn.Parameter(module_param_detached.to(device), requires_grad=subset_module_param.requires_grad)
 
                 # Update old embeddings with new ones
@@ -191,10 +203,10 @@ class slice_parameters:
                         group['params'] = [restored_param if x is subset_module_param else x for x in group['params']]
 
                     for optim_param_name, optim_param in optimizer_subset_state.items():
-                        if hasattr(optim_param, 'shape') and optim_param.shape == subset_module_param.shape:
+                        if hasattr(optim_param, 'shape') and sliced_shape in optim_param.shape:
                             subset_param = optimizer_subset_state[optim_param_name]
                             optimizer_subset_state[optim_param_name] = optimizer_saved_state[optim_param_name]
-                            optimizer_subset_state[optim_param_name][tuple(slice(None) for _ in range(dim)) + (indexer,)] = subset_param.to(optimizer_subset_state[optim_param_name].device)
+                            index_shape_put(optimizer_subset_state[optim_param_name], indexer, sliced_shape, subset_param.to(optimizer_subset_state[optim_param_name].device))
                         optimizer.state[restored_param] = optimizer_subset_state
                     del optimizer.state[subset_module_param]
                 setattr(obj, module_param_name, restored_param)
