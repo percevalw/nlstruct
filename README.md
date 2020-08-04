@@ -183,8 +183,8 @@ torch.Size([22, 74])
 ```
 ## Install
 
-This project is still under development and has therefore not been released on the pypi repository.
+This project is still under development and subject to changes.
 
 ```bash
-pip install git+https://github.com/percevalw/nlstruct.git
+pip install nlstruct
 ```
