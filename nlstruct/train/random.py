@@ -14,11 +14,15 @@ RandomGeneratorState = namedtuple('RandomGeneratorState',
 
 def get_random_generator_state(cuda=torch.cuda.is_available()):
     """ Get the `torch`, `numpy` and `random` random generator state.
-    Args:
-        cuda (bool, optional): If `True` saves the `cuda` seed also. Note that getting and setting
+
+    Parameters
+    ----------
+    cuda: bool  If `True` saves the `cuda` seed also. Note that getting and setting
             the random generator state for CUDA can be quite slow if you have a lot of GPUs.
-    Returns:
-        RandomGeneratorState
+
+    Returns
+    -------
+    RandomGeneratorState
     """
     return RandomGeneratorState(random.getstate(), torch.random.get_rng_state(),
                                 np.random.get_state(),
@@ -26,9 +30,12 @@ def get_random_generator_state(cuda=torch.cuda.is_available()):
 
 
 def set_random_generator_state(state):
-    """ Set the `torch`, `numpy` and `random` random generator state.
-    Args:
-        state (RandomGeneratorState)
+    """
+    Set the `torch`, `numpy` and `random` random generator state.
+
+    Parameters
+    ----------
+    state: RandomGeneratorState
     """
     random.setstate(state.random)
     torch.random.set_rng_state(state.torch)
@@ -40,13 +47,18 @@ def set_random_generator_state(state):
 
 @contextmanager
 def fork_rng(seed=None, cuda=torch.cuda.is_available()):
-    """ Forks the `torch`, `numpy` and `random` random generators, so that when you return, the
+    """
+    Forks the `torch`, `numpy` and `random` random generators, so that when you return, the
     random generators are reset to the state that they were previously in.
-    Args:
-        seed (int or None, optional): If defined this sets the seed values for the random
-            generator fork. This is a convenience parameter.
-        cuda (bool, optional): If `True` saves the `cuda` seed also. Getting and setting the random
-            generator state can be quite slow if you have a lot of GPUs.
+
+    Parameters
+    ----------
+    seed: int or None
+        If defined this sets the seed values for the random
+        generator fork. This is a convenience parameter.
+    cuda: bool
+        If `True` saves the `cuda` seed also. Getting and setting the random
+        generator state can be quite slow if you have a lot of GPUs.
     """
     state = get_random_generator_state(cuda)
     if seed is not None:
@@ -73,9 +85,12 @@ def fork_rng_wrap(function=None, **kwargs):
 
 def set_seed(seed, cuda=torch.cuda.is_available()):
     """ Set seed values for random generators.
-    Args:
-        seed (int): Value used as a seed.
-        cuda (bool, optional): If `True` sets the `cuda` seed also.
+    Parameters
+    ----------
+    seed: int
+        Value used as a seed.
+    cuda: bool
+        If `True` sets the `cuda` seed also.
     """
     random.seed(seed)
     torch.manual_seed(seed)
