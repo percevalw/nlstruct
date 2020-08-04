@@ -256,7 +256,7 @@ class OptimizationIterator:
         if self.state["epoch"] != self.monitor.best_epoch and "read_checkpoints" in self.cache_policy:
             dumped = self.cache.load(f"checkpoint-{str(self.monitor.best_epoch)}.pt", map_location=tg.device) if self.cache is not None else None
             if dumped is not None:
-                logging.info(f"Model restored to its best self.state: {self.monitor.best_epoch}")
+                logging.info(f"Model restored to its best state: {self.monitor.best_epoch}")
                 for name in dumped.keys():
                     persistable = self.state.get(name, None)
                     if name in self.state and hasattr(persistable, 'load_state_dict'):
@@ -264,7 +264,7 @@ class OptimizationIterator:
                     else:
                         self.state[name] = dumped[name]
             else:
-                logging.info(f"Could not restore model to its best self.state: {self.monitor.best_epoch}")
+                logging.info(f"Could not restore model to its best state: {self.monitor.best_epoch}")
 
 
 iter_optimization = OptimizationIterator
