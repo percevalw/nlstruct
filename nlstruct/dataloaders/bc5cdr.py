@@ -82,7 +82,8 @@ def load_bc5cdr():
 
     # Transform the raw dataset as a Dataset instance
     raw = raw
-    mentions = raw[["doc_id", "begin", "end", "label", "category"]].nlstruct.flatten("mention_id", tile_index=True).astype({"mention_id": object})
+    mentions = raw[["doc_id", "begin", "end", "label", "category", "text"]].nlstruct.flatten("mention_id", tile_index=True)
+    mentions["text"] = mentions.apply(lambda row: row["text"][row["begin"]:row["end"]], axis=1)
     mentions["mention_id"] = (mentions["doc_id"].astype("str") + "-" + mentions["mention_id"].astype(str))
     mentions_label = mentions[["doc_id", "mention_id", "label"]].nlstruct.flatten("label_id", tile_index=True).astype({"label_id": object})
     mentions_label["label_id"] = (mentions_label["mention_id"].astype("str") + "-" + mentions_label["label_id"].astype(str))
@@ -91,7 +92,7 @@ def load_bc5cdr():
     fragments["fragment_id"] = fragments["mention_id"]
     return Dataset(
         docs=raw[["doc_id", "text"]],
-        mentions=mentions[["doc_id", "mention_id", "category"]],
+        mentions=mentions[["doc_id", "mention_id", "category", "text"]],
         labels=mentions_label,
         fragments=fragments,
     )
