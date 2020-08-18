@@ -682,24 +682,24 @@ def normalize_vocabularies(dfs, vocabularies=None, train_vocabularies=True, unk=
 
 
 def assign_sorted_id(df, name, groupby, sort_on):
-    """
-    Assign a sorted id grouped by the values in `groupby`
-
-    Parameters
-    ----------
-    df:  pd.DataFrame
-    name: str
-        Name of the new id
-    groupby: (list of str) or str
-    sort_on: (list of str) or str
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    df = df.sort_values(sort_on)
-    df[name] = np.arange(len(df))
-    return df.nlstruct.groupby_assign(groupby, {name: lambda x: tuple(np.argsort(np.argsort(x)))})
+    if isinstance(groupby, str):
+        groupby = [groupby]
+    if isinstance(sort_on, str):
+        sort_on = [sort_on]
+    id_name = "id_"
+    while id_name in df.columns:
+        id_name += "_"
+    sorted_df = df.assign(**{id_name: np.arange(len(df))})
+    sorted_df = sorted_df.sort_values(groupby + sort_on)
+    indices = [0] * len(sorted_df)
+    last = None
+    counter = 0
+    for i, ids in enumerate(sorted_df[groupby].itertuples(index=False)):
+        counter = 0 if ids != last else counter+1
+        last = ids
+        indices[i] = counter
+    sorted_df[name] = indices
+    return sorted_df.sort_values(id_name).drop(columns=[id_name])
 
 
 def encode_ids(dfs, names=None, inplace=True):
