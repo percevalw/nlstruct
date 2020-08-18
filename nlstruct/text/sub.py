@@ -221,7 +221,7 @@ def apply_deltas(positions, deltas, on, position_columns=None):
         tmp = mention_deltas.sort_values(['_id_col', delta_col_map['begin' if side == 'left' else 'end']]).groupby('_id_col').agg({
             "shift": "sum",
             **{n: order for n in mention_deltas.columns if n not in ("shift", "_id_col")}})
-        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0)
+        positions[col] = positions[col].add(tmp['shift'] + tmp['between_magnet'], fill_value=0).astype(int)
     positions = positions.reset_index(drop=True)
     return positions
 
