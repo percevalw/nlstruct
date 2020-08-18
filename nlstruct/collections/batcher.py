@@ -98,6 +98,9 @@ class BatcherPrinter(pprint.PrettyPrinter):
         super()._format(obj, stream, indent, allowance, context, level)
 
 
+np_len = np.frompyfunc(len, 1, 1)
+
+
 class SortedBatchSampler(BatchSampler):
     def __init__(self,
                  batcher,
@@ -117,6 +120,8 @@ class SortedBatchSampler(BatchSampler):
                 key = key.getnnz(1)
             elif hasattr(key, 'shape') and len(key.shape) > 1:
                 key = key.reshape(key.shape[0], -1).sum(1)
+            elif hasattr(key, 'dtype') and not np.issubdtype(key.dtype, np.number):
+                key = np_len(key)
             keys.append(key)
         self.keys = np.stack(keys, axis=1)
         self.sort_keys = sort_keys
@@ -448,11 +453,19 @@ class Table:
 
         new_data = {}
         for col_name, col in self.data.items():
-            torch_dtype = dtypes.get(col_name, torch.long if (device is not None and not torch.is_tensor(col) and np.issubdtype(col.dtype, np.integer)) else None)
-            col = as_array(col,
-                           t=torch.Tensor if (device is not None or col_name in dtypes) else np.ndarray,
-                           device=device,
-                           dtype=torch_dtype)
+            if device is not None and not torch.is_tensor(col):
+                if np.issubdtype(col.dtype, np.integer):
+                    col = as_array(col,
+                                   t=torch.Tensor if (device is not None or col_name in dtypes) else np.ndarray,
+                                   device=device,
+                                   dtype=torch.long)
+                elif np.issubdtype(col.dtype, np.number):
+                    col = as_array(col,
+                                   t=torch.Tensor if (device is not None or col_name in dtypes) else np.ndarray,
+                                   device=device,
+                                   dtype=None)
+                else:
+                    pass
             new_data[col_name] = col
         self.data = new_data
 
