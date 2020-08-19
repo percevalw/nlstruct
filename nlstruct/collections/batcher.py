@@ -454,7 +454,7 @@ class Table:
         new_data = {}
         for col_name, col in self.data.items():
             dtype = dtypes[col_name] if col_name in dtypes else torch.long if (device is not None and not torch.is_tensor(col) and np.issubdtype(col.dtype, np.integer)) else None
-            col_device = device if np.issubdtype(col.dtype, np.numeric) or np.issubdtype(col.dtype, np.bool_) else None
+            col_device = device if np.issubdtype(col.dtype, np.number) or np.issubdtype(col.dtype, np.bool_) else None
             new_data[col_name] = as_array(
                 col,
                 t=torch.Tensor if col_device is not None else np.ndarray,
