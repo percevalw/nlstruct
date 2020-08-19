@@ -120,7 +120,7 @@ class SortedBatchSampler(BatchSampler):
                 key = key.getnnz(1)
             elif hasattr(key, 'shape') and len(key.shape) > 1:
                 key = key.reshape(key.shape[0], -1).sum(1)
-            elif hasattr(key, 'dtype') and not (np.issubdtype(key.dtype, np.number) or np.issubdtype(key.dtype, np.bool)):
+            elif hasattr(key, 'dtype') and not (np.issubdtype(key.dtype, np.number) or np.issubdtype(key.dtype, np.bool_)):
                 key = np_len(key)
             keys.append(key)
         self.keys = np.stack(keys, axis=1)
@@ -459,7 +459,7 @@ class Table:
                                    t=torch.Tensor if (device is not None or col_name in dtypes) else np.ndarray,
                                    device=device,
                                    dtype=torch.long)
-                elif np.issubdtype(col.dtype, np.number) or np.issubdtype(col.dtype, np.bool):
+                elif np.issubdtype(col.dtype, np.number) or np.issubdtype(col.dtype, np.bool_):
                     col = as_array(col,
                                    t=torch.Tensor if (device is not None or col_name in dtypes) else np.ndarray,
                                    device=device,
