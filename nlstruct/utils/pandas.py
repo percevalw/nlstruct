@@ -27,152 +27,53 @@ def get_sequence_length(obj):
         return len(obj)
 
 
-def flatten(frame,
-            index_name=None,
-            as_index=False,
-            keep_na=False,
-            columns=None,
-            tile_index=False):
+def flatten(frame, index_name=None, columns=None, keep_na=False, infer_types=True, tile_index=False):
     """
-    Flatten the input before the transformation
-    Parameters
-    ----------
-    frame: pandas.DataFrame
-    index_name: str
-        Name of the index to append to indentify each item uniquely
-    keep_na: bool or str
-        Should non-sequences elements (or sequences full of None) be kept in the dataframe
-        as an empty row (value given is None and new index value is None also)
-    columns: tuple of str
-        Flatten only sequence in these columns if not None
-    Returns
-    -------
-    (pandas.DataFrame, pandas.DataFrame, callable)
-        flattened input:
-            Flattened input to transform
-        length:
-            Lengths of the sequences. We will actually only want to know if it was a sequence
-            or not (see get_sequence_length(...)), during either unflattening if regroup is
-            True or during rationale backpropagation
-        sequence_constructor:
-            Returns the "type" of the sequences contained in the frame, or more specifically
-            the function used to build an instance of these sequences. Will be used during
-            unflattening if self.regroup is True and during rationale backpropagation
-    """
-    if isinstance(as_index, bool):
-        as_column = not as_index
-    elif isinstance(as_index, str) and index_name is None:
-        index_name = as_index
-        as_column = False
-    else:
-        raise Exception("as_index must be str or bool, and if str, index_name must be None")
-
-    if isinstance(frame, pd.Series):
-        res = flatten(pd.DataFrame({"X": frame}), index_name, as_column, keep_na, columns, tile_index)
-        new_frame = res["X"]
-        new_frame.name = frame.name
-        return new_frame
-
-    if keep_na is True:
-        keep_na = 'null_index'
-    elif keep_na is False:
-        keep_na = 'remove'
-    assert keep_na in ('null_index', 'as_single_item', 'remove')
-
-    assert isinstance(frame, pd.DataFrame), "Can only flatten DataFrame"
+        Explode the frame columns `columns`
+        Parameters
+        ----------
+        frame: pandas.DataFrame
+        index_name: str
+            Name of the index to append to indentify each new item uniquely
+        keep_na: bool or str
+            Should non-sequences elements (or sequences full of None) be kept in the dataframe
+            as an empty row (value given is None and new index value is None also)
+        columns: tuple of str
+            Flatten only sequence in these columns if not None
+        infer_types: bool
+            Should we infer the exploded coumns types
+        tile_index: bool
+            Should the new index be tiled [0, 1, 2, 0, 1, 0, 1, 2, 3, ...]
+        Returns
+        -------
+        pandas.DataFrame
+            flattened input:
+                Flattened input to transform
+        """
     if columns is None:
-        columns = frame.columns
-    elif not isinstance(columns, (tuple, list)):
+        columns = [col for col, val in frame.iloc[0].items() if hasattr(val, '__len__') and not isinstance(val, str)]
+    if isinstance(columns, str):
         columns = [columns]
-    else:
-        columns = list(columns)
-    lengths = frame[columns].applymap(lambda seq: get_sequence_length(seq))
-    for col in frame.columns:
-        if col not in columns:
-            lengths[col] = -1
-    result_lengths = lengths.max(axis=1)
-
-    # Each column element will be expanded on multiple rows,
-    # even if it is a non-iterable object
-    # We must know before how many rows will the expansion take
-    # and we take this length from the maximum sequence size
-    if keep_na == 'remove':
-        bool_row_selector = result_lengths > 0
-        result_lengths = result_lengths[bool_row_selector]
-        selected_lengths = lengths[bool_row_selector]
-        frame = frame[bool_row_selector]
-        nulls = None
-    else:
-        nulls = result_lengths < 0
-        # Non sequence or sequence full of None will give rise to 1 row
-        result_lengths[nulls] = 1
-        selected_lengths = lengths
-        nulls = result_lengths.cumsum()[nulls] - 1
-
-    categoricals = {}
-    frame = frame.copy()
-    for col in frame.columns:
-        if hasattr(frame[col], 'cat'):
-            categoricals[col] = frame[col].cat.categories
-            frame[col] = frame[col].cat.codes
-
-    flattened = {col: [] for col in frame.columns}
-    for col_name, col in frame.iteritems():
-        for obj, res_length, length in zip(col.values, result_lengths, selected_lengths[col_name]):
-            if length >= 0:  # we have a normal sequence
-                flattened[col_name].append(obj if isinstance(obj, pd.Series) else pd.Series(obj))
-
-            # Otherwise it a non sequence, create as many rows as needed for it
-            else:
-                # -2 means sequence full of None, we put a None instead here
-                if length == -2:
-                    obj = None
-                if res_length == 1:
-                    flattened[col_name].append(pd.Series([obj]))
-                else:
-                    flattened[col_name].append(pd.Series([obj] * res_length))
-
-    index = frame.index.repeat(result_lengths) if index_name is not None else None
-    for col_name in flattened:
-        flattened[col_name] = pd.concat(flattened[col_name], ignore_index=True)
-        if index is not None:
-            flattened[col_name].index = index
-
-    flattened = pd.DataFrame(flattened)
-
-    # flattened = pd.DataFrame(
-    #     data={col_name: pd.concat(flattened[col_name], ignore_index=True) for col_name in flattened},
-    #     index=frame.index.repeat(result_lengths) if index_name is not None else None)
-
-    for name, categories in categoricals.items():
-        flattened[name] = pd.Categorical.from_codes(flattened[name], categories=categories)
-    # Adds an index under the name `self.index_name` to identify uniquely every row
-    # of the frame
+    old_index = None
+    if tile_index:
+        assert index_name is not None
+        old_index = "old_id_"
+        while old_index in frame.columns:
+            old_index += "_"
+        frame[old_index] = np.arange(len(frame))
+    new_df = frame.explode(columns[0])
+    col = columns[0]
+    for col in columns[1:]:
+        new_df[col] = frame[col].explode().values
+    if not keep_na:
+        new_df = new_df[~pd.isna(new_df[col])]
+    if infer_types:
+        new_df[columns] = new_df[columns].infer_objects()
     if index_name is not None:
-        if index_name in flattened.columns:
-            flattened.set_index(index_name, append=True, inplace=True)
-        else:
-            if tile_index:
-                new_index_values = np.concatenate([np.arange(s) for s in result_lengths])
-                flattened[index_name] = new_index_values
-            else:
-                new_index_values = np.arange(len(flattened))
-                flattened[index_name] = new_index_values
-                flattened[index_name] = flattened[index_name]
-
-            flattened.set_index(index_name, append=True, inplace=True)
-            if keep_na == 'null_index' and nulls is not None:
-                new_labels = np.arange(len(flattened))
-                # noinspection PyUnresolvedReferences
-                new_labels[nulls.values] = -1
-                flattened.index.set_codes(
-                    new_labels, level=index_name, inplace=True)
-        if as_column:
-            flattened.reset_index(index_name, inplace=True)
-            flattened.reset_index(inplace=True, drop=True)
-    # flattened.index = flattened.index.remove_unused_levels()
-
-    return flattened
+        new_df[index_name] = np.arange(len(new_df))
+        if tile_index:
+            new_df = assign_sorted_id(new_df, index_name, old_index, index_name)
+    return new_df.drop(columns=[old_index]) if old_index else new_df
 
 
 def make_merged_names(left_span_names, right_span_names, left_on, right_on, left_columns, right_columns,
