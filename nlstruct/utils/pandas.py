@@ -60,7 +60,7 @@ def flatten(frame, index_name=None, columns=None, keep_na=False, infer_types=Tru
         old_index = "old_id_"
         while old_index in frame.columns:
             old_index += "_"
-        frame[old_index] = np.arange(len(frame))
+        frame = frame.assign(**{old_index: np.arange(len(frame))})
     new_df = frame.explode(columns[0])
     col = columns[0]
     for col in columns[1:]:
