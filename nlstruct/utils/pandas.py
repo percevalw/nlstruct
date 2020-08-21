@@ -701,7 +701,7 @@ class NLStructAccessor(object):
             # .astype({key: "category" for key in mentions_cluster_ids})
             res.groupby(by, observed=observed, **kwargs)
                 .agg({**agg, "_index": tuple}).reset_index(drop=True)
-                .nlstruct.flatten("_index"),
+                .nlstruct.flatten(),
             how='left',
             on='_index',
         ).drop(columns=["_index"])

@@ -3,7 +3,7 @@ from logging import warning
 import numpy as np
 import pandas as pd
 
-from nlstruct.utils.pandas import merge_with_spans, make_id_from_merged, join_cols
+from nlstruct.utils.pandas import merge_with_spans, make_id_from_merged, join_cols, assign_sorted_id
 
 
 def make_tag_scheme(length, entity, scheme='bio'):
@@ -196,8 +196,7 @@ def partition_spans(smalls, large,
                      .agg({**{n: 'first' for n in [*doc_id_cols, *large_id_cols] if n != new_id_name}, 'begin': 'min', 'end': 'max'})
                      .astype({"begin": int, "end": int, **large[doc_id_cols].dtypes}))
             large = large[doc_id_cols + [new_id_name] + ["begin", "end"]]
-            large[new_id_name] = large['begin']
-            large = large.nlstruct.groupby_assign(doc_id_cols, {new_id_name: lambda x: tuple(np.argsort(np.argsort(x)))})
+            large = assign_sorted_id(large, new_id_name, doc_id_cols, 'begin')
             old_to_new = large[doc_id_cols + [new_id_name]].drop_duplicates().reset_index(drop=True)
             merged_id_cols = [new_id_name]
         # large[original_new_id_name] = large[doc_id_cols + [new_id_name]].apply(lambda x: "/".join(map(str, x[doc_id_cols])) + "/" + str(x[new_id_name]), axis=1).astype("category")
