@@ -1078,12 +1078,11 @@ class Batcher:
                    loop=False,
                    **kwargs):
         batch_sampler = kwargs.pop("batch_sampler", None)
-        sparse_sort_on = kwargs.pop("sparse_sort_on", None)
-        assert sort_on is None or sparse_sort_on is None
-        sort_on = sparse_sort_on or sort_on
         if batch_sampler is None:
             order = kwargs.pop("sort_keys", "ascending")  # for backward compat
             order = kwargs.pop("order", order)
+            sort_on = kwargs.pop("sparse_sort_on", sort_on)  # for backward compat
+            sort_on = kwargs.pop("keys_name", sort_on)  # for backward compat
             keys_noise = kwargs.pop("keys_noise", 1.)
             batch_sampler = StatefulBatchSampler(
                 self,
