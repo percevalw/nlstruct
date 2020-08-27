@@ -263,7 +263,10 @@ class StatefulBatchSampler(BatchSampler):
         self.step = 0
         self.step_offset = 0
         self.current_offset = 0 if loop else None
+
+        self.next_offset = 0 if loop else None
         self.initialized = False
+        self.batches = None
 
     def make_seed(self):
         self.seed = randint(0, 2 ** 32 - 1)
@@ -273,6 +276,18 @@ class StatefulBatchSampler(BatchSampler):
         new_self.make_seed()
         new_self.initialize()
         return new_self
+
+    def __getstate__(self):
+        dico = self.__dict__
+        for key in ["next_offset", "batches"]:
+            dico.pop(key)
+        return dico
+
+    def __setstate__(self, dico):
+        self.__dict__.update(dico)
+        if self.initialized:
+            self.initialized = False
+            self.initialize()
 
     def state_dict(self):
         """Returns the state of the loader as a :class:`dict`.
