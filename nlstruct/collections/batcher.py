@@ -278,7 +278,7 @@ class StatefulBatchSampler(BatchSampler):
         return new_self
 
     def __getstate__(self):
-        dico = self.__dict__
+        dico = dict(self.__dict__)
         for key in ["next_offset", "batches"]:
             dico.pop(key, None)
         return dico
