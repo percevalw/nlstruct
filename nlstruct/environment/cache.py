@@ -70,7 +70,7 @@ class Dispatcher(dict):
 
 
 class TruncatedNumpyHasher(Hasher):
-    def __init__(self, max_length=2000, coerce_mmap=False):
+    def __init__(self, max_length=None, coerce_mmap=False):
 
         # By default we want a pickle protocol that only changes with
         # the major python version and not the minor one
@@ -319,7 +319,7 @@ class TruncatedNumpyHasher(Hasher):
             self.write(pickle.MARK + pickle.LIST)
 
         self.memoize(obj)
-        if len(obj) > self.max_length:
+        if self.max_length is not None and len(obj) > self.max_length:
             self._batch_appends(obj[:self.max_length // 2])
             self._batch_appends(obj[-self.max_length // 2:])
         else:
@@ -340,14 +340,19 @@ class TruncatedNumpyHasher(Hasher):
         self.save(new_optim, bypass_dispatch=True)
 
     def save_tensor(self, obj):
-        self.save(obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)])
+        if self.max_length is not None:
+            self.save(obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)])
+        else:
+            self.save(obj.detach().cpu().numpy())
 
     def save_spmatrix(self, obj):
         self.save(obj.tocsr(), bypass_dispatch=True)
 
     def save_parameter(self, obj):
-        obj = (obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)],
-               obj.requires_grad)
+        if self.max_length is not None:
+            obj = (obj.detach().cpu().numpy()[tuple(slice(min(size, self.max_length)) for size in obj.shape)], obj.requires_grad)
+        else:
+            obj = (obj.detach().cpu().numpy(), obj.requires_grad)
         self.save(obj)
 
     def save_base_estimator(self, obj):
@@ -408,7 +413,7 @@ class TruncatedNumpyHasher(Hasher):
         Pickler._batch_setitems(self, items)
 
 
-def hash_object(obj, max_length=2000, mmap_mode=None):
+def hash_object(obj, max_length=None, mmap_mode=None):
     return TruncatedNumpyHasher(max_length=max_length, coerce_mmap=mmap_mode is not None).hash(obj)
 
 
