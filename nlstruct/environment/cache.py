@@ -213,7 +213,8 @@ class TruncatedNumpyHasher(Hasher):
 
     def save_ndarray(self, obj):
         if not obj.dtype.hasobject:
-            obj = obj[tuple(slice(min(size, self.max_length)) for size in obj.shape)]
+            if self.max_length is not None:
+                obj = obj[tuple(slice(min(size, self.max_length)) for size in obj.shape)]
             # Compute a hash of the object
             # The update function of the hash requires a c_contiguous buffer.
             if obj.shape == ():
