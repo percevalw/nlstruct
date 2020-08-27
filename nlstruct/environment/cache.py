@@ -212,6 +212,8 @@ class TruncatedNumpyHasher(Hasher):
         self.save_reduce(obj=obj, *rv)
 
     def save_ndarray(self, obj):
+        if obj.dtype.hasobject:
+            obj = np.asarray(obj.tolist())
         if not obj.dtype.hasobject:
             if self.max_length is not None:
                 obj = obj[tuple(slice(min(size, self.max_length)) for size in obj.shape)]
