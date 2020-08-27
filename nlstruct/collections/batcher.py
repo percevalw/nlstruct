@@ -9,7 +9,8 @@ import pandas as pd
 import torch
 from scipy.sparse import issparse, csr_matrix
 from torch.utils.data import DataLoader, BatchSampler
-from torch.utils.data.dataloader import _SingleProcessDataLoaderIter
+from torch.utils.data import _utils
+from torch.utils.data.dataloader import _DatasetKind
 
 from nlstruct.train import fork_rng
 from nlstruct.utils.arrays import as_numpy_array, get_deduplicator, concat, factorize, as_array, as_same, index_slice
@@ -158,7 +159,44 @@ class StatefulDataLoader(DataLoader):
         return StatefulDataLoaderIter(self)
 
 
-class StatefulDataLoaderIter(_SingleProcessDataLoaderIter):
+class StatefulDataLoaderIter(object):
+    def __init__(self, loader):
+        self._dataset = loader.dataset
+        self._dataset_kind = loader._dataset_kind
+        self._auto_collation = loader._auto_collation
+        self._drop_last = loader.drop_last
+        self._index_sampler = loader._index_sampler
+        self._num_workers = loader.num_workers
+        self._pin_memory = loader.pin_memory and torch.cuda.is_available()
+        self._timeout = loader.timeout
+        self._collate_fn = loader.collate_fn
+        self._sampler_iter = iter(self._index_sampler)
+        self._base_seed = torch.empty((), dtype=torch.int64).random_().item()
+
+        assert self._timeout == 0
+        assert self._num_workers == 0
+
+        self._dataset_fetcher = _DatasetKind.create_fetcher(
+            self._dataset_kind, self._dataset, self._auto_collation, self._collate_fn, self._drop_last)
+
+    def __next__(self):
+        index = self._next_index()  # may raise StopIteration
+        data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+        if self._pin_memory:
+            data = _utils.pin_memory.pin_memory(data)
+        return data
+
+    next = __next__  # Python 2 compatibility
+
+    def __iter__(self):
+        return self
+
+    def _next_index(self):
+        return next(self._sampler_iter)  # may raise StopIteration
+
+    def __len__(self):
+        return len(self._index_sampler)
+
     def state_dict(self):
         """Returns the state of the dataloader as a :class:`dict`.
         """
