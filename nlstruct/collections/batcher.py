@@ -1,19 +1,21 @@
 import pprint
 from collections import defaultdict
-from copy import copy
-from math import ceil
-from random import randint
 
 import numpy as np
 import pandas as pd
 import torch
 from scipy.sparse import issparse, csr_matrix
-from torch.utils.data import DataLoader, BatchSampler
-from torch.utils.data import _utils
-from torch.utils.data.dataloader import _DatasetKind
 
-from nlstruct.train import fork_rng
+from nlstruct.collections.sampler import BatchIterator, StatefulDataLoader, RepeatIterator, MultiBatchIterator
 from nlstruct.utils.arrays import as_numpy_array, get_deduplicator, concat, factorize, as_array, as_same, index_slice
+
+np_len = np.frompyfunc(len, 1, 1)
+
+
+def pop_kwargs(kwargs, names, default):
+    values = [kwargs.pop(name) for name in names if name in kwargs]
+    assert len(values) <= 1
+    return values[0] if len(values) else default
 
 
 class BatcherPrinter(pprint.PrettyPrinter):
@@ -101,274 +103,6 @@ class BatcherPrinter(pprint.PrettyPrinter):
         elif hasattr(obj, 'shape') and type(obj).__repr__ not in self._dispatch:
             self._dispatch[type(obj).__repr__] = BatcherPrinter.format_array
         super()._format(obj, stream, indent, allowance, context, level)
-
-
-np_len = np.frompyfunc(len, 1, 1)
-
-
-def compute_batches(keys, batch_size, offset=None, shuffle=True, keys_noise=0, order="descending"):
-    if isinstance(keys, int):
-        length = keys
-        sort = False
-        if shuffle:
-            ids = np.random.permutation(length)
-        else:
-            ids = np.arange(length)
-    else:
-        sort = True
-        keys = keys.reshape(len(keys), -1)
-        length = len(keys)
-        init_permut = np.random.permutation(length)
-        sorter = np.lexsort((keys[init_permut] + np.random.poisson(keys_noise, size=keys.shape)).T, axis=0)
-        if order == "descending":
-            sorter = np.flip(sorter)
-        ids = init_permut[sorter]
-
-    steps = ceil(length / batch_size)
-    rest = length % batch_size
-    if offset == 0 or offset is None:
-        block_begins = np.arange(steps) * batch_size  # - np.random.randint(length % batch_size)
-    else:
-        block_begins = np.concatenate([[0], offset + np.arange(steps - (1 if rest <= offset else 0)) * batch_size])  # - np.random.randint(length % batch_size)
-    block_begins[0] = 0
-
-    if shuffle:
-        block_perm = np.random.permutation(len(block_begins))
-        shift = np.random.choice(block_begins)  # + (offset if offset is not None else 0)
-        block_begins = ((block_begins - shift + length) % length)
-        if offset is not None:
-            block_perm[0] = -length
-            block_perm[-1] = +length * 2
-            block_perm = np.argsort(block_perm)
-        block_ends = np.roll(block_begins, -1)[block_perm]
-        block_begins = block_begins[block_perm]
-    else:
-        block_ends = np.roll(block_begins, -1)
-
-    block_ends = ((np.clip(block_ends, 0, length)) - 1) % length + 1
-
-    blocks = [list(ids[begin:end]) for begin, end in zip(block_begins, block_ends)]
-
-    return blocks, ((offset or 0) - length) % batch_size
-
-
-class StatefulDataLoader(DataLoader):
-    def __iter__(self):
-        if self.num_workers > 0:
-            raise NotImplementedError()
-        return StatefulDataLoaderIter(self)
-
-
-class StatefulDataLoaderIter(object):
-    def __init__(self, loader):
-        self._dataset = loader.dataset
-        self._dataset_kind = loader._dataset_kind
-        self._auto_collation = loader._auto_collation
-        self._drop_last = loader.drop_last
-        self._index_sampler = loader._index_sampler
-        self._num_workers = loader.num_workers
-        self._pin_memory = loader.pin_memory and torch.cuda.is_available()
-        self._timeout = loader.timeout
-        self._collate_fn = loader.collate_fn
-        self._sampler_iter = iter(self._index_sampler)
-        self._base_seed = torch.empty((), dtype=torch.int64).random_().item()
-
-        assert self._timeout == 0
-        assert self._num_workers == 0
-
-        self._dataset_fetcher = _DatasetKind.create_fetcher(
-            self._dataset_kind, self._dataset, self._auto_collation, self._collate_fn, self._drop_last)
-
-    def __next__(self):
-        index = self._next_index()  # may raise StopIteration
-        data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
-        if self._pin_memory:
-            data = _utils.pin_memory.pin_memory(data)
-        return data
-
-    next = __next__  # Python 2 compatibility
-
-    def __iter__(self):
-        return self
-
-    def _next_index(self):
-        return next(self._sampler_iter)  # may raise StopIteration
-
-    def __len__(self):
-        return len(self._index_sampler)
-
-    def state_dict(self):
-        """Returns the state of the dataloader as a :class:`dict`.
-        """
-        return {"_sampler_iter": self._sampler_iter.state_dict()}
-
-    def load_state_dict(self, state_dict):
-        """Loads the dataloader state.
-
-        Arguments:
-            state_dict (dict): dataloader state. Should be an object returned
-                from a call to :meth:`state_dict`.
-        """
-        if hasattr(state_dict, 'state_dict'):
-            state_dict = state_dict.state_dict()
-        if "_sampler_iter" in state_dict:
-            self._sampler_iter.load_state_dict(state_dict["_sampler_iter"])
-
-
-class StatefulBatchSampler(BatchSampler):
-    def __init__(self,
-                 batcher,
-                 keys_name=None,
-                 loop=False,
-                 order="ascending",
-                 batch_size=None,
-                 shuffle=False,
-                 drop_last=False,
-                 keys_noise=1.):
-        assert not drop_last
-        if keys_name is None:
-            self.keys = len(batcher)
-            self.keys_noise = None
-        else:
-            if isinstance(keys_name, str):
-                keys_name = [keys_name]
-
-            keys = []
-            for key_name in keys_name:
-                key = batcher[key_name]
-                if hasattr(key, 'getnnz'):
-                    key = key.getnnz(1)
-                elif hasattr(key, 'shape') and len(key.shape) > 1:
-                    key = key.reshape(key.shape[0], -1).sum(1)
-                elif hasattr(key, 'dtype') and not (np.issubdtype(key.dtype, np.number) or np.issubdtype(key.dtype, np.bool_)):
-                    key = np_len(key)
-                keys.append(key)
-            self.keys = np.stack(keys, axis=1)
-
-            if not shuffle:
-                self.keys_noise = np.asarray([0 for name in keys_name])
-            elif isinstance(keys_noise, (int, float)):
-                self.keys_noise = np.asarray([keys_noise for name in keys_name])
-            elif isinstance(keys_noise, dict):
-                self.keys_noise = np.asarray([keys_noise.get(name, 0) for name in keys_name])
-            else:
-                self.keys_noise = np.asarray(keys_noise)
-
-        self.seed = None
-        self.order = order
-        self.shuffle = shuffle
-        self.batch_size = batch_size
-
-        self.loop = loop
-        self.step = 0
-        self.step_offset = 0
-        self.current_offset = 0 if loop else None
-
-        self.next_offset = 0 if loop else None
-        self.initialized = False
-        self.batches = None
-
-    def make_seed(self):
-        self.seed = randint(0, 2 ** 32 - 1)
-
-    def __iter__(self):
-        new_self = copy(self)
-        new_self.make_seed()
-        new_self.initialize()
-        return new_self
-
-    def __getstate__(self):
-        dico = dict(self.__dict__)
-        for key in ["next_offset", "batches"]:
-            dico.pop(key, None)
-        return dico
-
-    def __setstate__(self, dico):
-        self.__dict__.update(dico)
-        if self.initialized:
-            self.initialized = False
-            self.initialize()
-
-    def state_dict(self):
-        """Returns the state of the loader as a :class:`dict`.
-
-        It contains an entry for every variable in self.__dict__ which
-        is not the optimizer.
-        """
-        return {key: value for key, value in self.__dict__.items() if key in ('step', 'step_offset', 'current_offset')}
-
-    def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
-
-        Arguments:
-            state_dict (dict): scheduler state. Should be an object returned
-                from a call to :meth:`state_dict`.
-        """
-        if hasattr(state_dict, 'state_dict'):
-            state_dict = state_dict.state_dict()
-        for key in ('step', 'step_offset', 'current_offset'):
-            if key in state_dict:
-                self.__dict__[key] = state_dict[key]
-        self.initialized = False
-        self.initialize()
-
-    def initialize(self):
-        if not self.initialized:
-            dump_first_one = self.loop and self.current_offset != 0
-            with fork_rng((self.seed + self.step_offset) % (2 ** 32 - 1)):
-                batches, self.next_offset = compute_batches(
-                    keys=self.keys,
-                    batch_size=self.batch_size,
-                    offset=self.current_offset,
-                    shuffle=self.shuffle,
-                    keys_noise=self.keys_noise,
-                    order=self.order,
-                )
-            if dump_first_one:
-                self.batches = batches[1:]
-            else:
-                self.batches = batches
-            if not self.loop:
-                self.next_offset = 0
-            self.initialized = True
-
-    def __next__(self):
-        batch_idx = self.step - self.step_offset
-
-        if batch_idx >= len(self.batches):
-            raise StopIteration()
-
-        batch = self.batches[batch_idx]
-
-        self.step += 1
-
-        if batch_idx == len(self.batches) - 1 and self.loop:
-            must_complete_batch = self.loop and self.next_offset != 0
-            self.step_offset = self.step
-            with fork_rng((self.seed + self.step_offset) % (2 ** 32 - 1)):
-                self.current_offset = self.next_offset
-                batches, self.next_offset = compute_batches(
-                    keys=self.keys,
-                    batch_size=self.batch_size,
-                    offset=self.next_offset,
-                    shuffle=self.shuffle,
-                    keys_noise=self.keys_noise,
-                    order=self.order,
-                )
-            if not self.loop:
-                self.next_offset = 0
-            if must_complete_batch:
-                batch += batches[0]
-                self.batches = batches[1:]
-            else:
-                self.batches = batches
-        return batch
-
-    def __len__(self):
-        if not self.loop:
-            return ceil((self.keys if isinstance(self.keys, int) else len(self.keys)) / self.batch_size)
-        else:
-            raise AttributeError()
 
 
 class Table:
@@ -1124,29 +858,75 @@ class Batcher:
 
     def dataloader(self,
                    batch_size=32,
+
                    sort_on=None,
+                   sorting_noise=1.,
+
+                   group_on=None,
+                   groups_weight=None,
+
                    shuffle=False,
+                   ids=None,
                    device=None,
                    dtypes=None,
                    loop=False,
+
                    **kwargs):
+        if isinstance(sort_on, str):
+            sort_on = [sort_on]
+
+        sort_on = pop_kwargs(kwargs, ["sparse_sort_on", "keys_name"], sort_on)
+        sorting_keys = None
+        if sort_on is not None:
+            sorting_keys = []
+            for key_name in sort_on:
+                key = self[key_name] if isinstance(key_name, str) else key_name
+                if hasattr(key, 'getnnz'):
+                    key = key.getnnz(1)
+                elif hasattr(key, 'shape') and len(key.shape) > 1:
+                    key = key.reshape(key.shape[0], -1).sum(1)
+                elif hasattr(key, 'dtype') and not (np.issubdtype(key.dtype, np.number) or np.issubdtype(key.dtype, np.bool_)):
+                    key = np_len(key)
+                sorting_keys.append(key)
+            sorting_keys = np.stack(sorting_keys, axis=1)
+
+            sorting_noise = pop_kwargs(kwargs, ["keys_noise"], sorting_noise)
+            if not shuffle:
+                sorting_noise = np.asarray([0 for name in sort_on])
+            elif isinstance(sorting_noise, (int, float)):
+                sorting_noise = np.asarray([sorting_noise for name in sort_on])
+            elif isinstance(sorting_noise, dict):
+                sorting_noise = np.asarray([sorting_noise.get(name, 0) for name in sort_on])
+            else:
+                sorting_noise = np.asarray(sorting_noise)
+        else:
+            sorting_noise = None
+
+        if ids is None:
+            ids = len(self)
+            if group_on is None:
+                if loop:
+                    ids = RepeatIterator(ids)
+            else:
+                assert loop
+                group_keys = self[group_on] if isinstance(group_on, str) else group_on
+                group_ids = [np.flatnonzero(group_keys == i) for i in range(len(groups_weight))]
+                ids = MultiBatchIterator(
+                    [RepeatIterator(x) for x in group_ids],
+                    groups_weight,
+                    shuffle=shuffle,
+                )
+
         batch_sampler = kwargs.pop("batch_sampler", None)
         if batch_sampler is None:
-            order = kwargs.pop("sort_keys", "ascending")  # for backward compat
-            order = kwargs.pop("order", order)
-            sort_on = kwargs.pop("sparse_sort_on", sort_on)  # for backward compat
-            sort_on = kwargs.pop("keys_name", sort_on)  # for backward compat
-            keys_noise = kwargs.pop("keys_noise", 1.)
-            batch_sampler = StatefulBatchSampler(
-                self,
-                keys_name=sort_on,
-                order=order,
+            batch_sampler = BatchIterator(
+                ids=ids,
                 batch_size=batch_size,
                 shuffle=shuffle,
-                keys_noise=keys_noise,
-                drop_last=False,
-                loop=loop,
+                sorting_keys=sorting_keys,
+                sorting_noise=sorting_noise,
             )
+
         kwargs.pop("batch_size", None)
         kwargs.pop("shuffle", None)
         kwargs.pop("sampler", None)
