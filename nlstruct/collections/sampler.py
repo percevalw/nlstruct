@@ -77,11 +77,18 @@ class RepeatIterator(object):
     def __next__(self):
         return self.ids
 
-    def state_dict():
-        return {}
+    def state_dict(self):
+        if hasattr(self.ids, 'state_dict'):
+            state["ids"] = self.ids.state_dict()
+        else:
+            state["ids"] = self.ids
 
-    def load_state_dict(state):
-        pass
+    def load_state_dict(self, state):
+        if hasattr(self.ids, 'load_state_dict'):
+            self.ids.load_state_dict(state["ids"])
+        else:
+            self.ids = state['ids']
+
 
 class BatchIterator(object):
     def __init__(
