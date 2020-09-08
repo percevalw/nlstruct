@@ -77,6 +77,11 @@ class RepeatIterator(object):
     def __next__(self):
         return self.ids
 
+    def state_dict():
+        return {}
+
+    def load_state_dict(state):
+        pass
 
 class BatchIterator(object):
     def __init__(
