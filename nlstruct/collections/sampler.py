@@ -78,10 +78,12 @@ class RepeatIterator(object):
         return self.ids
 
     def state_dict(self):
+        state = dict()
         if hasattr(self.ids, 'state_dict'):
             state["ids"] = self.ids.state_dict()
         else:
             state["ids"] = self.ids
+        return state
 
     def load_state_dict(self, state):
         if hasattr(self.ids, 'load_state_dict'):
