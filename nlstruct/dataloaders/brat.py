@@ -7,7 +7,7 @@ from nlstruct.collections.dataset import Dataset
 from nlstruct.environment.path import RelativePath
 
 
-def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=True, doc_attributes=None):
+def load_from_brat(path, validation_split=0.2, random_state=42, merge_spaced_fragments=True, doc_attributes=None, **kwargs):
     """
     Load a brat dataset into a Dataset object
 
@@ -26,6 +26,8 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     -------
     Dataset
     """
+    if "merge_newlines" in kwargs:  # backward comp
+        merge_spaced_fragments = kwargs.pop("merge_newlines")
 
     path = RelativePath(path)
     mentions = []
@@ -53,7 +55,7 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
     # If not: only return docs
     if not any(fname.endswith('.ann') for fname in os.listdir(path)):
         return Dataset(docs=docs)
-    
+
     # Extract annotations from path and make multiple dataframe from it
     for filename in sorted(os.listdir(path)):
         if filename.endswith('.ann'):
@@ -71,13 +73,13 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
                             "label": mention,
                             "text": text,
                         })
-                        last = None
+                        last_end = None
                         fragment_i = 0
                         for s in span.split(';'):
                             begin, end = int(s.split()[0]), int(s.split()[1])
                             # If merge_newlines, merge two fragments that are only separated by a newline (brat automatically creates
                             # multiple fragments for a mention that spans over more than one line)
-                            if merge_newlines and begin - 1 == last and text[last:begin] == '\n':
+                            if merge_spaced_fragments and begin - 1 == last_end and len(text[last_end:begin].strip()) == 0:
                                 fragments[-1]["end"] = end
                                 continue
                             fragments.append({
@@ -88,6 +90,7 @@ def load_from_brat(path, validation_split=0.2, random_state=42, merge_newlines=T
                                 "end": end,
                             })
                             fragment_i += 1
+                            last_end = end
                     elif ann_id.startswith('A'):
                         parts = remaining.split(" ")
                         if len(parts) >= 3:
