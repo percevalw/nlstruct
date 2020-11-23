@@ -912,7 +912,7 @@ class Batcher:
                 group_keys = self[group_on] if isinstance(group_on, str) else group_on
                 group_ids = pd.DataFrame({"label": group_keys}).groupby("label").groups
                 ids = MultiBatchIterator(
-                    [RepeatIterator(group_ids.get(i, [])) for i in range(len(groups_weight))],
+                    [RepeatIterator(np.asarray(group_ids.get(i, []))) for i in range(len(groups_weight))],
                     groups_weight,
                     shuffle=shuffle,
                 )
