@@ -224,7 +224,7 @@ class MultiBatchIterator(object):
         self.lengths = np.zeros(len(ids), dtype=int)
         self.rests = np.zeros(len(ids), dtype=int)
         self.eps = np.zeros(len(ids), dtype=float)
-        self.steps = np.zeros(len(ids), dtype=int)
+        self.rng = [np.random.default_rng() for _ in range(len(ids))]
 
     def __iter__(self):
         new_self = copy(self)
@@ -262,10 +262,8 @@ class MultiBatchIterator(object):
             else:
                 self.current_ids[i] = self.ids[i]
             if self.shuffle:
-                with fork_rng((self.seed + self.steps[i]) % (2 ** 32 - 1)):
-                    self.current_ids[i] = np.random.permutation(self.current_ids[i])
+                self.current_ids[i] = self.rng[i].permutation(self.current_ids[i])
             self.offsets[i] = 0
-            self.steps[i] += 1
             self.lengths[i] = self.rests[i] = len(self.current_ids[i])
         return self.current_ids[i]
 
