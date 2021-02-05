@@ -23,7 +23,7 @@ class PrecisionRecallF1Metric(Metric):
         self.add_state("pred_count", default=torch.tensor(0), dist_reduce_fx="sum")
         self.add_state("gold_count", default=torch.tensor(0), dist_reduce_fx="sum")
 
-    def update(self, preds: torch.Tensor, target: torch.Tensor):
+    def update(self, preds, target):
         """
         Update state with predictions and targets.
 
