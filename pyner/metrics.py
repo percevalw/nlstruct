@@ -1,7 +1,10 @@
 import torch
 from pytorch_lightning.metrics import Metric
 
+from pyner.torch_utils import register
 
+
+@register("precision_recall_f1")
 class PrecisionRecallF1Metric(Metric):
     def __init__(
           self,

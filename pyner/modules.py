@@ -7,9 +7,10 @@ from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors
-from .torch_utils import einsum, bce_with_logits
+from .torch_utils import einsum, bce_with_logits, get_module, register
 
 
+@register("vocabulary")
 class Vocabulary(torch.nn.Module):
     def __init__(self, values=(), with_pad=True, with_unk=False):
         super().__init__()
@@ -34,6 +35,7 @@ class Vocabulary(torch.nn.Module):
         return f"Vocabulary(count={len(self.inversed)}, with_pad={self.with_pad}, with_unk={self.with_unk})"
 
 
+@register("flat_batch_norm")
 class FlatBatchNorm(torch.nn.BatchNorm1d):
     def forward(self, inputs, mask):
         flat = inputs.rename(None)[mask.rename(None)]
@@ -43,6 +45,7 @@ class FlatBatchNorm(torch.nn.BatchNorm1d):
         return res.rename(*inputs.names)
 
 
+@register("char_cnn")
 class CharCNNWordEncoder(torch.nn.Module):
     def __init__(self, n_chars, in_channels=8, out_channels=50, kernel_sizes=(3, 4, 5)):
         super().__init__()
@@ -63,6 +66,7 @@ class CharCNNWordEncoder(torch.nn.Module):
         return embeds[batch["@words_id"]].rename(None)
 
 
+@register("rezero")
 class ReZeroGate(torch.nn.Module):
     def __init__(self, init_value=1e-3, dim=None, ln_mode="post"):
         super().__init__()
@@ -80,16 +84,21 @@ class ReZeroGate(torch.nn.Module):
             return before + after * self.weight
 
 
-class ReZeroSigmoidGate(torch.nn.Module):
+@register("sigmoid_gate")
+class SigmoidGate(torch.nn.Module):
     def __init__(self, init_value=1e-3, dim=None, ln_mode="post"):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.ones(1) * init_value)
+        if dim is None:
+            self.weight = torch.nn.Parameter(torch.ones(1) * init_value)
+        else:
+            self.linear = torch.nn.Linear(dim, 1)
+
         self.ln_mode = ln_mode
         if ln_mode is not False:
             self.norm = torch.nn.LayerNorm(dim)
 
     def forward(self, after, before):
-        gate = F.sigmoid(self.weight)
+        gate = F.sigmoid(self.weight if hasattr(self, 'weight') else self.linear(after))
         if self.ln_mode == "post":
             return self.norm(before * gate + after * (1 - gate))
         elif self.ln_mode == "pre":
@@ -98,24 +107,7 @@ class ReZeroSigmoidGate(torch.nn.Module):
             return before * gate + after * (1 - gate)
 
 
-class SigmoidGate(torch.nn.Module):
-    def __init__(self, dim=None, ln_mode="post"):
-        super().__init__()
-        self.linear = torch.nn.Linear(dim, 1)
-        self.ln_mode = ln_mode
-        if ln_mode is not False:
-            self.norm = torch.nn.LayerNorm(dim)
-
-    def forward(self, before, after):
-        gate = F.sigmoid(self.linear(after))
-        if self.ln_mode == "post":
-            return self.norm(before * gate + after * (1 - gate))
-        elif self.ln_mode == "pre":
-            return before * gate + self.norm(after) * (1 - gate)
-        else:
-            return before * gate + after * (1 - gate)
-
-
+@register("bert_encoder")
 class BERTEncoder(torch.nn.Module):
     def __init__(self, bert=None, path=None, n_layers=4, dropout=0.1, freeze_n_layers=-1):
         super().__init__()
@@ -147,12 +139,8 @@ class BERTEncoder(torch.nn.Module):
         return word_bert_features
 
 
+@register("lstm")
 class LSTMContextualizer(torch.nn.Module):
-    GATES = {
-        "sigmoid": SigmoidGate,
-        "rezero": ReZeroGate,
-    }
-
     def __init__(self, input_size, hidden_size, num_layers=1, gate=False, dropout=0.1, bidirectional=True):
         super().__init__()
         if hidden_size is None:
@@ -165,7 +153,7 @@ class LSTMContextualizer(torch.nn.Module):
         if gate is False:
             self.gate_modules = [None] * num_layers
         else:
-            self.gate_modules = torch.nn.ModuleList([self.GATES[gate["name"]](**{"dim": hidden_size, **{k: v for k, v in gate.items() if k != "name"}}) for _ in range(num_layers)])
+            self.gate_modules = torch.nn.ModuleList([get_module(gate["module"])(**{"dim": hidden_size, **{k: v for k, v in gate.items() if k != "module"}}) for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
             torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
             for dim in [hidden_size] * num_layers
@@ -191,9 +179,8 @@ class LSTMContextualizer(torch.nn.Module):
         return features[sorter.argsort()].rename(*names)
 
 
+@register("exhaustive_biaffine_ner")
 class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
-    CONTEXTUALIZERS = {"lstm": LSTMContextualizer}
-
     def __init__(self, dim, n_labels, label_dim, use_batch_norm=True, dropout=0.2, contextualizer=None):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.randn(n_labels, label_dim, label_dim))
@@ -206,7 +193,7 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
             self.batch_norm = None
         self.n_labels = n_labels
         if contextualizer is not None:
-            self.contextualizer = self.CONTEXTUALIZERS[contextualizer["name"]](**{k: v for k, v in contextualizer.items() if k != "name"})
+            self.contextualizer = get_module(contextualizer["module"])(**{k: v for k, v in contextualizer.items() if k != "module"})
         else:
             self.contextualizer = None
 
@@ -260,6 +247,7 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
         }
 
 
+@register("preprocessor")
 class Preprocessor(torch.nn.Module):
     def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, vocabularies={}):
         super().__init__()
@@ -320,6 +308,7 @@ class Preprocessor(torch.nn.Module):
             doc_mentions[doc_id].append((batch["words_begin"][doc_id, begin], batch["words_end"][doc_id, begin], batch["words_begin"][doc_id, begin]))
 
 
+@register("ner")
 class NER(pl.LightningModule):
     NER_DECODERS = {"exhaustive_biaffine": ExhaustiveBiaffineNERDecoder}
     WORD_ENCODERS = {"char_cnn": CharCNNWordEncoder, "bert": BERTEncoder}
@@ -348,11 +337,11 @@ class NER(pl.LightningModule):
         self.sentence_balance_chars = sentence_balance_chars
         self.sentence_split_regex = sentence_split_regex
         self.word_encoders = torch.nn.ModuleList([
-            self.WORD_ENCODERS[word_encoder["name"]](**{k: v for k, v in word_encoder.items() if k != "name"})
+            get_module(word_encoder["module"])(**{k: v for k, v in word_encoder.items() if k != "module"})
             for word_encoder in word_encoders
         ])
         self.embedding_batch_norm = FlatBatchNorm(decoder["contextualizer"]["input_size"]) if use_embedding_batch_norm else None
-        self.ner_decoder = self.NER_DECODERS[decoder["name"]](**{k: v for k, v in decoder.items() if k != "name"})
+        self.ner_decoder = self.NER_DECODERS[decoder["module"]](**{k: v for k, v in decoder.items() if k != "module"})
         self.train_metric = PrecisionRecallF1Metric(prefix="train_")
         self.val_metric = PrecisionRecallF1Metric(prefix="val_")
 

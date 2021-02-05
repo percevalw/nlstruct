@@ -6,6 +6,21 @@ import einops as ops
 import torch
 import torch.nn.functional as F
 
+if "registry" not in globals():
+    registry = {}
+
+
+def register(name):
+    def fn(cls):
+        registry[name] = cls
+        return cls
+
+    return fn
+
+
+def get_module(name):
+    return registry[name]
+
 
 def list_factorize(values, reference_values=None, freeze_reference=None):
     if freeze_reference is None:
