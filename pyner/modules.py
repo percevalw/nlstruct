@@ -107,7 +107,7 @@ class SigmoidGate(torch.nn.Module):
             return before * gate + after * (1 - gate)
 
 
-@register("bert_encoder")
+@register("bert")
 class BERTEncoder(torch.nn.Module):
     def __init__(self, bert=None, path=None, n_layers=4, dropout=0.1, freeze_n_layers=-1):
         super().__init__()
@@ -310,9 +310,6 @@ class Preprocessor(torch.nn.Module):
 
 @register("ner")
 class NER(pl.LightningModule):
-    NER_DECODERS = {"exhaustive_biaffine": ExhaustiveBiaffineNERDecoder}
-    WORD_ENCODERS = {"char_cnn": CharCNNWordEncoder, "bert": BERTEncoder}
-
     def __init__(
           self,
           preprocessor,
@@ -341,7 +338,7 @@ class NER(pl.LightningModule):
             for word_encoder in word_encoders
         ])
         self.embedding_batch_norm = FlatBatchNorm(decoder["contextualizer"]["input_size"]) if use_embedding_batch_norm else None
-        self.ner_decoder = self.NER_DECODERS[decoder["module"]](**{k: v for k, v in decoder.items() if k != "module"})
+        self.ner_decoder = get_module(decoder["module"])(**{k: v for k, v in decoder.items() if k != "module"})
         self.train_metric = PrecisionRecallF1Metric(prefix="train_")
         self.val_metric = PrecisionRecallF1Metric(prefix="val_")
 
