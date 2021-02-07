@@ -26,7 +26,7 @@ def objective(trial):
         for doc in val_data
     ]
 
-    bert_name = "/export/home/cse190022/data/resources/huggingface/pretrained_models/camembert-large/"
+    bert_name = "camembert/camembert-large"
     vocabularies = torch.nn.ModuleDict({
         "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
         "label": Vocabulary(sorted(set([mention["label"] for doc in train_data for mention in doc["mentions"]])), with_unk=False, with_pad=False),
