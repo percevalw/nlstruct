@@ -1,28 +1,38 @@
 import glob
 
+import optuna
 import pytorch_lightning as pl
+from pytorch_lightning.loggers.neptune import NeptuneLogger
 import torch
 import transformers
+from optuna.integration import PyTorchLightningPruningCallback
 
-from rich_logger import RichTableLogger
 from .data_utils import *
 from .datasets import load_from_brat
 from .modules import Vocabulary, NER
 
-if __name__ == "__main__":
-    val_ids = ["filepdf-277-cas", "filepdf-176-cas", "filepdf-830-cas", "filepdf-509-2-cas", "filepdf-57-cas", "filepdf-533-1-cas", "filepdf-32-2-cas", "filepdf-728-cas", "filepdf-781-cas",
-               "filepdf-119-cas"]
-    task_data = list(load_from_brat(glob.glob("data/resources/deft_2020/t3-appr/*.txt")))
+
+def objective(trial):
+    val_ids = ["filepdf-277-cas", "filepdf-176-cas", "filepdf-830-cas", "filepdf-509-2-cas", "filepdf-57-cas", "filepdf-533-1-cas", "filepdf-32-2-cas", "filepdf-728-cas", "filepdf-781-cas", "filepdf-119-cas"]
+    task_data = list(load_from_brat(glob.glob("/export/home/cse190022/data/resources/deft_2020/t3-appr/*.txt")))
     train_data = [sample for sample in task_data if sample["doc_id"] not in val_ids]
     val_data = [sample for sample in task_data if sample["doc_id"] in val_ids]
+    train_data = [
+        {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in ("duree", "frequence")]}
+        for doc in train_data
+    ]
+    val_data = [
+        {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in ("duree", "frequence")]}
+        for doc in val_data
+    ]
 
-    pl.utilities.seed.seed_everything(42)
-    bert_name = "data/resources/huggingface/pretrained_models/camembert-large/"
+    bert_name = "/export/home/cse190022/data/resources/huggingface/pretrained_models/camembert-large/"
     vocabularies = torch.nn.ModuleDict({
         "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
-        "label": Vocabulary(sorted(set([mention["label"] for doc in task_data for mention in doc["mentions"]])), with_unk=False, with_pad=False),
+        "label": Vocabulary(sorted(set([mention["label"] for doc in train_data for mention in doc["mentions"]])), with_unk=False, with_pad=False),
     }).eval()
     ner = NER(
+        seed=random.randint(1, 1000),
         sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
         sentence_balance_chars=("()",),
         preprocessor=dict(
@@ -40,63 +50,79 @@ if __name__ == "__main__":
         use_embedding_batch_norm=True,
         word_encoders=[
             dict(
-                name="char_cnn",
+                module="char_cnn",
                 n_chars=len(vocabularies["char"].values),
                 in_channels=8,
                 out_channels=50,
                 kernel_sizes=(3, 4, 5),
             ),
             dict(
-                name="bert",
+                module="bert",
                 path=bert_name,
                 n_layers=4,
-                freeze_n_layers=-1,  # freeze all
-                dropout=0.20,
+                freeze_n_layers=0,  # freeze all
+                dropout_p=0.10,
             )
         ],
         decoder=dict(
-            name="exhaustive_biaffine",
-            dim=200,
-            label_dim=100,
+            module="exhaustive_biaffine_ner",
+            dim=trial.suggest_int("decoder/dim", 64, 384, 32),
+            label_dim=trial.suggest_int("decoder/label_dim", 32, 256, 16),
             n_labels=len(vocabularies["label"].values),
-            dropout=0.2,
+            dropout_p=trial.suggest_float("decoder/dropout_p", 0., 0.4, step=0.05),
             use_batch_norm=False,
             contextualizer=dict(
-                name="lstm",
-                gate=False,
+                module="lstm",
+                gate=dict(
+                    module="sigmoid_gate",
+                    ln_mode=trial.suggest_categorical("decoder/contextualizer/gate/ln_mode", [False, "pre", "post"]),
+                    init_value=0,
+                    proj=False,
+                    dim=trial.params["decoder/dim"],
+                ),
                 input_size=1024 + 150,
-                hidden_size=200,
-                num_layers=4,
-                dropout=0.2,
-            ),
+                hidden_size=trial.params["decoder/dim"],
+                num_layers=trial.suggest_int("decoder/contextualizer/num_layers", 1, 6),
+                dropout_p=trial.suggest_float("decoder/contextualizer/dropout_p", 0., 0.4, step=0.05),
+            )
         ),
 
         init_labels_bias=True,
 
         batch_size=24,
         use_lr_schedules=True,
-        top_lr=5e-3,
-        main_lr=5e-3,
+        gradient_clip_val=5.,
+        main_lr=trial.suggest_float("main_lr", 1e-4, 1e-2, log=True),
+        top_lr=trial.params["main_lr"],
         bert_lr=4e-5,
         warmup_rate=0.1,
         optimizer=transformers.AdamW,
     )
-
-    trainer = pl.Trainer(gpus=[0], progress_bar_refresh_rate=False, logger=RichTableLogger(key="epoch", fields={
-        "epoch": {},
-        "step": {},
-        "train_loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-        "train_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_f1"},
-        "train_precision": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_p"},
-        "train_recall": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_r"},
-
-        "val_loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-        "val_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_f1"},
-        "val_precision": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_p"},
-        "val_recall": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_r"},
-
-        "main_lr": {"format": "{:.2e}"},
-        "top_lr": {"format": "{:.2e}"},
-        "bert_lr": {"format": "{:.2e}"},
-    }), max_epochs=50)
+    trainer = pl.Trainer(
+        gpus=1,
+        progress_bar_refresh_rate=False,
+        logger=[
+            pl.loggers.NeptuneLogger(api_key="MY KEY", name="better-ner-hp-deft-v2"),
+        ],
+        callbacks=[PyTorchLightningPruningCallback(trial, monitor="val_f1")],
+        max_epochs=50)
     trainer.fit(ner, train_data, val_data)
+
+    return trainer.callback_metrics["val_f1"].item()
+
+
+if __name__ == "__main__":
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42), pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5))
+    pl.seed_everything(42)
+    study.optimize(objective, n_trials=100)
+
+    print("Number of finished trials: {}".format(len(study.trials)))
+
+    print("Best trial:")
+    trial = study.best_trial
+
+    print("  Value: {}".format(trial.value))
+
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))

@@ -218,6 +218,8 @@ class sentencize:
         return {
             "doc_id": self.current_doc["doc_id"] + "/" + str(self.current_idx),
             "text": self.current_doc["text"][sentence_begin:sentence_end],
+            "begin": sentence_begin,
+            "end": sentence_end,
             "mentions": new_mentions
         }
 

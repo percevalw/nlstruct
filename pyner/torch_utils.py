@@ -1,10 +1,21 @@
+import functools
+import inspect
+import random
 import re
 from collections import defaultdict, Sequence
+from collections import namedtuple
+from contextlib import contextmanager
 from string import ascii_letters
 
 import einops as ops
+import numpy as np
 import torch
 import torch.nn.functional as F
+
+# Parts of this file was adapted from "https://github.com/PetrochukM/PyTorch-NLP/blob/master/torchnlp/random.py"
+
+RandomGeneratorState = namedtuple('RandomGeneratorState',
+                                  ['random', 'torch', 'numpy', 'torch_cuda'])
 
 if "registry" not in globals():
     registry = {}
@@ -12,6 +23,19 @@ if "registry" not in globals():
 
 def register(name):
     def fn(cls):
+        old_init = cls.__init__
+
+        @functools.wraps(old_init)
+        def cls_init(self, *args, **kwargs):
+            old_init(self, *args, **kwargs)
+            args = inspect.getcallargs(old_init, self, *args, **kwargs)
+            for arg, value in args.items():
+                if arg != "self" and not arg.startswith('_') and not hasattr(self, arg):
+                    setattr(self, arg, value)
+
+        cls_init.fn = old_init
+        cls.__init__ = cls_init
+        cls.registry_name = name
         registry[name] = cls
         return cls
 
@@ -20,6 +44,37 @@ def register(name):
 
 def get_module(name):
     return registry[name]
+
+
+def get_config(self, max_sequence_size=20, path=()):
+    config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
+    for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
+        if key.startswith('_'):
+            continue
+        value = getattr(self, key)
+        if hasattr(value, 'to_diff_dict'):
+            config[key] = value.to_diff_dict()
+        elif hasattr(value, 'to_dict'):
+            config[key] = value.to_dict()
+        elif isinstance(value, torch.nn.ModuleList):
+            config[key] = {i: get_config(item, max_sequence_size=max_sequence_size) for i, item in enumerate(value)}
+        elif isinstance(value, torch.nn.ModuleDict):
+            config[key] = {name: get_config(item, max_sequence_size=max_sequence_size, path=(*path, key)) for name, item in value.items()}
+        elif isinstance(value, torch.nn.Module):
+            config[key] = get_config(value)
+        elif isinstance(value, torch.Tensor):
+            pass
+        elif isinstance(value, (int, float, str)):
+            config[key] = value
+        elif isinstance(value, (tuple, list)) and len(value) <= max_sequence_size:
+            config[key] = value
+        elif isinstance(value, type):
+            config[key] = getattr(value, "__name__", str(value))
+        else:
+            print("hash param at", (*path, key))
+            config[key] = "#HASHED: {}".format(hash(str(value)))
+
+    return config
 
 
 def list_factorize(values, reference_values=None, freeze_reference=None):
@@ -467,3 +522,90 @@ wrap_bin_op("__mul__")
 wrap_masked_fill()
 wrap_argsort()
 wrap_sort()
+
+
+def get_random_generator_state(cuda=torch.cuda.is_available()):
+    """ Get the `torch`, `numpy` and `random` random generator state.
+    Parameters
+    ----------
+    cuda: bool  If `True` saves the `cuda` seed also. Note that getting and setting
+            the random generator state for CUDA can be quite slow if you have a lot of GPUs.
+    Returns
+    -------
+    RandomGeneratorState
+    """
+    return RandomGeneratorState(random.getstate(), torch.random.get_rng_state(),
+                                np.random.get_state(),
+                                torch.cuda.get_rng_state_all() if cuda else None)
+
+
+def set_random_generator_state(state):
+    """
+    Set the `torch`, `numpy` and `random` random generator state.
+    Parameters
+    ----------
+    state: RandomGeneratorState
+    """
+    random.setstate(state.random)
+    torch.random.set_rng_state(state.torch)
+    np.random.set_state(state.numpy)
+    if state.torch_cuda is not None and torch.cuda.is_available() and len(
+          state.torch_cuda) == torch.cuda.device_count():  # pragma: no cover
+        torch.cuda.set_rng_state_all(state.torch_cuda)
+
+
+@contextmanager
+def fork_rng(seed=None, cuda=torch.cuda.is_available()):
+    """
+    Forks the `torch`, `numpy` and `random` random generators, so that when you return, the
+    random generators are reset to the state that they were previously in.
+    Parameters
+    ----------
+    seed: int or None
+        If defined this sets the seed values for the random
+        generator fork. This is a convenience parameter.
+    cuda: bool
+        If `True` saves the `cuda` seed also. Getting and setting the random
+        generator state can be quite slow if you have a lot of GPUs.
+    """
+    state = get_random_generator_state(cuda)
+    if seed is not None:
+        set_seed(seed, cuda)
+    try:
+        yield
+    finally:
+        set_random_generator_state(state)
+
+
+def fork_rng_wrap(function=None, **kwargs):
+    """ Decorator alias for `fork_rng`.
+    """
+    if not function:
+        return functools.partial(fork_rng_wrap, **kwargs)
+
+    @functools.wraps(function)
+    def wrapper():
+        with fork_rng(**kwargs):
+            return function()
+
+    return wrapper
+
+
+def set_seed(seed, cuda=torch.cuda.is_available()):
+    """ Set seed values for random generators.
+    Parameters
+    ----------
+    seed: int
+        Value used as a seed.
+    cuda: bool
+        If `True` sets the `cuda` seed also.
+    """
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if cuda:  # pragma: no cover
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+
+seed_all = set_seed
