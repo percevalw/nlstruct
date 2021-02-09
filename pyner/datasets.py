@@ -98,3 +98,63 @@ def load_from_brat(path, merge_spaced_fragments=True):
                     "relations": relations,
                 }
     return docs
+
+
+def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_ann=False):
+    if filename_prefix:
+        try:
+            os.mkdir(filename_prefix)
+        except FileExistsError:
+            pass
+    for doc in samples:
+        txt_filename = os.path.join(filename_prefix, doc["doc_id"] + ".txt")
+        if not os.path.exists(txt_filename) or overwrite_txt:
+            with open(txt_filename, "w") as f:
+                f.write(doc["text"])
+
+        ann_filename = os.path.join(filename_prefix, doc["doc_id"] + ".ann")
+        attribute_idx = 1
+        if not os.path.exists(ann_filename) or overwrite_ann:
+            with open(ann_filename, "w") as f:
+                if "mentions" in doc:
+                    for mention in doc["mentions"]:
+                        idx = None
+                        spans = []
+                        brat_mention_id = "T" + str(mention["mention_id"] + 1)
+                        for fragment in sorted(mention["fragments"], key=lambda frag: frag["begin"]):
+                            idx = fragment["begin"]
+                            mention_text = doc["text"][fragment["begin"]:fragment["end"]]
+                            for part in mention_text.split("\n"):
+                                begin = idx
+                                end = idx + len(part)
+                                idx = end + 1
+                                if begin != end:
+                                    spans.append((begin, end))
+                        print("T{}\t{} {}\t{}".format(
+                            brat_mention_id,
+                            str(mention["label"]),
+                            ";".join(" ".join(map(str, span)) for span in spans),
+                            mention_text.replace("\n", " ")), file=f)
+                        if "attributes" in mention:
+                            for attribute in mention["attributes"]:
+                                if "value" in attribute and attribute["value"] is not None:
+                                    print("A{}\t{} T{} {}".format(
+                                        attribute_idx,
+                                        str(attribute["label"]),
+                                        brat_mention_id,
+                                        attribute["value"]), file=f)
+                                else:
+                                    print("A{}\t{} T{}".format(
+                                        i + 1,
+                                        str(attribute["label"]),
+                                        brat_mention_id), file=f)
+                                attribute_idx += 1
+                if "relations" in doc:
+                    for i, relation in enumerate(doc["relations"]):
+                        mention_from = relation["from_mention_id"] + 1
+                        mention_to = relation["to_mention_id"] + 1
+                        print("R{}\t{} Arg1:T{} Arg2:T{}\t".format(
+                            i + 1,
+                            str(relation["label"]),
+                            mention_from,
+                            mention_to), file=f)

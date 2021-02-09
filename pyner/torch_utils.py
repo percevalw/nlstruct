@@ -1,18 +1,20 @@
-import functools
-import inspect
-import random
 import re
 from collections import defaultdict, Sequence
-from collections import namedtuple
-from contextlib import contextmanager
 from string import ascii_letters
 
 import einops as ops
-import numpy as np
 import torch
 import torch.nn.functional as F
+import inspect
 
 # Parts of this file was adapted from "https://github.com/PetrochukM/PyTorch-NLP/blob/master/torchnlp/random.py"
+
+import functools
+import random
+from collections import namedtuple
+from contextlib import contextmanager
+
+import numpy as np
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
                                   ['random', 'torch', 'numpy', 'torch_cuda'])
@@ -71,7 +73,6 @@ def get_config(self, max_sequence_size=20, path=()):
         elif isinstance(value, type):
             config[key] = getattr(value, "__name__", str(value))
         else:
-            print("hash param at", (*path, key))
             config[key] = "#HASHED: {}".format(hash(str(value)))
 
     return config

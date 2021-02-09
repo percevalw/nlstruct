@@ -315,6 +315,7 @@ class Preprocessor(torch.nn.Module):
     def tensorize(self, batch, device=None):
         return batch_to_tensors(batch, ids_mapping={"mentions_doc_id": "doc_id"}, device=device)
 
+
 def identity(x):
     return x
 
@@ -430,15 +431,16 @@ class NER(pl.LightningModule):
     def on_pretrain_routine_start(self):
         # Setup label bias
         # Should be a good place to learn vocabularies ?
-        labels_count = torch.zeros(len(self.preprocessor.vocabularies["label"].values))
-        candidates_count = 0
-        for batch in self.train_dataloader():
-            for sample in batch:
-                for label in sample["mentions_label"]:
-                    labels_count[label] += 1
-                candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
-        frequencies = labels_count / candidates_count
-        self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
+        if self.init_labels_bias:
+            labels_count = torch.zeros(len(self.preprocessor.vocabularies["label"].values))
+            candidates_count = 0
+            for batch in self.train_dataloader():
+                for sample in batch:
+                    for label in sample["mentions_label"]:
+                        labels_count[label] += 1
+                    candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
+            frequencies = labels_count / candidates_count
+            self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
         config = get_config(self)
         self.hparams = config
         self.trainer.gradient_clip_val = self.gradient_clip_val
@@ -447,18 +449,20 @@ class NER(pl.LightningModule):
     def predict(self, data):
         for doc in data:
             if self.sentence_split_regex is not None:
-                sentences = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
+                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
             else:
                 sentences = (doc,)
             doc_mentions = []
-            for batch in batchify(self.preprocessor(sentences), self.batch_size):
-                results = self(batch)
-                for sentence_mentions, sentence in zip(results["preds"], sentences):
+            for prep in batchify(self.preprocessor(sentences), self.batch_size):
+                results = self(prep)
+                for sentence_mentions, sentence, prep_sample in zip(results["preds"], sentences, prep):
+                    # print(prep_sample)
                     sentence_begin = sentence["begin"] if "begin" in sentence else 0
                     for begin, end, label in sentence_mentions:
-                        begin = sentence["words_begin"][begin]
-                        end = sentence["words_end"][end]
+                        begin = prep_sample["words_begin"][begin]
+                        end = prep_sample["words_end"][end]
                         doc_mentions.append({
+                            "mention_id": len(doc_mentions),
                             "fragments": [{
                                               "begin": begin + sentence_begin,
                                               "end": end + sentence_begin,

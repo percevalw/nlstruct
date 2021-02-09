@@ -13,7 +13,8 @@ from .modules import Vocabulary, NER
 
 
 def objective(trial):
-    val_ids = ["filepdf-277-cas", "filepdf-176-cas", "filepdf-830-cas", "filepdf-509-2-cas", "filepdf-57-cas", "filepdf-533-1-cas", "filepdf-32-2-cas", "filepdf-728-cas", "filepdf-781-cas", "filepdf-119-cas"]
+    val_ids = ["filepdf-277-cas", "filepdf-176-cas", "filepdf-830-cas", "filepdf-509-2-cas", "filepdf-57-cas", "filepdf-533-1-cas", "filepdf-32-2-cas", "filepdf-728-cas", "filepdf-781-cas",
+               "filepdf-119-cas"]
     task_data = list(load_from_brat(glob.glob("/export/home/cse190022/data/resources/deft_2020/t3-appr/*.txt")))
     train_data = [sample for sample in task_data if sample["doc_id"] not in val_ids]
     val_data = [sample for sample in task_data if sample["doc_id"] in val_ids]
@@ -114,7 +115,7 @@ def objective(trial):
 if __name__ == "__main__":
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42), pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5))
     pl.seed_everything(42)
-    study.optimize(objective, n_trials=100)
+    study.optimize(objective, n_trials=100, gc_after_trial=True)
 
     print("Number of finished trials: {}".format(len(study.trials)))
 
