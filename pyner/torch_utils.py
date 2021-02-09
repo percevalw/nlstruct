@@ -52,7 +52,7 @@ def get_instance(module, **kwargs):
     return get_module(module)(**kwargs)
 
 
-def get_config(self, max_sequence_size=20, path=()):
+def get_config(self, path=()):
     config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
     for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
         if key.startswith('_'):
@@ -63,22 +63,21 @@ def get_config(self, max_sequence_size=20, path=()):
         elif hasattr(value, 'to_dict'):
             config[key] = value.to_dict()
         elif isinstance(value, torch.nn.ModuleList):
-            config[key] = {i: get_config(item, max_sequence_size=max_sequence_size) for i, item in enumerate(value)}
+            config[key] = {i: get_config(item) for i, item in enumerate(value)}
         elif isinstance(value, torch.nn.ModuleDict):
-            config[key] = {name: get_config(item, max_sequence_size=max_sequence_size, path=(*path, key)) for name, item in value.items()}
+            config[key] = {name: get_config(item, path=(*path, key)) for name, item in value.items()}
         elif isinstance(value, torch.nn.Module):
             config[key] = get_config(value)
         elif isinstance(value, torch.Tensor):
             pass
         elif isinstance(value, (int, float, str)):
             config[key] = value
-        elif isinstance(value, (tuple, list)) and len(value) <= max_sequence_size:
+        elif isinstance(value, (tuple, list)):
             config[key] = value
         elif isinstance(value, type):
-            config[key] = getattr(value, "__name__", str(value))
+            config[key] = f"{value.__module__}.{value.__name__}" if value.__module__ != "builtins" else value.__name__
         else:
-            config[key] = "#HASHED: {}".format(hash(str(value)))
-
+            raise ValueError("Cannot get config from {}".format(str(value)[:40]))
     return config
 
 

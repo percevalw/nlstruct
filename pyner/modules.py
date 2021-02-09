@@ -8,6 +8,7 @@ from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors
 from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config
+from importlib import import_module
 
 
 @register("vocabulary")
@@ -343,7 +344,7 @@ class NER(pl.LightningModule):
           gradient_clip_val=5.,
           warmup_rate=0.1,
           use_lr_schedules=True,
-          optimizer=torch.optim.Adam
+          optimizer_cls=torch.optim.Adam
     ):
         super().__init__()
 
@@ -375,7 +376,7 @@ class NER(pl.LightningModule):
             self.use_lr_schedules = use_lr_schedules
             self.warmup_rate = warmup_rate
             self.batch_size = batch_size
-            self.optimizer_cls = optimizer
+            self.optimizer_cls = getattr(import_module(optimizer_cls.rsplit(".", 1)[0]), optimizer_cls.rsplit(".", 1)[1]) if isinstance(optimizer_cls, str) else optimizer_cls
 
     def forward(self, inputs, return_loss=False):
         self.last_inputs = inputs
