@@ -7,7 +7,7 @@ from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors
-from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config
+from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained
 from importlib import import_module
 
 
@@ -506,3 +506,5 @@ class NER(pl.LightningModule):
              "schedules": LinearSchedule(path="lr", warmup_rate=self.warmup_rate, total_steps=max_steps) if self.use_lr_schedules else []},
         ]))
         return optimizer
+
+    save_pretrained = save_pretrained

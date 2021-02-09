@@ -81,6 +81,18 @@ def get_config(self, path=()):
     return config
 
 
+def save_pretrained(self, filename):
+    config = get_config(self)
+    torch.save({"config": config, "state_dict": self.state_dict()}, filename)
+
+
+def load_pretrained(path, map_location=None):
+    loaded = torch.load(path, map_location=map_location)
+    instance = get_instance(**loaded["config"])
+    instance.load_state_dict(loaded["state_dict"])
+    return instance
+
+
 def list_factorize(values, reference_values=None, freeze_reference=None):
     if freeze_reference is None:
         freeze_reference = reference_values is not None
