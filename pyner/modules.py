@@ -7,7 +7,7 @@ from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors
-from .torch_utils import einsum, bce_with_logits, get_module, register, fork_rng, get_config
+from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config
 
 
 @register("vocabulary")
@@ -157,7 +157,9 @@ class LSTMContextualizer(torch.nn.Module):
         if gate is False:
             self.gate_modules = [None] * num_layers
         else:
-            self.gate_modules = torch.nn.ModuleList([get_module(gate["module"])(**{"dim": hidden_size, **{k: v for k, v in gate.items() if k != "module"}}) for _ in range(num_layers)])
+            self.gate_modules = torch.nn.ModuleList([
+                get_instance(**gate)
+            for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
             torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
             for dim in [hidden_size] * num_layers
@@ -201,7 +203,7 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
             self.batch_norm = None
         self.n_labels = n_labels
         if contextualizer is not None:
-            self.contextualizer = get_module(contextualizer["module"])(**{k: v for k, v in contextualizer.items() if k != "module"})
+            self.contextualizer = get_instance(**contextualizer)
         else:
             self.contextualizer = None
 
@@ -351,17 +353,18 @@ class NER(pl.LightningModule):
         self.data_seed = data_seed
 
         with fork_rng(self.seed):
-            self.preprocessor = Preprocessor(**preprocessor)
+            self.preprocessor = get_instance(**preprocessor)
             self.sentence_balance_chars = sentence_balance_chars
             self.sentence_split_regex = sentence_split_regex
             self.word_encoders = torch.nn.ModuleList([
-                get_module(word_encoder["module"])(**{k: v for k, v in word_encoder.items() if k != "module"})
+                get_instance(**word_encoder)
                 for word_encoder in word_encoders
             ])
             self.embedding_batch_norm = FlatBatchNorm(decoder["contextualizer"]["input_size"]) if use_embedding_batch_norm else None
-            self.decoder = get_module(decoder["module"])(**{k: v for k, v in decoder.items() if k != "module"})
+            self.decoder = get_instance(**decoder)
             self.train_metric = PrecisionRecallF1Metric(prefix="train_")
             self.val_metric = PrecisionRecallF1Metric(prefix="val_")
+            self.test_metric = PrecisionRecallF1Metric(prefix="test_")
 
             self.init_labels_bias = init_labels_bias
 
@@ -398,11 +401,6 @@ class NER(pl.LightningModule):
         self.train_metric(outputs['preds'], outputs['gold'])
         return {'loss': outputs["loss"], 'preds': outputs["preds"], "inputs": inputs}
 
-    def validation_step(self, inputs, batch_idx):
-        outputs = self(inputs, return_loss=True)
-        self.val_metric(outputs['preds'], outputs['gold'])
-        return {'loss': outputs["loss"], 'preds': outputs["preds"], "inputs": inputs}
-
     def training_epoch_end(self, outputs):
         self.log_dict(self.train_metric.compute())
         loss = sum(output["loss"] * len(output["inputs"]) for output in outputs) / sum(len(output["inputs"]) for output in outputs)
@@ -411,10 +409,25 @@ class NER(pl.LightningModule):
         self.log("top_lr", self.optimizers().param_groups[1]["lr"])
         self.log("bert_lr", self.optimizers().param_groups[2]["lr"])
 
+    def validation_step(self, inputs, batch_idx):
+        outputs = self(inputs, return_loss=True)
+        self.val_metric(outputs['preds'], outputs['gold'])
+        return {'loss': outputs["loss"], 'preds': outputs["preds"], "inputs": inputs}
+
     def validation_epoch_end(self, outputs):
         self.log_dict(self.val_metric.compute())
         loss = sum(output["loss"] * len(output["inputs"]) for output in outputs) / sum(len(output["inputs"]) for output in outputs)
         self.log("val_loss", loss)
+
+    def test_step(self, inputs, batch_idx):
+        outputs = self(inputs, return_loss=True)
+        self.test_metric(outputs['preds'], outputs['gold'])
+        return {'loss': outputs["loss"], 'preds': outputs["preds"], "inputs": inputs}
+
+    def test_epoch_end(self, outputs):
+        self.log_dict(self.test_metric.compute())
+        loss = sum(output["loss"] * len(output["inputs"]) for output in outputs) / sum(len(output["inputs"]) for output in outputs)
+        self.log("test_loss", loss)
 
     def prepare_data(self):
         for dl, shuffle in [(self.train_dataloader, True), (self.val_dataloader, False), (self.test_dataloader, False)]:

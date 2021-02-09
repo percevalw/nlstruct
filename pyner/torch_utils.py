@@ -48,6 +48,10 @@ def get_module(name):
     return registry[name]
 
 
+def get_instance(module, **kwargs):
+    return get_module(module)(**kwargs)
+
+
 def get_config(self, max_sequence_size=20, path=()):
     config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
     for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
