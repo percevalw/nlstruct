@@ -359,7 +359,7 @@ class NER(pl.LightningModule):
             self.sentence_split_regex = sentence_split_regex
             self.word_encoders = torch.nn.ModuleList([
                 get_instance(**word_encoder)
-                for word_encoder in word_encoders
+                for word_encoder in (word_encoders if isinstance(word_encoders, list) else word_encoders.values())
             ])
             self.embedding_batch_norm = FlatBatchNorm(decoder["contextualizer"]["input_size"]) if use_embedding_batch_norm else None
             self.decoder = get_instance(**decoder)
