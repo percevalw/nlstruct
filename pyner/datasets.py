@@ -19,7 +19,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
 
     # Extract annotations from path and make multiple dataframe from it
     docs = []
-    for filename in ((path + name for name in sorted(os.listdir(path))) if isinstance(path, str) else path):
+    for filename in ((os.path.join(path, name) for name in sorted(os.listdir(path))) if isinstance(path, str) else path):
         mentions = {}
         relations = []
         if filename.endswith('.txt'):
