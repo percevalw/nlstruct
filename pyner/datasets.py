@@ -1,4 +1,5 @@
 import os
+import torch
 
 
 def load_from_brat(path, merge_spaced_fragments=True):
@@ -158,3 +159,73 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                             str(relation["label"]),
                             mention_from,
                             mention_to), file=f)
+
+
+import random
+
+
+class BRATDataset(pl.LightningDataModule):
+    def __init__(self, train, test=None, val=None, dropped_entity_label=(), seed=42):
+        super().__init__()
+        self.train_source = train
+        self.val_source = val
+        self.test_source = test
+        self.seed = seed
+        self.dropped_entity_label = dropped_entity_label
+
+    def filter_entities(self, data):
+        return [
+            {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in self.dropped_entity_label]}
+            for doc in data
+        ]
+
+    def setup(self, stage):
+        if isinstance(self.train_source, str):
+            self.train_data = list(load_from_brat(glob.glob(os.path.join(self.train_source, '*.txt'))))
+        elif isinstance(self.train_source, (list, tuple)):
+            self.train_data = list(load_from_brat(self.train_source))
+        else:
+            raise ValueError("train source for BRATDataset must be str or list of str")
+        if self.train_data is not None:
+            self.train_data = self.filter_entities(self.train_data)
+
+        if isinstance(self.test_source, str):
+            self.test_data = list(load_from_brat(glob.glob(os.path.join(self.test_source, '*.txt'))))
+        elif isinstance(self.test_source, (list, tuple)):
+            self.test_data = list(load_from_brat(self.test_source))
+        else:
+            assert self.test_source is None
+            self.test_data = None
+        if self.test_data is not None:
+            self.test_data = self.filter_entities(self.train_data)
+
+        if isinstance(self.val_source, str):
+            self.val_data = list(load_from_brat(glob.glob(os.path.join(self.val_source, '*.txt'))))
+        elif isinstance(self.val_source, (list, tuple)):
+            self.val_data = list(load_from_brat(self.val_source))
+        elif isinstance(self.val_source, (int, float)):
+            shuffled_data = list(self.train_data)
+            if self.seed is not False:
+                random.Random(self.seed).shuffle(shuffled_data)
+            offset = self.val_source if isinstance(self.val_source, int) else int(self.val_source * len(shuffled_data))
+            self.val_data = shuffled_data[:offset]
+            self.train_data = shuffled_data[offset:]
+        else:
+            assert self.val_source is None
+            self.val_data = None
+        if self.val_data is not None:
+            self.val_data = self.filter_entities(self.val_data)
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(self.train_data) if self.train_data is not None else None
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(self.val_data) if self.val_data is not None else None
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(self.test_data) if self.test_data is not None else None
+
+
+class DEFT(BRATDataset):
+    def __init__(self, train, test, val=None, dropped_entity_label=("duree", "frequence"), seed=42):
+        super().__init__(train=train, test=test, val=val, dropped_entity_label=dropped_entity_label, seed=seed)
