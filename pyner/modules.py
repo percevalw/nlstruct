@@ -9,7 +9,7 @@ from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors
 from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained
 from importlib import import_module
-
+import functools
 
 @register("vocabulary")
 class Vocabulary(torch.nn.Module):
@@ -276,7 +276,7 @@ class Preprocessor(torch.nn.Module):
 
     def __call__(self, sample, only_text=False):
         if not isinstance(sample, dict):
-            return map(self, sample)
+            return map(functools.partial(self, only_text=only_text), sample)
         bert_tokens = huggingface_tokenize(sample["text"].lower() if self.bert_lower else sample["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
         if self.word_regex is not None:
             words = regex_tokenize(sample["text"], reg=self.word_regex, subs=self.substitutions, do_unidecode=self.do_unidecode)
