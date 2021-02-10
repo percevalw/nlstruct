@@ -220,5 +220,5 @@ class BRATDataset(pl.LightningDataModule):
 
 
 class DEFT(BRATDataset):
-    def __init__(self, train, test, val=None, dropped_entity_label=("duree", "frequence"), seed=False):
+    def __init__(self, train, test, val=0.2, dropped_entity_label=("duree", "frequence"), seed=False):
         super().__init__(train=train, test=test, val=val, dropped_entity_label=dropped_entity_label, seed=seed)
