@@ -274,7 +274,7 @@ class Preprocessor(torch.nn.Module):
     def bert_name(self):
         return self.tokenizer.name_or_path
 
-    def __call__(self, sample):
+    def __call__(self, sample, only_text=False):
         if not isinstance(sample, dict):
             return map(self, sample)
         bert_tokens = huggingface_tokenize(sample["text"].lower() if self.bert_lower else sample["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
@@ -286,7 +286,7 @@ class Preprocessor(torch.nn.Module):
         words_bert_begin, words_bert_end = split_spans(words["begin"], words["end"], bert_tokens["begin"], bert_tokens["end"])
         words_bert_begin, words_bert_end = words_bert_begin.tolist(), words_bert_end.tolist()
         words_chars = [[self.vocabularies["char"][char] for char in word] for word in words["word"]]
-        if len(sample["mentions"]):
+        if not only_text and "mentions" in sample and len(sample["mentions"]):
             mentions_begin, mentions_end, mentions_label, mention_ids = map(list, zip(*[[fragment["begin"], fragment["end"], mention["label"], mention["mention_id"] + "/" + str(i)]
                                                                                         for mention in sample["mentions"] for i, fragment in enumerate(mention["fragments"])]))
             mentions_begin, mentions_end = split_spans(mentions_begin, mentions_end, words["begin"], words["end"])
@@ -509,10 +509,9 @@ class NER(pl.LightningModule):
             else:
                 sentences = (doc,)
             doc_mentions = []
-            for prep in batchify(self.preprocessor(sentences), self.batch_size):
+            for prep in batchify(self.preprocessor(sentences, only_text=True), self.batch_size):
                 results = self(prep)
                 for sentence_mentions, sentence, prep_sample in zip(results["preds"], sentences, prep):
-                    # print(prep_sample)
                     sentence_begin = sentence["begin"] if "begin" in sentence else 0
                     for begin, end, label in sentence_mentions:
                         begin = prep_sample["words_begin"][begin]
