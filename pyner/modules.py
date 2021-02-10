@@ -17,8 +17,9 @@ class Vocabulary(torch.nn.Module):
         super().__init__()
         self.with_pad = with_pad
         self.with_unk = with_unk
-        values = (["__pad__"] if with_pad else []) + (["__unk__"] if with_unk else []) + list(values)
+        values = (["__pad__"] if with_pad and "__pad__" not in values else []) + (["__unk__"] if with_unk and "__unk__" not in values  else []) + list(values)
         self.inversed = {v: i for i, v in enumerate(values)}
+        self.eval()
 
     @property
     def values(self):
@@ -159,8 +160,8 @@ class LSTMContextualizer(torch.nn.Module):
             self.gate_modules = [None] * num_layers
         else:
             self.gate_modules = torch.nn.ModuleList([
-                get_instance(**gate)
-            for _ in range(num_layers)])
+                get_instance(gate)
+                for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
             torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
             for dim in [hidden_size] * num_layers
@@ -204,7 +205,7 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
             self.batch_norm = None
         self.n_labels = n_labels
         if contextualizer is not None:
-            self.contextualizer = get_instance(**contextualizer)
+            self.contextualizer = get_instance(contextualizer)
         else:
             self.contextualizer = None
 
@@ -266,7 +267,7 @@ class Preprocessor(torch.nn.Module):
         self.do_unidecode = do_unidecode
         self.bert_lower = bert_lower
         self.word_regex = word_regex
-        self.vocabularies = vocabularies
+        self.vocabularies = torch.nn.ModuleDict({key: get_instance(vocabulary) for key, vocabulary in vocabularies.items()})
         self.substitutions = substitutions
 
     @property
@@ -352,31 +353,84 @@ class NER(pl.LightningModule):
             data_seed = seed
         self.seed = seed
         self.data_seed = data_seed
+        self.sentence_balance_chars = sentence_balance_chars
+        self.sentence_split_regex = sentence_split_regex
+        self.train_metric = PrecisionRecallF1Metric(prefix="train_")
+        self.val_metric = PrecisionRecallF1Metric(prefix="val_")
+        self.test_metric = PrecisionRecallF1Metric(prefix="test_")
+        self.init_labels_bias = init_labels_bias
 
+        self.gradient_clip_val = gradient_clip_val
+        self.top_lr = top_lr
+        self.main_lr = main_lr
+        self.bert_lr = bert_lr
+        self.use_lr_schedules = use_lr_schedules
+        self.warmup_rate = warmup_rate
+        self.batch_size = batch_size
+        self.optimizer_cls = getattr(import_module(optimizer_cls.rsplit(".", 1)[0]), optimizer_cls.rsplit(".", 1)[1]) if isinstance(optimizer_cls, str) else optimizer_cls
+
+        self.preprocessor = get_instance(preprocessor)
+
+        # Init postponed to setup
+        self.word_encoders = word_encoders if isinstance(word_encoders, list) else word_encoders.values()
+        self.embedding_batch_norm = None
+        self.decoder = decoder
+        self.use_embedding_batch_norm = use_embedding_batch_norm
+
+        if not any(voc.training for voc in self.preprocessor.vocabularies.values()):
+            self.init_modules()
+
+    def init_modules(self):
+        # Init modules that depend on the vocabulary
         with fork_rng(self.seed):
-            self.preprocessor = get_instance(**preprocessor)
-            self.sentence_balance_chars = sentence_balance_chars
-            self.sentence_split_regex = sentence_split_regex
+            word_encoders = self.word_encoders
+            for word_encoder in word_encoders:
+                if word_encoder.get("n_chars", -1) is None:
+                    word_encoder["n_chars"] = len(self.preprocessor.vocabularies["char"].values)
             self.word_encoders = torch.nn.ModuleList([
-                get_instance(**word_encoder)
-                for word_encoder in (word_encoders if isinstance(word_encoders, list) else word_encoders.values())
+                get_instance(word_encoder)
+                for word_encoder in self.word_encoders
             ])
-            self.embedding_batch_norm = FlatBatchNorm(decoder["contextualizer"]["input_size"]) if use_embedding_batch_norm else None
-            self.decoder = get_instance(**decoder)
-            self.train_metric = PrecisionRecallF1Metric(prefix="train_")
-            self.val_metric = PrecisionRecallF1Metric(prefix="val_")
-            self.test_metric = PrecisionRecallF1Metric(prefix="test_")
+            self.embedding_batch_norm = FlatBatchNorm(self.decoder["contextualizer"]["input_size"]) if self.use_embedding_batch_norm else None
+            if self.decoder.get("n_labels", -1) is None:
+                self.decoder["n_labels"] = len(self.preprocessor.vocabularies["label"].values)
+            self.decoder = get_instance(self.decoder)
 
-            self.init_labels_bias = init_labels_bias
+    def setup(self, stage='fit'):
+        for name in (['train_dataloader', 'val_dataloader'] if stage == 'fit' else ['test_dataloader']):
+            dl = getattr(self, name)()
+            if dl is None:
+                continue
+            data = dl.dataset
+            if self.sentence_split_regex is not None:
+                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
 
-            self.gradient_clip_val = gradient_clip_val
-            self.top_lr = top_lr
-            self.main_lr = main_lr
-            self.bert_lr = bert_lr
-            self.use_lr_schedules = use_lr_schedules
-            self.warmup_rate = warmup_rate
-            self.batch_size = batch_size
-            self.optimizer_cls = getattr(import_module(optimizer_cls.rsplit(".", 1)[0]), optimizer_cls.rsplit(".", 1)[1]) if isinstance(optimizer_cls, str) else optimizer_cls
+            data = list(self.preprocessor(data))
+            with fork_rng(self.data_seed):
+                dl = torch.utils.data.DataLoader(data, batch_size=self.batch_size, collate_fn=identity)
+            setattr(self, name, pl.trainer.connectors.data_connector._PatchDataLoader(dl))
+
+        if stage == 'fit':
+            if any(voc.training for voc in self.preprocessor.vocabularies.values()):
+                self.preprocessor.vocabularies.eval()
+                self.init_modules()
+
+            # Setup label bias
+            # Should be a good place to learn vocabularies ?
+            if self.init_labels_bias:
+                labels_count = torch.zeros(len(self.preprocessor.vocabularies["label"].values))
+                candidates_count = 0
+                for batch in self.train_dataloader():
+                    for sample in batch:
+                        for label in sample["mentions_label"]:
+                            labels_count[label] += 1
+                        candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
+                frequencies = labels_count / candidates_count
+                self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
+            config = get_config(self)
+            self.hparams = config
+            self.trainer.gradient_clip_val = self.gradient_clip_val
+            self.logger.log_hyperparams(self.hparams)
 
     def forward(self, inputs, return_loss=False):
         self.last_inputs = inputs
@@ -430,35 +484,23 @@ class NER(pl.LightningModule):
         loss = sum(output["loss"] * len(output["inputs"]) for output in outputs) / sum(len(output["inputs"]) for output in outputs)
         self.log("test_loss", loss)
 
-    def prepare_data(self):
-        for dl, shuffle in [(self.train_dataloader, True), (self.val_dataloader, False), (self.test_dataloader, False)]:
-            if dl() is None:
-                continue
-            data = dl()
-            if self.sentence_split_regex is not None:
-                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
-            data = list(self.preprocessor(data))
-            with fork_rng(self.data_seed):
-                data = torch.utils.data.DataLoader(data, shuffle=shuffle, batch_size=self.batch_size, collate_fn=identity)
-            dl.dataloader = data
-
-    def on_pretrain_routine_start(self):
-        # Setup label bias
-        # Should be a good place to learn vocabularies ?
-        if self.init_labels_bias:
-            labels_count = torch.zeros(len(self.preprocessor.vocabularies["label"].values))
-            candidates_count = 0
-            for batch in self.train_dataloader():
-                for sample in batch:
-                    for label in sample["mentions_label"]:
-                        labels_count[label] += 1
-                    candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
-            frequencies = labels_count / candidates_count
-            self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
-        config = get_config(self)
-        self.hparams = config
-        self.trainer.gradient_clip_val = self.gradient_clip_val
-        self.logger.log_hyperparams(self.hparams)
+    def configure_optimizers(self):
+        bert_params = list(self.word_encoders[1].parameters())
+        top_params = self.decoder.top_params()
+        main_params = [p for p in self.parameters() if not any(p is q for q in bert_params) and not any(p is q for q in top_params)]
+        max_steps = self.trainer.max_epochs * len(self.train_dataloader())
+        optimizer = ScheduledOptimizer(self.optimizer_cls([
+            {"params": main_params,
+             "lr": self.main_lr,
+             "schedules": LinearSchedule(path="lr", warmup_rate=0, total_steps=max_steps) if self.use_lr_schedules else []},
+            {"params": top_params,
+             "lr": self.top_lr,
+             "schedules": LinearSchedule(path="lr", warmup_rate=0, total_steps=max_steps) if self.use_lr_schedules else []},
+            {"params": bert_params,
+             "lr": self.bert_lr,
+             "schedules": LinearSchedule(path="lr", warmup_rate=self.warmup_rate, total_steps=max_steps) if self.use_lr_schedules else []},
+        ]))
+        return optimizer
 
     def predict(self, data):
         for doc in data:
@@ -488,23 +530,5 @@ class NER(pl.LightningModule):
                 "text": doc["text"],
                 "mentions": doc_mentions,
             }
-
-    def configure_optimizers(self):
-        bert_params = list(self.word_encoders[1].parameters())
-        top_params = self.decoder.top_params()
-        main_params = [p for p in self.parameters() if not any(p is q for q in bert_params) and not any(p is q for q in top_params)]
-        max_steps = self.trainer.max_epochs * len(self.train_dataloader.dataloader)
-        optimizer = ScheduledOptimizer(self.optimizer_cls([
-            {"params": main_params,
-             "lr": self.main_lr,
-             "schedules": LinearSchedule(path="lr", warmup_rate=0, total_steps=max_steps) if self.use_lr_schedules else []},
-            {"params": top_params,
-             "lr": self.top_lr,
-             "schedules": LinearSchedule(path="lr", warmup_rate=0, total_steps=max_steps) if self.use_lr_schedules else []},
-            {"params": bert_params,
-             "lr": self.bert_lr,
-             "schedules": LinearSchedule(path="lr", warmup_rate=self.warmup_rate, total_steps=max_steps) if self.use_lr_schedules else []},
-        ]))
-        return optimizer
 
     save_pretrained = save_pretrained

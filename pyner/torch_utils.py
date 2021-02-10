@@ -48,7 +48,11 @@ def get_module(name):
     return registry[name]
 
 
-def get_instance(module, **kwargs):
+def get_instance(kwargs):
+    if not isinstance(kwargs, dict):
+        return kwargs
+    kwargs = dict(kwargs)
+    module = kwargs.pop("module")
     return get_module(module)(**kwargs)
 
 
@@ -88,7 +92,7 @@ def save_pretrained(self, filename):
 
 def load_pretrained(path, map_location=None):
     loaded = torch.load(path, map_location=map_location)
-    instance = get_instance(**loaded["config"])
+    instance = get_instance(loaded["config"])
     instance.load_state_dict(loaded["state_dict"])
     return instance
 
