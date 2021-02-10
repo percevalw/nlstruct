@@ -192,7 +192,7 @@ class BRATDataset(pl.LightningDataModule):
             assert self.test_source is None
             self.test_data = None
         if self.test_data is not None:
-            self.test_data = self.filter_entities(self.train_data)
+            self.test_data = self.filter_entities(self.test_data)
 
         if isinstance(self.val_source, (str, list, tuple)):
             self.val_data = list(load_from_brat(self.val_source))
