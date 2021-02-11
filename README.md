@@ -4,7 +4,7 @@ Named entity recognition (nested or not) in Python
 ### How to train
 ```python
 from pyner import NER, Vocabulary, load_pretrained
-from pyner.datasets import DEFT
+from pyner.datasets import BRATDataset
 import string
 import torch
 import pytorch_lightning as pl
@@ -110,13 +110,13 @@ trainer = pl.Trainer(
         }),
     ],
     max_epochs=10)
-deft = DEFT(
-    train="path/to/deft/t3-appr",
-    test="path/to/deft/t3-test",
-    val=0.2,
-    seed=43
+dataset = BRATDataset(
+    train="path/to/brat/t3-appr",
+    test="path/to/brat/t3-test",
+    val=0.2, # first 20% doc will be for validation
+    seed=False, # don't shuffle before splitting
 )
-trainer.fit(ner, deft)
+trainer.fit(ner, dataset)
 ner.save_pretrained("ner.pt")
 ```
 
@@ -125,22 +125,22 @@ ner.save_pretrained("ner.pt")
 from pyner import load_pretrained
 from pyner.datasets import load_from_brat, export_to_brat
 ner = load_pretrained("ner.pt")
-export_to_brat(ner.predict(load_from_brat("path/to/deft/t3-test")), filename_prefix="path/to/exported_brat")
+export_to_brat(ner.predict(load_from_brat("path/to/brat/t3-test")), filename_prefix="path/to/exported_brat")
 ```
 
 ### How to search hyperparameters
 
 ```python
 from pyner import NER, Vocabulary
-from pyner.datasets import DEFT
+from pyner.datasets import BRATDataset
 import string
 import torch
 import pytorch_lightning as pl
 import gc
 import optuna
 
-deft = DEFT(
-    train="/path/to/deft/t3-appr/",
+dataset = BRATDataset(
+    train="/path/to/brat/t3-appr/",
     test=None,
     val=0.2,
     seed=False, # do not shuffle for val split, just take the first 20% docs
@@ -225,12 +225,12 @@ def objective(trial):
         progress_bar_refresh_rate=False,
         move_metrics_to_cpu=True,
         logger=[
-            pl.loggers.TestTubeLogger("tensorboard_data", name="pyner-deft"),
+            pl.loggers.TestTubeLogger("tensorboard_data", name="pyner-brat"),
         ],
         max_epochs=50)
     
     print(trial.params)
-    trainer.fit(ner, deft)
+    trainer.fit(ner, dataset)
     
     res = trainer.callback_metrics["val_f1"].item()
     print("=>", res)
