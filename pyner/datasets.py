@@ -34,7 +34,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                         ann_parts = line.strip('\n').split('\t', 1)
                         ann_id, remaining = ann_parts
                         if ann_id.startswith('T'):
-                            remaining, mention_text = remaining.split("\t")
+                            remaining, mention_text = remaining.split("\t", 1)
                             mention, span = remaining.split(" ", 1)
                             mentions[ann_id] = {
                                 "mention_id": ann_id,
@@ -42,15 +42,14 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                 "attributes": [],
                                 "comments": [],
                                 "label": mention,
-                                "text": mention_text,
                             }
                             last_end = None
                             fragment_i = 0
                             for s in span.split(';'):
                                 begin, end = int(s.split()[0]), int(s.split()[1])
-                                # If merge_newlines, merge two fragments that are only separated by a newline (brat automatically creates
+                                # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
                                 # multiple fragments for a mention that spans over more than one line)
-                                if merge_spaced_fragments and begin - 1 == last_end and len(mention_text[last_end:begin].strip()) == 0:
+                                if merge_spaced_fragments and len(text[last_end:begin].strip()) == 0:
                                     mentions[ann_id]["fragments"][-1]["end"] = end
                                     continue
                                 mentions[ann_id]["fragments"].append({
