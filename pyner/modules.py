@@ -336,6 +336,7 @@ class NER(pl.LightningModule):
           data_seed=None,
           sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
           sentence_balance_chars=('()', '[]'),
+          sentence_mention_overlap="raise",
 
           init_labels_bias=True,
           batch_size=16,
@@ -347,6 +348,48 @@ class NER(pl.LightningModule):
           use_lr_schedules=True,
           optimizer_cls=torch.optim.Adam
     ):
+        """
+
+        :param preprocessor: dict
+            Preprocessor module parameters
+        :param word_encoders: list of dict
+            Word encoders module parameters
+        :param decoder: dict
+            Decoder module parameters
+        :param use_embedding_batch_norm: bool
+            Apply batch norm on features computed from word_encoders ?
+        :param seed: int
+            Seed for the model weights
+        :param data_seed: int
+            Seed for the data shuffling
+        :param sentence_split_regex: str
+            Regex used to split sentences.
+            Ex: "(\n([ ]*\n)*)" will split on newlines / spaces, and not keep these tokens in the sentences, because they are matched in a captured group
+        :param sentence_balance_chars: tuple of str
+            Characters to "balance" when splitting sentence, ex: parenthesis, brackets, etc.
+            Will make sure that we always have (number of '[')  <= (number of ']')
+        :param sentence_mention_overlap: str
+            What to do when a mention overlaps multiple sentences ?
+            Choices: "raise" to raise an error or "split" to split the mention
+        :param init_labels_bias: bool
+            Initialize the labels bias vector with log frequencies of the labels in the dataset
+        :param batch_size: int
+            Batch size
+        :param top_lr: float
+            Top modules parameters' learning rate, typically higher than other parameters learning rates
+        :param main_lr: float
+            Intermediate modules parameters' learning rate
+        :param bert_lr: float
+            BERT modules parameters' learning rate
+        :param gradient_clip_val:
+            Use gradient clipping
+        :param warmup_rate: float
+            Apply warmup for how much of the training (defaults to 0.1 = 10%)
+        :param use_lr_schedules: bool
+            Use learning rate schedules
+        :param optimizer_cls: str or type
+            Torch optimizer class to use
+        """
         super().__init__()
 
         if data_seed is None:
@@ -355,6 +398,7 @@ class NER(pl.LightningModule):
         self.data_seed = data_seed
         self.sentence_balance_chars = sentence_balance_chars
         self.sentence_split_regex = sentence_split_regex
+        self.sentence_mention_overlap = sentence_mention_overlap
         self.train_metric = PrecisionRecallF1Metric(prefix="train_")
         self.val_metric = PrecisionRecallF1Metric(prefix="val_")
         self.test_metric = PrecisionRecallF1Metric(prefix="test_")
@@ -403,7 +447,7 @@ class NER(pl.LightningModule):
                 continue
             data = dl.dataset
             if self.sentence_split_regex is not None:
-                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
+                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_mentions=self.sentence_mention_overlap)
 
             data = list(self.preprocessor(data))
             with fork_rng(self.data_seed):
@@ -505,7 +549,7 @@ class NER(pl.LightningModule):
     def predict(self, data):
         for doc in data:
             if self.sentence_split_regex is not None:
-                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars)
+                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_mentions=self.sentence_mention_overlap)
             else:
                 sentences = (doc,)
             doc_mentions = []

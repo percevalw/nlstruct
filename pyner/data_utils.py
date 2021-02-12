@@ -172,16 +172,18 @@ class loop:
 
 
 class sentencize:
-    def __init__(self, samples, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=()):
+    def __init__(self, samples, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", multi_sentence_mentions="raise", balance_chars=()):
         self.samples = samples
         self.reg_split = reg_split
         self.balance_chars = balance_chars
         self.current_doc = None
         self.current_idx = -1
         self.remaining_sentences = []
+        assert multi_sentence_mentions in ("raise", "split")
+        self.multi_sentence_mentions = multi_sentence_mentions
 
     def __iter__(self):
-        new_self = sentencize(iter(self.samples), self.reg_split, balance_chars=self.balance_chars)
+        new_self = sentencize(iter(self.samples), self.reg_split, balance_chars=self.balance_chars, multi_sentence_mentions=self.multi_sentence_mentions)
         return new_self
 
     def state_dict(self):
@@ -208,13 +210,24 @@ class sentencize:
         [(sentence_begin, sentence_end), *self.remaining_sentences] = self.remaining_sentences
         self.current_idx += 1
         new_mentions = []
+        sentence_size = sentence_end - sentence_begin
         if "mentions" in self.current_doc:
             for mention in self.current_doc["mentions"]:
                 min_begin = min(fragment["begin"] for fragment in mention["fragments"])
                 max_end = max(fragment["end"] for fragment in mention["fragments"])
                 if min_begin <= sentence_end and sentence_begin <= max_end:
-                    assert sentence_begin <= min_begin and max_end <= sentence_end
-                    new_mentions.append({**mention, "fragments": [{"begin": fragment["begin"] - sentence_begin, "end": fragment["end"] - sentence_begin} for fragment in mention["fragments"]]})
+                    if sentence_begin <= min_begin and max_end <= sentence_end:
+                        new_mentions.append({**mention, "fragments": [{"begin": fragment["begin"] - sentence_begin,
+                                                                       "end": fragment["end"] - sentence_begin}
+                                                                      for fragment in mention["fragments"]]})
+                    else:
+                        if self.multi_sentence_mentions == "raise":
+                            raise Exception("Entity {} spans more than one sentence in document {}".format(repr(self.current_doc["text"][min_begin:max_end]), self.current_doc["doc_id"]))
+                        else:
+                            new_mentions.append({**mention, "fragments": [{"begin": min(max(fragment["begin"] - sentence_begin, 0), sentence_size),
+                                                                           "end": max(min(fragment["end"] - sentence_begin, sentence_size), 0)}
+                                                                          for fragment in mention["fragments"]
+                                                                          if fragment["begin"] <= sentence_end and sentence_begin <= fragment["end"]]})
         return {
             "doc_id": self.current_doc["doc_id"] + "/" + str(self.current_idx),
             "text": self.current_doc["text"][sentence_begin:sentence_end],
