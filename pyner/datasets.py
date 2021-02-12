@@ -49,7 +49,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                 begin, end = int(s.split()[0]), int(s.split()[1])
                                 # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
                                 # multiple fragments for a mention that spans over more than one line)
-                                if merge_spaced_fragments and len(text[last_end:begin].strip()) == 0:
+                                if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
                                     mentions[ann_id]["fragments"][-1]["end"] = end
                                     continue
                                 mentions[ann_id]["fragments"].append({
