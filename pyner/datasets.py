@@ -11,7 +11,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
     ----------
     path: str or pathlib.Path
     merge_spaced_fragments: bool
-        Merge fragments of a mention that was splited by brat because it overlapped an end of line
+        Merge fragments of a entity that was splited by brat because it overlapped an end of line
     Returns
     -------
     Dataset
@@ -20,7 +20,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
     # Extract annotations from path and make multiple dataframe from it
     docs = []
     for filename in ((os.path.join(path, name) for name in sorted(os.listdir(path))) if isinstance(path, str) else path):
-        mentions = {}
+        entities = {}
         relations = []
         if filename.endswith('.txt'):
             doc_id = filename.replace('.txt', '').split("/")[-1]
@@ -34,25 +34,25 @@ def load_from_brat(path, merge_spaced_fragments=True):
                         ann_parts = line.strip('\n').split('\t', 1)
                         ann_id, remaining = ann_parts
                         if ann_id.startswith('T'):
-                            remaining, mention_text = remaining.split("\t", 1)
-                            mention, span = remaining.split(" ", 1)
-                            mentions[ann_id] = {
-                                "mention_id": ann_id,
+                            remaining, entity_text = remaining.split("\t", 1)
+                            entity, span = remaining.split(" ", 1)
+                            entities[ann_id] = {
+                                "entity_id": ann_id,
                                 "fragments": [],
                                 "attributes": [],
                                 "comments": [],
-                                "label": mention,
+                                "label": entity,
                             }
                             last_end = None
                             fragment_i = 0
                             for s in span.split(';'):
                                 begin, end = int(s.split()[0]), int(s.split()[1])
                                 # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
-                                # multiple fragments for a mention that spans over more than one line)
+                                # multiple fragments for a entity that spans over more than one line)
                                 if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
-                                    mentions[ann_id]["fragments"][-1]["end"] = end
+                                    entities[ann_id]["fragments"][-1]["end"] = end
                                     continue
-                                mentions[ann_id]["fragments"].append({
+                                entities[ann_id]["fragments"].append({
                                     "begin": begin,
                                     "end": end,
                                 })
@@ -61,13 +61,13 @@ def load_from_brat(path, merge_spaced_fragments=True):
                         elif ann_id.startswith('A'):
                             parts = remaining.split(" ")
                             if len(parts) >= 3:
-                                mention, mention_id, value = parts
+                                entity, entity_id, value = parts
                             else:
-                                mention, mention_id = parts
+                                entity, entity_id = parts
                                 value = None
-                            mentions[mention_id]["attributes"].append({
+                            entities[entity_id]["attributes"].append({
                                 "attribute_id": ann_id,
-                                "label": mention,
+                                "label": entity,
                                 "value": value,
                             })
                         elif ann_id.startswith('R'):
@@ -75,15 +75,15 @@ def load_from_brat(path, merge_spaced_fragments=True):
                             relations.append({
                                 "relation_id": ann_id,
                                 "relation_label": ann_name,
-                                "from_mention_id": parts[0].split(":")[1],
-                                "to_mention_id": parts[1].split(":")[1],
+                                "from_entity_id": parts[0].split(":")[1],
+                                "to_entity_id": parts[1].split(":")[1],
                             })
                         elif ann_id.startswith('#'):
                             remaining = remaining.strip(" \t").split("\t")
-                            [mention_id, comment] = remaining + ([""] if len(remaining) < 2 else [])
-                            ann_type, mention_id = mention_id.split(" ")
+                            [entity_id, comment] = remaining + ([""] if len(remaining) < 2 else [])
+                            ann_type, entity_id = entity_id.split(" ")
                             if ann_type == "AnnotatorNotes":
-                                mentions[mention_id]["comments"].append({
+                                entities[entity_id]["comments"].append({
                                     "comment_id": ann_id,
                                     "comment": comment,
                                 })
@@ -96,7 +96,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                 yield {
                     "doc_id": doc_id,
                     "text": text,
-                    "mentions": list(mentions.values()),
+                    "entities": list(entities.values()),
                     "relations": relations,
                 }
     return docs
@@ -118,66 +118,70 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
         attribute_idx = 1
         if not os.path.exists(ann_filename) or overwrite_ann:
             with open(ann_filename, "w") as f:
-                if "mentions" in doc:
-                    for mention in doc["mentions"]:
+                if "entities" in doc:
+                    for entity in doc["entities"]:
                         idx = None
                         spans = []
-                        brat_mention_id = "T" + str(mention["mention_id"] + 1)
-                        for fragment in sorted(mention["fragments"], key=lambda frag: frag["begin"]):
+                        brat_entity_id = "T" + str(entity["entity_id"] + 1)
+                        for fragment in sorted(entity["fragments"], key=lambda frag: frag["begin"]):
                             idx = fragment["begin"]
-                            mention_text = doc["text"][fragment["begin"]:fragment["end"]]
-                            for part in mention_text.split("\n"):
+                            entity_text = doc["text"][fragment["begin"]:fragment["end"]]
+                            for part in entity_text.split("\n"):
                                 begin = idx
                                 end = idx + len(part)
                                 idx = end + 1
                                 if begin != end:
                                     spans.append((begin, end))
                         print("T{}\t{} {}\t{}".format(
-                            brat_mention_id,
-                            str(mention["label"]),
+                            brat_entity_id,
+                            str(entity["label"]),
                             ";".join(" ".join(map(str, span)) for span in spans),
-                            mention_text.replace("\n", " ")), file=f)
-                        if "attributes" in mention:
-                            for attribute in mention["attributes"]:
+                            entity_text.replace("\n", " ")), file=f)
+                        if "attributes" in entity:
+                            for attribute in entity["attributes"]:
                                 if "value" in attribute and attribute["value"] is not None:
                                     print("A{}\t{} T{} {}".format(
                                         attribute_idx,
                                         str(attribute["label"]),
-                                        brat_mention_id,
+                                        brat_entity_id,
                                         attribute["value"]), file=f)
                                 else:
                                     print("A{}\t{} T{}".format(
                                         i + 1,
                                         str(attribute["label"]),
-                                        brat_mention_id), file=f)
+                                        brat_entity_id), file=f)
                                 attribute_idx += 1
                 if "relations" in doc:
                     for i, relation in enumerate(doc["relations"]):
-                        mention_from = relation["from_mention_id"] + 1
-                        mention_to = relation["to_mention_id"] + 1
+                        entity_from = relation["from_entity_id"] + 1
+                        entity_to = relation["to_entity_id"] + 1
                         print("R{}\t{} Arg1:T{} Arg2:T{}\t".format(
                             i + 1,
                             str(relation["label"]),
-                            mention_from,
-                            mention_to), file=f)
+                            entity_from,
+                            entity_to), file=f)
 
 
 class BRATDataset(pl.LightningDataModule):
-    def __init__(self, train, test=None, val=None, dropped_entity_label=(), seed=False):
+    def __init__(self, train, test=None, val=None, kept_entity_label=None, dropped_entity_label=(), seed=False):
         super().__init__()
         self.train_source = train
         self.val_source = val
         self.test_source = test
         self.seed = seed
         self.dropped_entity_label = dropped_entity_label
+        self.kept_entity_label = kept_entity_label
 
     def filter_entities(self, data):
         return [
-            {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in self.dropped_entity_label]}
+            {**doc, "entities": [entity
+                                 for entity in doc["entities"]
+                                 if entity["label"] not in self.dropped_entity_label and
+                                 self.kept_entity_label is not None and entity["label"] in self.kept_entity_label]}
             for doc in data
         ]
 
-    def setup(self, stage):
+    def setup(self, stage='fit'):
         if isinstance(self.train_source, (str, list, tuple)):
             self.train_data = list(load_from_brat(self.train_source))
         else:

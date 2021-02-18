@@ -19,18 +19,18 @@ def objective(trial):
     train_data = [sample for sample in task_data if sample["doc_id"] not in val_ids]
     val_data = [sample for sample in task_data if sample["doc_id"] in val_ids]
     train_data = [
-        {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in ("duree", "frequence")]}
+        {**doc, "entities": [entity for entity in doc["entities"] if entity["label"] not in ("duree", "frequence")]}
         for doc in train_data
     ]
     val_data = [
-        {**doc, "mentions": [mention for mention in doc["mentions"] if mention["label"] not in ("duree", "frequence")]}
+        {**doc, "entities": [entity for entity in doc["entities"] if entity["label"] not in ("duree", "frequence")]}
         for doc in val_data
     ]
 
     bert_name = "camembert/camembert-large"
     vocabularies = torch.nn.ModuleDict({
         "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
-        "label": Vocabulary(sorted(set([mention["label"] for doc in train_data for mention in doc["mentions"]])), with_unk=False, with_pad=False),
+        "label": Vocabulary(sorted(set([entity["label"] for doc in train_data for entity in doc["entities"]])), with_unk=False, with_pad=False),
     }).eval()
     ner = NER(
         seed=random.randint(1, 1000),
@@ -89,7 +89,6 @@ def objective(trial):
         ),
 
         init_labels_bias=True,
-
         batch_size=24,
         use_lr_schedules=True,
         gradient_clip_val=5.,

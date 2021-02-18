@@ -172,18 +172,18 @@ class loop:
 
 
 class sentencize:
-    def __init__(self, samples, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", multi_sentence_mentions="raise", balance_chars=()):
+    def __init__(self, samples, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", multi_sentence_entities="raise", balance_chars=()):
         self.samples = samples
         self.reg_split = reg_split
         self.balance_chars = balance_chars
         self.current_doc = None
         self.current_idx = -1
         self.remaining_sentences = []
-        assert multi_sentence_mentions in ("raise", "split")
-        self.multi_sentence_mentions = multi_sentence_mentions
+        assert multi_sentence_entities in ("raise", "split")
+        self.multi_sentence_entities = multi_sentence_entities
 
     def __iter__(self):
-        new_self = sentencize(iter(self.samples), self.reg_split, balance_chars=self.balance_chars, multi_sentence_mentions=self.multi_sentence_mentions)
+        new_self = sentencize(iter(self.samples), self.reg_split, balance_chars=self.balance_chars, multi_sentence_entities=self.multi_sentence_entities)
         return new_self
 
     def state_dict(self):
@@ -209,31 +209,31 @@ class sentencize:
 
         [(sentence_begin, sentence_end), *self.remaining_sentences] = self.remaining_sentences
         self.current_idx += 1
-        new_mentions = []
+        new_entities = []
         sentence_size = sentence_end - sentence_begin
-        if "mentions" in self.current_doc:
-            for mention in self.current_doc["mentions"]:
-                min_begin = min(fragment["begin"] for fragment in mention["fragments"])
-                max_end = max(fragment["end"] for fragment in mention["fragments"])
+        if "entities" in self.current_doc:
+            for entity in self.current_doc["entities"]:
+                min_begin = min(fragment["begin"] for fragment in entity["fragments"])
+                max_end = max(fragment["end"] for fragment in entity["fragments"])
                 if min_begin <= sentence_end and sentence_begin <= max_end:
                     if sentence_begin <= min_begin and max_end <= sentence_end:
-                        new_mentions.append({**mention, "fragments": [{"begin": fragment["begin"] - sentence_begin,
+                        new_entities.append({**entity, "fragments": [{"begin": fragment["begin"] - sentence_begin,
                                                                        "end": fragment["end"] - sentence_begin}
-                                                                      for fragment in mention["fragments"]]})
+                                                                      for fragment in entity["fragments"]]})
                     else:
-                        if self.multi_sentence_mentions == "raise":
+                        if self.multi_sentence_entities == "raise":
                             raise Exception("Entity {} spans more than one sentence in document {}".format(repr(self.current_doc["text"][min_begin:max_end]), self.current_doc["doc_id"]))
                         else:
-                            new_mentions.append({**mention, "fragments": [{"begin": min(max(fragment["begin"] - sentence_begin, 0), sentence_size),
+                            new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - sentence_begin, 0), sentence_size),
                                                                            "end": max(min(fragment["end"] - sentence_begin, sentence_size), 0)}
-                                                                          for fragment in mention["fragments"]
+                                                                          for fragment in entity["fragments"]
                                                                           if fragment["begin"] <= sentence_end and sentence_begin <= fragment["end"]]})
         return {
             "doc_id": self.current_doc["doc_id"] + "/" + str(self.current_idx),
             "text": self.current_doc["text"][sentence_begin:sentence_end],
             "begin": sentence_begin,
             "end": sentence_end,
-            "mentions": new_mentions
+            "entities": new_entities
         }
 
     def __repr__(self):
@@ -308,7 +308,11 @@ def split_spans(span_begins, span_ends, token_begins, token_ends):
 
     diff = token_span_overlap != next_token_span_overlap
     flat_idx = np.flatnonzero(diff).reshape(-1, 2)
-    return tuple(flat_idx.T % token_span_overlap.shape[1])
+    new_begins = np.full(len(span_begins), fill_value=-1)
+    new_ends = np.full(len(span_ends), fill_value=-1)
+    matched_spans = diff.any(1)
+    new_begins[matched_spans], new_ends[matched_spans] = tuple(flat_idx.T % token_span_overlap.shape[1])
+    return new_begins, new_ends
 
 
 def huggingface_tokenize(text, tokenizer, subs=(), do_unidecode=True, text_col="text", **kwargs):

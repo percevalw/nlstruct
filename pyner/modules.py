@@ -239,9 +239,9 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
         targets = None
         if return_loss:
             targets = torch.zeros_like(spans_mask)
-            if torch.is_tensor(batch["mentions_mask"]) and batch["mentions_mask"].any():
-                targets[batch["@mentions_doc_id"][batch["mentions_mask"]], batch["mentions_label"][batch["mentions_mask"]], batch["mentions_begin"][batch["mentions_mask"]], batch["mentions_end"][
-                    batch["mentions_mask"]]] = True
+            if torch.is_tensor(batch["entities_mask"]) and batch["entities_mask"].any():
+                targets[batch["@entities_doc_id"][batch["entities_mask"]], batch["entities_label"][batch["entities_mask"]], batch["entities_begin"][batch["entities_mask"]], batch["entities_end"][
+                    batch["entities_mask"]]] = True
             loss = bce_with_logits(spans_labels_score[spans_mask], targets[spans_mask])
 
         pred_doc_ids, pred_labels, pred_begins, pred_ends = (spans_labels_score.masked_fill(~spans_mask, -10000) > 0).nonzero(as_tuple=True)
@@ -261,7 +261,7 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
 
 @register("preprocessor")
 class Preprocessor(torch.nn.Module):
-    def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, substitutions=(), vocabularies={}):
+    def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, substitutions=(), empty_entities="raise", vocabularies={}):
         super().__init__()
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(bert_name)
         self.do_unidecode = do_unidecode
@@ -269,6 +269,8 @@ class Preprocessor(torch.nn.Module):
         self.word_regex = word_regex
         self.vocabularies = torch.nn.ModuleDict({key: get_instance(vocabulary) for key, vocabulary in vocabularies.items()})
         self.substitutions = substitutions
+        self.empty_entities = empty_entities
+        assert empty_entities in ("raise", "drop")
 
     @property
     def bert_name(self):
@@ -285,16 +287,26 @@ class Preprocessor(torch.nn.Module):
         tokens_indice = self.tokenizer.convert_tokens_to_ids(bert_tokens["word"])
         words_bert_begin, words_bert_end = split_spans(words["begin"], words["end"], bert_tokens["begin"], bert_tokens["end"])
         words_bert_begin, words_bert_end = words_bert_begin.tolist(), words_bert_end.tolist()
-        words_chars = [[self.vocabularies["char"][char] for char in word] for word in words["word"]]
-        if not only_text and "mentions" in sample and len(sample["mentions"]):
-            mentions_begin, mentions_end, mentions_label, mention_ids = map(list, zip(*[[fragment["begin"], fragment["end"], mention["label"], mention["mention_id"] + "/" + str(i)]
-                                                                                        for mention in sample["mentions"] for i, fragment in enumerate(mention["fragments"])]))
-            mentions_begin, mentions_end = split_spans(mentions_begin, mentions_end, words["begin"], words["end"])
-            mentions_end -= 1  # end now means the index of the last word
-            mentions_label = [self.vocabularies["label"][label] for label in mentions_label]
-            mentions_begin, mentions_end = mentions_begin.tolist(), mentions_end.tolist()
+        words_chars = [[self.vocabularies["char"][char] for char in word] for word, word_bert_begin in zip(words["word"], words_bert_begin) if word_bert_begin != -1]
+        if not only_text and "entities" in sample and len(sample["entities"]):
+            entities_begin, entities_end, entities_label, entities_id = map(list, zip(*[[fragment["begin"], fragment["end"], entity["label"], entity["entity_id"] + "/" + str(i)]
+                                                                                        for entity in sample["entities"] for i, fragment in enumerate(entity["fragments"])]))
+            entities_begin, entities_end = split_spans(entities_begin, entities_end, words["begin"], words["end"])
+            empty_entity_idx = next((i == -1 for i in entities_begin), None)
+            if empty_entity_idx is not None:
+                if self.empty_entities == "raise":
+                    raise Exception(f"Entity {entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?)")
+                else:
+                    entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
+                    entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
+                    entities_end = np.asarray([end for end, begin in zip(entities_end, entities_begin) if begin != -1])
+                    entities_begin = np.asarray([begin for begin in entities_begin if begin != -1])
+
+            entities_end -= 1  # end now means the index of the last word
+            entities_label = [self.vocabularies["label"][label] for label in entities_label]
+            entities_begin, entities_end = entities_begin.tolist(), entities_end.tolist()
         else:
-            mentions_begin, mentions_end, mentions_label, mention_ids = [], [], [], []
+            entities_begin, entities_end, entities_label, entities_id = [], [], [], []
         return {
             "tokens": tokens_indice,
             "tokens_mask": [True] * len(tokens_indice),
@@ -307,17 +319,17 @@ class Preprocessor(torch.nn.Module):
             "words_bert_end": words_bert_end,
             "words_begin": words["begin"],
             "words_end": words["end"],
-            "mentions_begin": mentions_begin,
-            "mentions_end": mentions_end,
-            "mentions_label": mentions_label,
-            "mentions_id": mention_ids,
-            "mentions_doc_id": [sample["doc_id"]] * len(mention_ids),
-            "mentions_mask": [True] * len(mention_ids),
+            "entities_begin": entities_begin,
+            "entities_end": entities_end,
+            "entities_label": entities_label,
+            "entities_id": entities_id,
+            "entities_doc_id": [sample["doc_id"]] * len(entities_id),
+            "entities_mask": [True] * len(entities_id),
             "doc_id": sample["doc_id"],
         }
 
     def tensorize(self, batch, device=None):
-        return batch_to_tensors(batch, ids_mapping={"mentions_doc_id": "doc_id"}, device=device)
+        return batch_to_tensors(batch, ids_mapping={"entities_doc_id": "doc_id"}, device=device)
 
 
 def identity(x):
@@ -336,7 +348,7 @@ class NER(pl.LightningModule):
           data_seed=None,
           sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
           sentence_balance_chars=('()', '[]'),
-          sentence_mention_overlap="raise",
+          sentence_entity_overlap="raise",
 
           init_labels_bias=True,
           batch_size=16,
@@ -368,9 +380,9 @@ class NER(pl.LightningModule):
         :param sentence_balance_chars: tuple of str
             Characters to "balance" when splitting sentence, ex: parenthesis, brackets, etc.
             Will make sure that we always have (number of '[')  <= (number of ']')
-        :param sentence_mention_overlap: str
-            What to do when a mention overlaps multiple sentences ?
-            Choices: "raise" to raise an error or "split" to split the mention
+        :param sentence_entity_overlap: str
+            What to do when a entity overlaps multiple sentences ?
+            Choices: "raise" to raise an error or "split" to split the entity
         :param init_labels_bias: bool
             Initialize the labels bias vector with log frequencies of the labels in the dataset
         :param batch_size: int
@@ -398,7 +410,7 @@ class NER(pl.LightningModule):
         self.data_seed = data_seed
         self.sentence_balance_chars = sentence_balance_chars
         self.sentence_split_regex = sentence_split_regex
-        self.sentence_mention_overlap = sentence_mention_overlap
+        self.sentence_entity_overlap = sentence_entity_overlap
         self.train_metric = PrecisionRecallF1Metric(prefix="train_")
         self.val_metric = PrecisionRecallF1Metric(prefix="val_")
         self.test_metric = PrecisionRecallF1Metric(prefix="test_")
@@ -447,7 +459,7 @@ class NER(pl.LightningModule):
                 continue
             data = dl.dataset
             if self.sentence_split_regex is not None:
-                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_mentions=self.sentence_mention_overlap)
+                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
 
             data = list(self.preprocessor(data))
             with fork_rng(self.data_seed):
@@ -466,7 +478,7 @@ class NER(pl.LightningModule):
                 candidates_count = 0
                 for batch in self.train_dataloader():
                     for sample in batch:
-                        for label in sample["mentions_label"]:
+                        for label in sample["entities_label"]:
                             labels_count[label] += 1
                         candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
                 frequencies = labels_count / candidates_count
@@ -488,7 +500,7 @@ class NER(pl.LightningModule):
         preds = [[] for _ in range(len(embeds))]
         for doc_id, begin, end, label in zip(results["doc_ids"].tolist(), results["begins"].tolist(), results["ends"].tolist(), results["labels"].tolist()):
             preds[doc_id].append((begin, end, label))
-        gold = [list(zip(sample["mentions_begin"], sample["mentions_end"], sample["mentions_label"])) for sample in inputs]
+        gold = [list(zip(sample["entities_begin"], sample["entities_end"], sample["entities_label"])) for sample in inputs]
         return {
             "preds": preds,
             "gold": gold,
@@ -549,19 +561,19 @@ class NER(pl.LightningModule):
     def predict(self, data):
         for doc in data:
             if self.sentence_split_regex is not None:
-                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_mentions=self.sentence_mention_overlap)
+                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
             else:
                 sentences = (doc,)
-            doc_mentions = []
+            doc_entities = []
             for prep in batchify(self.preprocessor(sentences, only_text=True), self.batch_size):
                 results = self(prep)
-                for sentence_mentions, sentence, prep_sample in zip(results["preds"], sentences, prep):
+                for sentence_entities, sentence, prep_sample in zip(results["preds"], sentences, prep):
                     sentence_begin = sentence["begin"] if "begin" in sentence else 0
-                    for begin, end, label in sentence_mentions:
+                    for begin, end, label in sentence_entities:
                         begin = prep_sample["words_begin"][begin]
                         end = prep_sample["words_end"][end]
-                        doc_mentions.append({
-                            "mention_id": len(doc_mentions),
+                        doc_entities.append({
+                            "entity_id": len(doc_entities),
                             "fragments": [{
                                               "begin": begin + sentence_begin,
                                               "end": end + sentence_begin,
@@ -571,7 +583,7 @@ class NER(pl.LightningModule):
             yield {
                 "doc_id": doc["doc_id"],
                 "text": doc["text"],
-                "mentions": doc_mentions,
+                "entities": doc_entities,
             }
 
     save_pretrained = save_pretrained
