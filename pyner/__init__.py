@@ -1,3 +1,3 @@
-from .data_utils import *
-from .modules import Vocabulary, NER
-from .torch_utils import save_pretrained, load_pretrained
+from pyner.data_utils import *
+from pyner.models import *
+from pyner.dataloaders import *

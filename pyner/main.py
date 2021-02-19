@@ -8,8 +8,7 @@ import transformers
 from optuna.integration import PyTorchLightningPruningCallback
 
 from .data_utils import *
-from .datasets import load_from_brat
-from .modules import Vocabulary, NER
+from pyner import load_from_brat, Vocabulary, ExhaustiveBiaffineNER
 
 
 def objective(trial):
@@ -32,11 +31,12 @@ def objective(trial):
         "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
         "label": Vocabulary(sorted(set([entity["label"] for doc in train_data for entity in doc["entities"]])), with_unk=False, with_pad=False),
     }).eval()
-    ner = NER(
+    ner = ExhaustiveBiaffineNER(
         seed=random.randint(1, 1000),
         sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
         sentence_balance_chars=("()",),
         preprocessor=dict(
+            module="exhaustive_biaffine_preprocessor",
             bert_name=bert_name,
             vocabularies=vocabularies,
             word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]',
@@ -102,7 +102,7 @@ def objective(trial):
         gpus=1,
         progress_bar_refresh_rate=False,
         logger=[
-            pl.loggers.NeptuneLogger(api_key="MY KEY", name="better-ner-hp-deft-v2"),
+            pl.loggers.NeptuneLogger(api_key="MY KEY", name="pyner-hp-deft-v2"),
         ],
         callbacks=[PyTorchLightningPruningCallback(trial, monitor="val_f1")],
         max_epochs=50)

@@ -1,13 +1,14 @@
 import os
-import torch
 import random
-import pytorch_lightning as pl
 import re
+
+from pyner.dataloaders.base import NERDataset
 
 REGEX_ENTITY = re.compile('^(T\d+)\t([^ ]+)([^\t]+)\t(.*)$')
 REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')
 REGEX_RELATION = re.compile('^(R\d+)\t([^ ]+) Arg1:([^ ]+) Arg2:([^ ]+)')
 REGEX_ATTRIBUTE = re.compile('^(A\d+)\t(.+)$')
+
 
 def load_from_brat(path, merge_spaced_fragments=True):
     """
@@ -188,18 +189,7 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                             entity_to), file=f)
 
 
-class BaseDataset(pl.LightningDataModule):
-    def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_data)
-
-    def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_data)
-
-    def test_dataloader(self):
-        return torch.utils.data.DataLoader(self.test_data)
-
-
-class BRATDataset(BaseDataset):
+class BRATDataset(NERDataset):
     def __init__(self, train, test=None, val=None, kept_entity_label=None, dropped_entity_label=(), seed=False):
         super().__init__()
         self.train_source = train
@@ -208,6 +198,14 @@ class BRATDataset(BaseDataset):
         self.seed = seed
         self.dropped_entity_label = dropped_entity_label
         self.kept_entity_label = kept_entity_label
+
+        self.train_data = None
+        self.val_data = None
+        self.test_data = None
+
+        self.extract()
+
+    def extract(self):
 
         if isinstance(self.train_source, (str, list, tuple)):
             self.train_data = list(load_from_brat(self.train_source))

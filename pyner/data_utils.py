@@ -343,19 +343,24 @@ def regex_sub_with_spans(pattern, replacement, text):
     return text, DeltaCollection(begins, ends, deltas)
 
 
-def regex_multisub_with_spans(patterns, replacements, text, deltas=None):
-    if deltas is None:
+def regex_multisub_with_spans(patterns, replacements, text, deltas=None, return_deltas=False):
+    if deltas is None and return_deltas:
         deltas = DeltaCollection([], [], [])
     for pattern, replacement in zip(patterns, replacements):
-        text, new_deltas = regex_sub_with_spans(pattern, replacement, text)
-        if deltas is not None:
-            deltas += new_deltas
+        if return_deltas:
+            text, new_deltas = regex_sub_with_spans(pattern, replacement, text)
+            if deltas is not None:
+                deltas += new_deltas
+            else:
+                deltas = new_deltas
         else:
-            deltas = new_deltas
+            return re.sub(pattern, replacement, text), None
     return text, deltas
 
 
-def run_unidecode(text):
+def run_unidecode(text, return_deltas=False):
+    if not return_deltas:
+        return unidecode(text), None
     begins, ends, deltas = [], [], []
     new_text = ""
     for i, (old_char, new_char) in enumerate((char, unidecode(char)) for char in text):
@@ -392,20 +397,48 @@ def split_spans(span_begins, span_ends, token_begins, token_ends):
     return new_begins, new_ends
 
 
-def huggingface_tokenize(text, tokenizer, subs=(), do_unidecode=True, text_col="text", **kwargs):
+def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, do_unidecode=True, **kwargs):
     deltas = None
     if do_unidecode:
-        text, deltas = run_unidecode(text)
+        text, deltas = run_unidecode(text, return_deltas=return_offsets_mapping)
     if len(subs):
-        text, deltas = regex_multisub_with_spans(*zip(*subs), text, deltas=deltas)
+        text, deltas = regex_multisub_with_spans(*zip(*subs), text, deltas=deltas, return_deltas=return_offsets_mapping)
 
-    res = tokenizer.encode_plus(text, return_offsets_mapping=True)
-    begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
-    words = tokenizer.convert_ids_to_tokens(res['input_ids'])
-    
-    model_max_length = getattr(tokenizer, 'model_max_length', None)
-    #if model_max_length is not None and len(words) > model_max_length:
-    #    warnings.warn("Sentence {} is longer than maximum length of {} (count is {} wordpieces)".format(repr(text), model_max_length, len(words)))
+    begins = []
+    ends = []
+    try:
+        res = tokenizer.encode_plus(text, return_offsets_mapping=return_offsets_mapping, **kwargs)
+        if 'offset_mapping' in res:
+            begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
+
+        words = tokenizer.convert_ids_to_tokens(res['input_ids'])
+    except NotImplementedError as e:
+        special_tokens = [t for token in tokenizer.special_tokens_map.values() for t in ((token,) if isinstance(token, str) else token)]
+        special_tokens += ["▁", "##", "</w>"]
+        i = 0
+        token_id = 0
+
+        sentence_pieces = tokenizer.tokenize(text)
+        tokenizer_output = tokenizer.encode_plus(tokenizer.convert_tokens_to_ids(sentence_pieces), return_special_tokens_mask=True, **kwargs)
+        encoded_pieces = tokenizer.convert_ids_to_tokens(tokenizer_output["input_ids"])
+        words = np.asarray(encoded_pieces)
+        words[~np.asarray(tokenizer_output["special_tokens_mask"], dtype=bool)] = sentence_pieces
+        for piece, encoded_piece in zip(words, encoded_pieces):
+            striped_piece = piece
+            for special in special_tokens:
+                striped_piece = striped_piece.replace(special, "")
+            piece_size = len(striped_piece)
+            delta = len(re.search(r"^\s*", text[i:]).group(0))
+            if striped_piece.lower() != text[i + delta:i + delta + piece_size].lower():
+                raise Exception(f"During tokenization, wordpiece tokenizer replaced {repr(text[i + delta:i + delta + piece_size])} (in {repr(text[i:i + delta + piece_size + 5])}) "
+                                f"with {repr(striped_piece)} (or multiple pieces). "
+                                f"You must perform substitutions before to ensure that this does not happen, otherwise wordpieces characters cannot be computed.")
+            i += delta
+            begins.append(i)
+            i += piece_size
+            ends.append(i)
+            token_id += 1
+        words = words.tolist()
 
     # Apply substitutions on tokens
     if deltas is not None and len(deltas.begins):
@@ -420,29 +453,27 @@ def huggingface_tokenize(text, tokenizer, subs=(), do_unidecode=True, text_col="
     }
 
 
-def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), do_unidecode=True, lower=False, subs=()):
+def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_offsets_mapping=False, do_unidecode=True, lower=False, subs=()):
     tokens = []
     begins = []
     ends = []
-    token_idx = []
 
     if lower:
         text = text.lower()
 
     deltas = None
     if do_unidecode:
-        text, deltas = run_unidecode(text)
+        text, deltas = run_unidecode(text, return_deltas=return_offsets_mapping)
     if len(subs):
-        text, deltas = regex_multisub_with_spans(*zip(*subs), text, deltas=deltas)
+        text, deltas = regex_multisub_with_spans(*zip(*subs), text, deltas=deltas, return_deltas=return_offsets_mapping)
 
-    i = 0
     token_id = 0
 
     for match in re.finditer(reg, text):
         tokens.append(match.group())
-        begins.append(match.start())
-        ends.append(match.end())
-        token_idx.append(token_id)
+        if return_offsets_mapping:
+            begins.append(match.start())
+            ends.append(match.end())
         token_id += 1
 
     # Apply substitutions on tokens
@@ -454,7 +485,6 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), do_unide
     return {
         "begin": begins,
         "end": ends,
-        "token_idx": token_idx,
         "word": tokens,
     }
 
