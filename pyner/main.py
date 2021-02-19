@@ -26,7 +26,7 @@ def objective(trial):
         {**doc, "entities": [entity for entity in doc["entities"] if entity["label"] not in ("duree", "frequence")]}
         for doc in val_data
     ]
-
+    
     bert_name = "camembert/camembert-large"
     vocabularies = torch.nn.ModuleDict({
         "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),

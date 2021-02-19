@@ -222,7 +222,7 @@ class sentencize:
                                                                       for fragment in entity["fragments"]]})
                     else:
                         if self.multi_sentence_entities == "raise":
-                            raise Exception("Entity {} spans more than one sentence in document {}".format(repr(self.current_doc["text"][min_begin:max_end]), self.current_doc["doc_id"]))
+                            raise Exception("Entity {} spans more than one sentence in document {}. Use multi_sentence_entities='split' to handle such cases.".format(repr(self.current_doc["text"][min_begin:max_end]), self.current_doc["doc_id"]))
                         else:
                             new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - sentence_begin, 0), sentence_size),
                                                                            "end": max(min(fragment["end"] - sentence_begin, sentence_size), 0)}
