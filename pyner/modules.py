@@ -113,7 +113,7 @@ class SigmoidGate(torch.nn.Module):
             self.norm = torch.nn.LayerNorm(dim)
 
     def forward(self, after, before):
-        gate = F.sigmoid(self.weight if hasattr(self, 'weight') else self.linear(after))
+        gate = torch.sigmoid(self.weight if hasattr(self, 'weight') else self.linear(after))
         if self.ln_mode == "post":
             return self.norm(before * (1 - gate) + after * gate)
         elif self.ln_mode == "pre":
