@@ -2,7 +2,12 @@ import os
 import torch
 import random
 import pytorch_lightning as pl
+import re
 
+REGEX_ENTITY = re.compile('^(T\d+)\t([^ ]+)([^\t]+)\t(.*)$')
+REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')
+REGEX_RELATION = re.compile('^(R\d+)\t([^ ]+) Arg1:([^ ]+) Arg2:([^ ]+)')
+REGEX_ATTRIBUTE = re.compile('^(A\d+)\t(.+)$')
 
 def load_from_brat(path, merge_spaced_fragments=True):
     """
@@ -18,88 +23,106 @@ def load_from_brat(path, merge_spaced_fragments=True):
     """
 
     # Extract annotations from path and make multiple dataframe from it
-    docs = []
-    for filename in ((os.path.join(path, name) for name in sorted(os.listdir(path))) if isinstance(path, str) else path):
-        entities = {}
-        relations = []
-        if filename.endswith('.txt'):
-            doc_id = filename.replace('.txt', '').split("/")[-1]
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            filename = os.path.join(root, name)
+            entities = {}
+            relations = []
+            if filename.endswith('.txt'):
+                doc_id = filename.replace('.txt', '').split("/")[-1]
 
-            with open(filename) as f:
-                text = f.read()
+                with open(filename) as f:
+                    text = f.read()
 
-            try:
-                with open(filename.replace(".txt", ".ann")) as f:
-                    for line in f:
-                        ann_parts = line.strip('\n').split('\t', 1)
-                        ann_id, remaining = ann_parts
-                        if ann_id.startswith('T'):
-                            remaining, entity_text = remaining.split("\t", 1)
-                            entity, span = remaining.split(" ", 1)
-                            entities[ann_id] = {
-                                "entity_id": ann_id,
-                                "fragments": [],
-                                "attributes": [],
-                                "comments": [],
-                                "label": entity,
-                            }
-                            last_end = None
-                            fragment_i = 0
-                            for s in span.split(';'):
-                                begin, end = int(s.split()[0]), int(s.split()[1])
-                                # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
-                                # multiple fragments for a entity that spans over more than one line)
-                                if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
-                                    entities[ann_id]["fragments"][-1]["end"] = end
-                                    continue
-                                entities[ann_id]["fragments"].append({
-                                    "begin": begin,
-                                    "end": end,
+                try:
+                    with open(filename.replace(".txt", ".ann")) as f:
+                        for line in f:
+                            if line.startswith('T'):
+                                match = REGEX_ENTITY.match(line)
+                                if match is None:
+                                    raise ValueError(f'File {filename}, unrecognized Brat line {line}')
+                                ann_id = match.group(1)
+                                entity = match.group(2)
+                                span = match.group(3)
+                                mention_text = match.group(4)
+                                entities[ann_id] = {
+                                    "entity_id": ann_id,
+                                    "fragments": [],
+                                    "attributes": [],
+                                    "comments": [],
+                                    "label": entity,
+                                }
+                                last_end = None
+                                fragment_i = 0
+                                for s in span.split(';'):
+                                    begin, end = int(s.split()[0]), int(s.split()[1])
+                                    # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
+                                    # multiple fragments for a entity that spans over more than one line)
+                                    if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
+                                        entities[ann_id]["fragments"][-1]["end"] = end
+                                        continue
+                                    entities[ann_id]["fragments"].append({
+                                        "begin": begin,
+                                        "end": end,
+                                    })
+                                    fragment_i += 1
+                                    last_end = end
+                            elif line.startswith('A'):
+                                REGEX_ATTRIBUTE = re.compile('^(A\d+)\t(.+)$')
+                                match = REGEX_ATTRIBUTE.match(line)
+                                if match is None:
+                                    raise ValueError(f'File {filename}, unrecognized Brat line {line}')
+                                ann_id = match.group(1)
+                                parts = match.group(2).split(" ")
+                                if len(parts) >= 3:
+                                    entity, entity_id, value = parts
+                                elif len(parts) == 2:
+                                    entity, entity_id = parts
+                                    value = None
+                                else:
+                                    raise ValueError(f'File {filename}, unrecognized Brat line {line}')
+                                entities[entity_id]["attributes"].append({
+                                    "attribute_id": ann_id,
+                                    "label": entity,
+                                    "value": value,
                                 })
-                                fragment_i += 1
-                                last_end = end
-                        elif ann_id.startswith('A'):
-                            parts = remaining.split(" ")
-                            if len(parts) >= 3:
-                                entity, entity_id, value = parts
-                            else:
-                                entity, entity_id = parts
-                                value = None
-                            entities[entity_id]["attributes"].append({
-                                "attribute_id": ann_id,
-                                "label": entity,
-                                "value": value,
-                            })
-                        elif ann_id.startswith('R'):
-                            [ann_name, *parts] = remaining.strip("\t").split(" ")
-                            relations.append({
-                                "relation_id": ann_id,
-                                "relation_label": ann_name,
-                                "from_entity_id": parts[0].split(":")[1],
-                                "to_entity_id": parts[1].split(":")[1],
-                            })
-                        elif ann_id.startswith('#'):
-                            remaining = remaining.strip(" \t").split("\t")
-                            [entity_id, comment] = remaining + ([""] if len(remaining) < 2 else [])
-                            ann_type, entity_id = entity_id.split(" ")
-                            if ann_type == "AnnotatorNotes":
+                            elif line.startswith('R'):
+                                match = REGEX_RELATION.match(line)
+                                if match is None:
+                                    raise ValueError(f'File {filename}, unrecognized Brat line {line}')
+                                ann_id = match.group(1)
+                                ann_name = match.group(2)
+                                arg1 = match.group(3)
+                                arg2 = match.group(4)
+                                relations.append({
+                                    "relation_id": ann_id,
+                                    "relation_label": ann_name,
+                                    "from_entity_id": arg1,
+                                    "to_entity_id": arg2,
+                                })
+                            elif line.startswith('#'):
+                                match = REGEX_NOTE.match(line)
+                                if match is None:
+                                    raise ValueError(f'File {filename}, unrecognized Brat line {line}')
+                                ann_id = match.group(1)
+                                entity_id = match.group(2)
+                                comment = match.group(3)
                                 entities[entity_id]["comments"].append({
                                     "comment_id": ann_id,
                                     "comment": comment,
                                 })
-            except FileNotFoundError:
-                yield {
-                    "doc_id": doc_id,
-                    "text": text,
-                }
-            else:
-                yield {
-                    "doc_id": doc_id,
-                    "text": text,
-                    "entities": list(entities.values()),
-                    "relations": relations,
-                }
-    return docs
+                except FileNotFoundError:
+                    yield {
+                        "doc_id": doc_id,
+                        "text": text,
+                    }
+                else:
+                    yield {
+                        "doc_id": doc_id,
+                        "text": text,
+                        "entities": list(entities.values()),
+                        "relations": relations,
+                    }
 
 
 def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_ann=False):
@@ -176,21 +199,29 @@ class BRATDataset(pl.LightningDataModule):
         return [
             {**doc, "entities": [entity
                                  for entity in doc["entities"]
-                                 if entity["label"] not in self.dropped_entity_label and
-                                 self.kept_entity_label is not None and entity["label"] in self.kept_entity_label]}
+                                 if (self.dropped_entity_label is None or entity["label"] not in self.dropped_entity_label) and
+                                 (self.kept_entity_label is None or entity["label"] in self.kept_entity_label)]}
             for doc in data
         ]
 
     def setup(self, stage='fit'):
         if isinstance(self.train_source, (str, list, tuple)):
             self.train_data = list(load_from_brat(self.train_source))
+            if len(self.train_data) == 0:
+                raise ValueError(f'No Brat file found in {self.train_source}')
         else:
             raise ValueError("train source for BRATDataset must be str or list of str")
+            
+        if len(self.train_data[0]['entities']) == 0:
+            raise ValueError('No entity have been found in the training set')
+
         if self.train_data is not None:
             self.train_data = self.filter_entities(self.train_data)
-
+            
         if isinstance(self.test_source, (str, list, tuple)):
             self.test_data = list(load_from_brat(self.test_source))
+            if len(self.test_data) == 0:
+                raise ValueError(f'No Brat file found in {self.test_source}')
         else:
             assert self.test_source is None
             self.test_data = None

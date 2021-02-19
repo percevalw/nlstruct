@@ -295,7 +295,7 @@ class Preprocessor(torch.nn.Module):
             empty_entity_idx = next((i == -1 for i in entities_begin), None)
             if empty_entity_idx is not None:
                 if self.empty_entities == "raise":
-                    raise Exception(f"Entity {entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?)")
+                    raise Exception(f"Entity {entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
                 else:
                     entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
                     entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
@@ -457,9 +457,9 @@ class NER(pl.LightningModule):
             dl = getattr(self, name)()
             if dl is None:
                 continue
-            data = dl.dataset
+            data = list(dl.dataset)
             if self.sentence_split_regex is not None:
-                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
+                data = list(sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap))
 
             data = list(self.preprocessor(data))
             with fork_rng(self.data_seed):
