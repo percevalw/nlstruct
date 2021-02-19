@@ -162,7 +162,18 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                             entity_to), file=f)
 
 
-class BRATDataset(pl.LightningDataModule):
+class BaseDataset(pl.LightningDataModule):
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(self.train_data)
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(self.val_data)
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(self.test_data)
+
+
+class BRATDataset(BaseDataset):
     def __init__(self, train, test=None, val=None, kept_entity_label=None, dropped_entity_label=(), seed=False):
         super().__init__()
         self.train_source = train
@@ -172,16 +183,6 @@ class BRATDataset(pl.LightningDataModule):
         self.dropped_entity_label = dropped_entity_label
         self.kept_entity_label = kept_entity_label
 
-    def filter_entities(self, data):
-        return [
-            {**doc, "entities": [entity
-                                 for entity in doc["entities"]
-                                 if entity["label"] not in self.dropped_entity_label and
-                                 self.kept_entity_label is not None and entity["label"] in self.kept_entity_label]}
-            for doc in data
-        ]
-
-    def setup(self, stage='fit'):
         if isinstance(self.train_source, (str, list, tuple)):
             self.train_data = list(load_from_brat(self.train_source))
         else:
@@ -212,14 +213,14 @@ class BRATDataset(pl.LightningDataModule):
         if self.val_data is not None:
             self.val_data = self.filter_entities(self.val_data)
 
-    def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_data) if self.train_data is not None else None
-
-    def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_data) if self.val_data is not None else None
-
-    def test_dataloader(self):
-        return torch.utils.data.DataLoader(self.test_data) if self.test_data is not None else None
+    def filter_entities(self, data):
+        return [
+            {**doc, "entities": [entity
+                                 for entity in doc["entities"]
+                                 if entity["label"] not in self.dropped_entity_label and
+                                 (self.kept_entity_label is None or entity["label"] in self.kept_entity_label)]}
+            for doc in data
+        ]
 
 
 class DEFT(BRATDataset):

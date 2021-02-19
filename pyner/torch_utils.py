@@ -1,20 +1,21 @@
+import functools
+import inspect
+import random
 import re
+import types
 from collections import defaultdict, Sequence
+from collections import namedtuple, Mapping
+from contextlib import contextmanager
 from string import ascii_letters
 
 import einops as ops
+import numpy as np
 import torch
 import torch.nn.functional as F
-import inspect
 
 # Parts of this file was adapted from "https://github.com/PetrochukM/PyTorch-NLP/blob/master/torchnlp/random.py"
 
-import functools
-import random
-from collections import namedtuple
-from contextlib import contextmanager
-
-import numpy as np
+import pytorch_lightning as pl
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
                                   ['random', 'torch', 'numpy', 'torch_cuda'])
@@ -23,25 +24,65 @@ if "registry" not in globals():
     registry = {}
 
 
-def register(name):
+def set_closure_variable(fn, name, new_obj):
+    def dummy():
+        return new_obj
+
+    new_closure = list(fn.__closure__ or ())
+    if name in fn.__code__.co_freevars:
+        new_closure[fn.__code__.co_freevars.index(name)] = dummy.__closure__[0]
+        code = fn.__code__
+    else:
+        c = fn.__code__
+        code = types.CodeType(c.co_argcount, c.co_kwonlyargcount, c.co_nlocals,
+                       c.co_stacksize, c.co_flags, c.co_code, c.co_consts, c.co_names,
+                       c.co_varnames, c.co_filename, c.co_name, c.co_firstlineno,
+                       c.co_lnotab, c.co_freevars + ('__class__',), c.co_cellvars)
+        new_closure.append(dummy.__closure__[0])
+
+    return types.FunctionType(
+        code,
+        fn.__globals__,
+        fn.__name__,
+        fn.__defaults__,
+        tuple(new_closure),
+    )
+
+
+def register(name, do_not_serialize=()):
     def fn(cls):
-        old_init = cls.__init__
-
-        @functools.wraps(old_init)
-        def cls_init(self, *args, **kwargs):
-            old_init(self, *args, **kwargs)
-            args = inspect.getcallargs(old_init, self, *args, **kwargs)
-            for arg, value in args.items():
-                if arg != "self" and not arg.startswith('_') and not hasattr(self, arg):
-                    setattr(self, arg, value)
-
-        cls_init.fn = old_init
-        cls.__init__ = cls_init
-        cls.registry_name = name
-        registry[name] = cls
-        return cls
+        mro = list(cls.mro()[1:])
+        torch_index = mro.index(torch.nn.Module)
+        mro[torch_index + 1:torch_index + 1] = [SerializableModule]
+        new_cls = type(cls.__name__, tuple(mro), dict(cls.__dict__))
+        new_cls._do_not_serialize_ = do_not_serialize
+        new_cls.__init__ = set_closure_variable(cls.__init__, '__class__', new_cls)
+        new_cls.forward = set_closure_variable(cls.forward, '__class__', new_cls)
+        new_cls.__hash__ = torch.nn.Module.__hash__
+        new_cls.registry_name = name
+        registry[name] = new_cls
+        return new_cls
 
     return fn
+
+
+class SerializableModule(Mapping):
+    def __new__(cls, *args, **kwargs):
+        self = super().__new__(cls)
+        args = inspect.getcallargs(cls.__init__, self, *args, **kwargs)
+        for arg, value in args.items():
+            if arg != "self" and arg not in self._do_not_serialize_ and not arg.startswith('_') and not hasattr(self, arg):
+                self.__dict__[arg] = value
+        return self
+
+    def __len__(self):
+        return len(get_config(self))
+
+    def __iter__(self):
+        return iter(get_config(self))
+
+    def __getitem__(self, item):
+        return get_config(self)[item]
 
 
 def get_module(name):
@@ -74,15 +115,82 @@ def get_config(self, path=()):
             config[key] = get_config(value)
         elif isinstance(value, torch.Tensor):
             pass
-        elif isinstance(value, (int, float, str)):
+        elif isinstance(value, (int, float, str, tuple, list, dict)):
             config[key] = value
-        elif isinstance(value, (tuple, list)):
-            config[key] = value
+        elif value is None:
+            config[key] = None
         elif isinstance(value, type):
             config[key] = f"{value.__module__}.{value.__name__}" if value.__module__ != "builtins" else value.__name__
         else:
             raise ValueError("Cannot get config from {}".format(str(value)[:40]))
     return config
+
+
+def identity(x):
+    return x
+
+
+class DummyIterableDataset(torch.utils.data.IterableDataset):
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+
+    def __iter__(self):
+        return iter(self.data)
+
+
+class PytorchLightningBase(pl.LightningModule):
+    @property
+    def train_dataloader(self):
+        def fn():
+            if getattr(self, 'train_data', None) is None:
+                return None
+            prep = self.preprocess(self.train_data, split="train")
+            with fork_rng(self.data_seed):
+                return (
+                    torch.utils.data.DataLoader(prep, shuffle=True, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
+                    else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+        return fn
+
+    @property
+    def val_dataloader(self):
+        def fn():
+            if getattr(self, 'val_data', None) is None:
+                return None
+            prep = self.preprocess(self.val_data, split="val")
+            return (
+                torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
+                else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+        return fn
+
+    @property
+    def test_dataloader(self):
+        def fn():
+            if getattr(self, 'test_data', None) is None:
+                return None
+            prep = self.preprocess(self.test_data, split="test")
+            return (
+                torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
+                else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+        return fn
+
+    @train_dataloader.setter
+    def train_dataloader(self, data):
+        self.train_data = data()
+        if hasattr(self.train_data, 'dataset'):
+            self.train_data = self.train_data.dataset
+
+    @val_dataloader.setter
+    def val_dataloader(self, data):
+        self.val_data = data()
+        if hasattr(self.val_data, 'dataset'):
+            self.val_data = self.val_data.dataset
+
+    @test_dataloader.setter
+    def test_dataloader(self, data):
+        self.test_data = data()
+        if hasattr(self.test_data, 'dataset'):
+            self.test_data = self.test_data.dataset
 
 
 def save_pretrained(self, filename):
@@ -132,7 +240,7 @@ def get_nested_properties(nested, dtype=None):
     return n_depth, dtype
 
 
-def pad_to_tensor(y, dtype=None, device=None):
+def pad_to_tensor(y, dtype=None, device=None, pad=0):
     n_depth, dtype = get_nested_properties(y, dtype=dtype)
 
     if n_depth == 0:
@@ -150,7 +258,7 @@ def pad_to_tensor(y, dtype=None, device=None):
         block_sizes.insert(0, block_sizes[0] * l)
     [total, *block_sizes] = block_sizes
 
-    array = torch.zeros(total, dtype=dtype, device=device)
+    array = torch.full((total,), fill_value=pad, dtype=dtype, device=device)
 
     def flat_rec(sequence, parent_idx, depth=0):
         for i, obj in enumerate(sequence):
@@ -164,7 +272,7 @@ def pad_to_tensor(y, dtype=None, device=None):
     return array.reshape(max_len)
 
 
-def batch_to_tensors(batch, ids_mapping={}, device=None):
+def batch_to_tensors(batch, ids_mapping={}, device=None, pad=0):
     if isinstance(batch, (list, tuple)):
         batch = {key: [row[key] for row in batch] for key in batch[0]}
     result = {}
@@ -173,12 +281,12 @@ def batch_to_tensors(batch, ids_mapping={}, device=None):
         if dtype is None and key.endswith("_id"):
             reference_id = ids_mapping.get(key, None)
             factorized_rows = list_factorize(rows, reference_values=batch[reference_id] if reference_id is not None else None)[0]
-            result['@' + key] = pad_to_tensor(factorized_rows, device=device)
+            result['@' + key] = pad_to_tensor(factorized_rows, device=device, pad=pad)
             result[key] = rows
         elif dtype is None:
             result[key] = rows
         else:
-            result[key] = pad_to_tensor(rows, dtype=dtype, device=device)
+            result[key] = pad_to_tensor(rows, dtype=dtype, device=device, pad=pad)
     return result
 
 
@@ -513,35 +621,36 @@ def repeat_like(tensor, other):
     return tensor.repeat(" ".join(other.names), **n_repeats)
 
 
-torch.Tensor.rearrange = rearrange
-torch.Tensor.reduce = reduce
-torch.Tensor.pad = pad
-torch.Tensor.one_hot = one_hot
-torch.Tensor.smart_gather = smart_gather
-torch.Tensor.repeat_like = repeat_like
-wrap_nonzero()
-wrap_repeat()
-wrap_setitem()
-wrap_getitem()
-wrap_unary_op('all')
-wrap_unary_op('any')
-wrap_unary_op('argmin')
-wrap_unary_op('argmax')
-wrap_bin_op("__truediv__")
-wrap_bin_op("__floordiv__")
-wrap_bin_op("__le__")
-wrap_bin_op("__ge__")
-wrap_bin_op("__lt__")
-wrap_bin_op("__gt__")
-wrap_bin_op("__eq__")
-wrap_bin_op("__add__")
-wrap_bin_op("__and__")
-wrap_bin_op("__or__")
-wrap_bin_op("__sub__")
-wrap_bin_op("__mul__")
-wrap_masked_fill()
-wrap_argsort()
-wrap_sort()
+def monkey_patch():
+    torch.Tensor.rearrange = rearrange
+    torch.Tensor.reduce = reduce
+    torch.Tensor.pad = pad
+    torch.Tensor.one_hot = one_hot
+    torch.Tensor.smart_gather = smart_gather
+    torch.Tensor.repeat_like = repeat_like
+    wrap_nonzero()
+    wrap_repeat()
+    wrap_setitem()
+    wrap_getitem()
+    wrap_unary_op('all')
+    wrap_unary_op('any')
+    wrap_unary_op('argmin')
+    wrap_unary_op('argmax')
+    wrap_bin_op("__truediv__")
+    wrap_bin_op("__floordiv__")
+    wrap_bin_op("__le__")
+    wrap_bin_op("__ge__")
+    wrap_bin_op("__lt__")
+    wrap_bin_op("__gt__")
+    wrap_bin_op("__eq__")
+    wrap_bin_op("__add__")
+    wrap_bin_op("__and__")
+    wrap_bin_op("__or__")
+    wrap_bin_op("__sub__")
+    wrap_bin_op("__mul__")
+    wrap_masked_fill()
+    wrap_argsort()
+    wrap_sort()
 
 
 def get_random_generator_state(cuda=torch.cuda.is_available()):

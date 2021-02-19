@@ -1,4 +1,6 @@
-import pytorch_lightning as pl
+import functools
+from importlib import import_module
+
 import torch
 import torch.nn.functional as F
 import transformers
@@ -6,10 +8,18 @@ import transformers
 from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
-from .torch_utils import batch_to_tensors
-from .torch_utils import einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained
-from importlib import import_module
-import functools
+from .torch_utils import batch_to_tensors, PytorchLightningBase, einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained, monkey_patch
+
+monkey_patch()
+
+
+def has_len(x):
+    try:
+        len(x)
+        return True
+    except:
+        return False
+
 
 @register("vocabulary")
 class Vocabulary(torch.nn.Module):
@@ -17,7 +27,7 @@ class Vocabulary(torch.nn.Module):
         super().__init__()
         self.with_pad = with_pad
         self.with_unk = with_unk
-        values = (["__pad__"] if with_pad and "__pad__" not in values else []) + (["__unk__"] if with_unk and "__unk__" not in values  else []) + list(values)
+        values = (["__pad__"] if with_pad and "__pad__" not in values else []) + (["__unk__"] if with_unk and "__unk__" not in values else []) + list(values)
         self.inversed = {v: i for i, v in enumerate(values)}
         self.eval()
 
@@ -30,7 +40,10 @@ class Vocabulary(torch.nn.Module):
             return self.inversed.setdefault(obj, len(self.inversed))
         res = self.inversed.get(obj, None)
         if res is None:
-            return self.inversed["__unk__"]
+            try:
+                return self.inversed["__unk__"]
+            except KeyError:
+                raise KeyError(f"Could not find indice in vocabulary for {repr(obj)}")
         return res
 
     def __repr__(self):
@@ -292,10 +305,10 @@ class Preprocessor(torch.nn.Module):
             entities_begin, entities_end, entities_label, entities_id = map(list, zip(*[[fragment["begin"], fragment["end"], entity["label"], entity["entity_id"] + "/" + str(i)]
                                                                                         for entity in sample["entities"] for i, fragment in enumerate(entity["fragments"])]))
             entities_begin, entities_end = split_spans(entities_begin, entities_end, words["begin"], words["end"])
-            empty_entity_idx = next((i == -1 for i in entities_begin), None)
+            empty_entity_idx = next((i for i, begin in enumerate(entities_begin) if begin == -1), None)
             if empty_entity_idx is not None:
                 if self.empty_entities == "raise":
-                    raise Exception(f"Entity {entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?)")
+                    raise Exception(f"Entity {sample['doc_id']}/{entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?)")
                 else:
                     entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
                     entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
@@ -337,7 +350,7 @@ def identity(x):
 
 
 @register("ner")
-class NER(pl.LightningModule):
+class NER(PytorchLightningBase):
     def __init__(
           self,
           preprocessor,
@@ -453,40 +466,37 @@ class NER(pl.LightningModule):
             self.decoder = get_instance(self.decoder)
 
     def setup(self, stage='fit'):
-        for name in (['train_dataloader', 'val_dataloader'] if stage == 'fit' else ['test_dataloader']):
-            dl = getattr(self, name)()
-            if dl is None:
-                continue
-            data = dl.dataset
-            if self.sentence_split_regex is not None:
-                data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
-
-            data = list(self.preprocessor(data))
-            with fork_rng(self.data_seed):
-                dl = torch.utils.data.DataLoader(data, batch_size=self.batch_size, collate_fn=identity)
-            setattr(self, name, pl.trainer.connectors.data_connector._PatchDataLoader(dl))
-
         if stage == 'fit':
             if any(voc.training for voc in self.preprocessor.vocabularies.values()):
+                for sample in self.train_dataloader():
+                    pass
+
                 self.preprocessor.vocabularies.eval()
                 self.init_modules()
 
-            # Setup label bias
-            # Should be a good place to learn vocabularies ?
+            config = get_config(self)
+            self.hparams = config
+            self.trainer.gradient_clip_val = self.gradient_clip_val
+            self.logger.log_hyperparams(self.hparams)
+
             if self.init_labels_bias:
                 labels_count = torch.zeros(len(self.preprocessor.vocabularies["label"].values))
                 candidates_count = 0
-                for batch in self.train_dataloader():
+                dl = self.train_dataloader()
+                assert has_len(dl)
+                for batch in dl:
                     for sample in batch:
                         for label in sample["entities_label"]:
                             labels_count[label] += 1
                         candidates_count += (len(sample["words_mask"]) * (len(sample["words_mask"]) + 1)) // 2
                 frequencies = labels_count / candidates_count
                 self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
-            config = get_config(self)
-            self.hparams = config
-            self.trainer.gradient_clip_val = self.gradient_clip_val
-            self.logger.log_hyperparams(self.hparams)
+
+    def preprocess(self, data, split='train'):
+        if self.sentence_split_regex is not None:
+            data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
+        data = list(self.preprocessor(data))
+        return data
 
     def forward(self, inputs, return_loss=False):
         self.last_inputs = inputs
@@ -544,7 +554,8 @@ class NER(pl.LightningModule):
         bert_params = list(self.word_encoders[1].parameters())
         top_params = self.decoder.top_params()
         main_params = [p for p in self.parameters() if not any(p is q for q in bert_params) and not any(p is q for q in top_params)]
-        max_steps = self.trainer.max_epochs * len(self.train_dataloader())
+        if self.use_lr_schedules:
+            max_steps = self.trainer.max_epochs * len(self.train_dataloader())
         optimizer = ScheduledOptimizer(self.optimizer_cls([
             {"params": main_params,
              "lr": self.main_lr,
