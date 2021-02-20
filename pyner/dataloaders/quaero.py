@@ -5,10 +5,10 @@ import zipfile
 from sklearn.datasets._base import RemoteFileMetadata
 
 from pyner.dataloaders.brat import load_from_brat
-from pyner.dataloaders.base import NetworkLoadMode, ensure_files, NERDataset
+from pyner.dataloaders.base import NetworkLoadMode, ensure_files, NormalizationDataset
 
 
-class QUAERO(NERDataset):
+class QUAERO(NormalizationDataset):
     REMOTE_FILES = [
         RemoteFileMetadata(
             url="https://quaerofrenchmed.limsi.fr/QUAERO_FrenchMed_brat.zip",
@@ -16,81 +16,85 @@ class QUAERO(NERDataset):
             filename="QUAERO_FrenchMed_brat.zip")
     ]
 
-    def __init__(self, path, sources=("EMEA", "MEDLINE"), version="2016", val_split=None, seed=False, debug=False):
-        super().__init__()
-        self.path = path
-        self.batch_size = None
-        self.debug = debug
-        self.train_data = None
-        self.val_data = None
-        self.test_data = None
+    def __init__(self, path, terminology=None, sources=("EMEA", "MEDLINE"), version="2016", val_split=None, seed=False, debug=False,
+                 map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False):
         assert version in ("2015", "2016")
         if val_split is not None or seed is not False:
             assert version == "2015", "As validation split already exist for Quaero 2016, leave val_split=None and seed=False"
-            self.val_split = val_split
-        self.seed = seed
-        self.version = version
-
+            val_split = val_split
         if not isinstance(sources, (tuple, list)):
-            self.sources = (sources,)
-        self.sources = tuple(sources)
+            sources = (sources,)
+        self.sources = sources = tuple(sources)
+        train_data, val_data, test_data = self.download_and_extract(path, version, sources, val_split, seed, debug)
 
-        self.download_and_extract()
+        super().__init__(
+            train_data=train_data,
+            val_data=val_data,
+            test_data=test_data,
+            terminology=terminology,
+            map_concepts=map_concepts,
+            unmappable_concepts=unmappable_concepts,
+            relabel_with_semantic_type=relabel_with_semantic_type,
+        )
 
-    def download_and_extract(self):
+    def download_and_extract(self, path, version, sources=("EMEA", "MEDLINE"), val_split=False, seed=False, debug=False):
         """
         Loads the Quaero dataset
 
         Parameters
         ----------
-        resource_path: str
+        path: str
             Location of the Quaero files
         version: str
             Version to load, either '2015' or '2016'
-        dev_split: float
+        val_split: float
             Will only be used if version is '2015' since no dev set was defined for this version
         seed: int
             Will only be used if version is '2015' since no dev set was defined for this version
+        sources: tuple of str
+            Which sources to load, ie EMEA, MEDLINE
         Returns
         -------
         Dataset
         """
 
-        [file] = ensure_files(self.path, self.REMOTE_FILES, mode=NetworkLoadMode.AUTO)
+        [file] = ensure_files(path, self.REMOTE_FILES, mode=NetworkLoadMode.AUTO)
         zip_ref = zipfile.ZipFile(file, "r")
-        zip_ref.extractall(self.path)
+        zip_ref.extractall(path)
         zip_ref.close()
-        self.train_data = [
+        train_data = [
             *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/train/EMEA"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/train/EMEA"))],
             *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/train/MEDLINE"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/train/MEDLINE"))],
         ]
-        self.train_data = [doc for doc in self.train_data if doc["source"] in self.sources]
-        self.val_data = [
+        train_data = [doc for doc in train_data if doc["source"] in sources]
+        val_data = [
             *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/dev/EMEA"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/dev/EMEA"))],
             *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/dev/MEDLINE"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/dev/MEDLINE"))],
         ]
-        self.val_data = [doc for doc in self.val_data if doc["source"] in self.sources]
-        self.test_data = [
+        val_data = [doc for doc in val_data if doc["source"] in sources]
+        test_data = [
             *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/test/EMEA"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/test/EMEA"))],
             *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
-              for doc in load_from_brat(os.path.join(self.path, "QUAERO_FrenchMed/corpus/test/MEDLINE"))],
+              for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/test/MEDLINE"))],
         ]
-        self.test_data = [doc for doc in self.test_data if doc["source"] in self.sources]
+        test_data = [doc for doc in test_data if doc["source"] in sources]
 
-        if self.version == "2015":
-            shuffled_data = list(self.train_data)
-            if self.seed is not False:
-                random.Random(self.seed).shuffle(shuffled_data)
-            offset = self.val_split if isinstance(self.val_split, int) else int(self.val_split * len(shuffled_data))
-            self.val_data = shuffled_data[:offset]
-            self.train_data = shuffled_data[offset:]
+        if version == "2015" and val_split:
+            shuffled_data = list(train_data)
+            if seed is not False:
+                random.Random(seed).shuffle(shuffled_data)
+            offset = val_split if isinstance(val_split, int) else int(val_split * len(shuffled_data))
+            val_data = shuffled_data[:offset]
+            train_data = shuffled_data[offset:]
 
-        subset = slice(None) if not self.debug else slice(0, 50)
-        self.train_data = self.train_data[subset]
-        self.val_data = self.val_data[subset]
-        self.test_data = self.test_data  # Never subset the test set, we don't want to give false hopes
+        subset = slice(None) if not debug else slice(0, 50)
+        train_data = train_data[subset]
+        val_data = val_data[subset] if val_data is not None else None
+        test_data = test_data  # Never subset the test set, we don't want to give false hopes
+
+        return train_data, val_data, test_data

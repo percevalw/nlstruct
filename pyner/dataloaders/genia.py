@@ -25,17 +25,8 @@ class GENIA(NERDataset):
     }
 
     def __init__(self, path, version="3.02p", debug=False):
-        super().__init__()
-        self.path = path
-        self.version = version
-        self.preprocess_fn = None
-        self.batch_size = None
-        self.debug = debug
-        self.train_data = None
-        self.val_data = None
-        self.test_data = None
-
-        self.download_and_extract()
+        train_data, val_data, test_data = self.download_and_extract(path, version, debug)
+        super().__init__(train_data, val_data, test_data)
 
     def process_xml(self, root_node, idx=0):
         text = ""
@@ -69,13 +60,13 @@ class GENIA(NERDataset):
             return "cell_line"
         return None
 
-    def download_and_extract(self, raw=False, merge_composite_types=True, drop_duplicates=False):
-        remote = self.REMOTE_FILES[self.version]
-        [file] = ensure_files(self.path, [remote], mode=NetworkLoadMode.AUTO)
+    def download_and_extract(self, path, version, debug=False, raw=False, merge_composite_types=True, drop_duplicates=False):
+        remote = self.REMOTE_FILES[version]
+        [file] = ensure_files(path, [remote], mode=NetworkLoadMode.AUTO)
         with tarfile.open(file, "r:gz") as tar:
-            tar.extractall(self.path)
+            tar.extractall(path)
 
-        filename = os.path.join(self.path, {"3.02": "GENIA_term_3.02/GENIAcorpus3.02.xml", "3.02p": "GENIAcorpus3.02.merged.xml"}[self.version])
+        filename = os.path.join(path, {"3.02": "GENIA_term_3.02/GENIAcorpus3.02.xml", "3.02p": "GENIAcorpus3.02.merged.xml"}[version])
 
         temp = tempfile.NamedTemporaryFile(mode='w', suffix=".xml", delete=False)
 
@@ -131,8 +122,10 @@ class GENIA(NERDataset):
             })
 
         genia_sentences = list(sentencize(genia_docs, reg_split="(\n+)", balance_chars=()))
-        subset = slice(None) if not self.debug else slice(0, 50)
+        subset = slice(None) if not debug else slice(0, 50)
         train_sentences = genia_sentences[:int(len(genia_sentences) * 0.9)]
-        self.val_data = sorted(train_sentences[int(len(train_sentences) * 0.9):], key=lambda x: len(x["text"]))[subset]
-        self.train_data = sorted(train_sentences[:int(len(train_sentences) * 0.9)], key=lambda x: len(x["text"]))[subset]
-        self.test_data = sorted(genia_sentences[int(len(genia_sentences) * 0.9):], key=lambda x: len(x["text"]))
+        val_data = sorted(train_sentences[int(len(train_sentences) * 0.9):], key=lambda x: len(x["text"]))[subset]
+        train_data = sorted(train_sentences[:int(len(train_sentences) * 0.9)], key=lambda x: len(x["text"]))[subset]
+        test_data = sorted(genia_sentences[int(len(genia_sentences) * 0.9):], key=lambda x: len(x["text"]))
+
+        return train_data, val_data, test_data
