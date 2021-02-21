@@ -91,7 +91,7 @@ class Terminology:
         self.concept_synonyms = dict(concept_synonym_pairs)
         if do_unidecode or len(subs):
             res = {}
-            for concept, synonyms in self.concept_synonyms:
+            for concept, synonyms in tqdm(self.concept_synonyms.items(), desc="Preprocessing synonyms"):
                 concept_res = []
                 for synonym in synonyms:
                     if synonym_preprocess_fn is not None:
@@ -183,7 +183,7 @@ class Terminology:
 
     def build_synonym_concepts_mapping_(self):
         synonym_concepts = defaultdict(lambda: [])
-        for concept, synonyms in tqdm(self.concept_synonyms.items()):
+        for concept, synonyms in tqdm(self.concept_synonyms.items(), desc="Building concept mapping"):
             for synonym in synonyms:
                 synonym_concepts[synonym].append((concept, synonyms[0]))
         self.synonym_concepts = dict(synonym_concepts)
