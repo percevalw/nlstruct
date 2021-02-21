@@ -181,9 +181,9 @@ class Terminology:
     def preferred_synonyms(self):
         return [synonyms[0] for synonyms in self.concept_synonyms.values()]
 
-    def build_synonym_concepts_mapping_(self):
+    def build_synonym_concepts_mapping_(self, mode="remove_duplicates"):
         synonym_concepts = defaultdict(lambda: [])
-        for concept, synonyms in tqdm(self.concept_synonyms.items(), desc="Building concept mapping"):
+        for concept, synonyms in tqdm(self.concept_synonyms.items(), desc="Building synonym to concept mapping"):
             for synonym in synonyms:
                 synonym_concepts[synonym].append((concept, synonyms[0]))
         self.synonym_concepts = dict(synonym_concepts)
