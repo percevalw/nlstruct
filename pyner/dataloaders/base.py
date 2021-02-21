@@ -104,6 +104,7 @@ class Terminology:
                     concept_res.append(synonym)
                 res[concept] = concept_res
             self.concept_synonyms = res
+        self.concept_synonyms = {concept: list(dict.fromkeys(synonyms)) for concept, synonyms in self.concept_synonyms.items()}
         self.concept_mapping = concept_mapping
         self.concept_semantic_types = concept_semantic_types
         if build_synonym_concepts_mapping:
