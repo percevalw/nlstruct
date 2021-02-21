@@ -262,8 +262,7 @@ class NormalizationDataset(NERDataset):
                  terminology=None,
                  map_concepts=False,
                  unmappable_concepts="raise",
-                 relabel_with_semantic_type=False,
-                 debug=False):
+                 relabel_with_semantic_type=False):
         super().__init__(train_data, val_data, test_data)
 
         if relabel_with_semantic_type:
@@ -292,8 +291,6 @@ class NormalizationDataset(NERDataset):
                 for doc in docs:
                     new_entities = []
                     for entity in doc["entities"]:
-                        new_label = None
-
                         if isinstance(entity["concept"], (list, tuple)):
                             new_label = tuple(fn(concept) for concept in entity["concept"])
                             if unmappable_concepts == "drop":
@@ -305,7 +302,7 @@ class NormalizationDataset(NERDataset):
                             if unmappable_concepts == "drop" and new_label is None:
                                 continue
 
-                        if unmappable_concepts == "default":
+                        if new_label is None and unmappable_concepts == "default":
                             new_label = entity["label"]
 
                         new_entities.append({**entity, "label": new_label})
@@ -353,7 +350,7 @@ class NormalizationDataset(NERDataset):
                             if unmappable_concepts == "drop" and new_concept is None:
                                 continue
 
-                        if unmappable_concepts == "default":
+                        if new_concept is None and unmappable_concepts == "default":
                             if mode == "cui":
                                 new_concept = entity["concept"]
                             else:
