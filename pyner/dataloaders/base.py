@@ -88,6 +88,7 @@ class Terminology:
                  synonym_preprocess_fn=None,
                  do_unidecode=False,
                  subs=()):
+        self.concept_synonyms = dict(concept_synonym_pairs)
         if do_unidecode or len(subs):
             res = {}
             for concept, synonyms in self.concept_synonyms:
@@ -103,8 +104,6 @@ class Terminology:
                     concept_res.append(synonym)
                 res[concept] = concept_res
             self.concept_synonyms = res
-        else:
-            self.concept_synonyms = dict(concept_synonym_pairs)
         self.concept_mapping = concept_mapping
         self.concept_semantic_types = concept_semantic_types
         if build_synonym_concepts_mapping:
