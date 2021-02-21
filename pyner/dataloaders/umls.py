@@ -4,17 +4,41 @@ import pandas as pd
 import os
 from collections import defaultdict
 
-sty_groups = {'Activity': 'ACTI', 'Behavior': 'ACTI', 'Daily or Recreational Activity': 'ACTI', 'Event': 'ACTI', 'Governmental or Regulatory Activity': 'ACTI', 'Individual Behavior': 'ACTI', 'Machine Activity': 'ACTI', 'Occupational Activity': 'ACTI', 'Social Behavior': 'ACTI', 'Anatomical Structure': 'ANAT', 'Body Location or Region': 'ANAT', 'Body Part, Organ, or Organ Component': 'ANAT', 'Body Space or Junction': 'ANAT', 'Body Substance': 'ANAT', 'Body System': 'ANAT', 'Cell': 'ANAT', 'Cell Component': 'ANAT', 'Embryonic Structure': 'ANAT', 'Fully Formed Anatomical Structure': 'ANAT', 'Tissue': 'ANAT', 'Amino Acid, Peptide, or Protein': 'CHEM', 'Antibiotic': 'CHEM', 'Biologically Active Substance': 'CHEM', 'Biomedical or Dental Material': 'CHEM', 'Carbohydrate': 'CHEM', 'Chemical': 'CHEM', 'Chemical Viewed Functionally': 'CHEM', 'Chemical Viewed Structurally': 'CHEM', 'Clinical Drug': 'CHEM', 'Eicosanoid': 'CHEM', 'Element, Ion, or Isotope': 'CHEM', 'Enzyme': 'CHEM', 'Hazardous or Poisonous Substance': 'CHEM', 'Hormone': 'CHEM', 'Immunologic Factor': 'CHEM', 'Indicator, Reagent, or Diagnostic Aid': 'CHEM', 'Inorganic Chemical': 'CHEM', 'Lipid': 'CHEM', 'Neuroreactive Substance or Biogenic Amine': 'CHEM', 'Nucleic Acid, Nucleoside, or Nucleotide': 'CHEM', 'Organic Chemical': 'CHEM', 'Organophosphorus Compound': 'CHEM', 'Pharmacologic Substance': 'CHEM', 'Receptor': 'CHEM', 'Steroid': 'CHEM', 'Vitamin': 'CHEM', 'Classification': 'CONC', 'Conceptual Entity': 'CONC', 'Functional Concept': 'CONC', 'Group Attribute': 'CONC', 'Idea or Concept': 'CONC', 'Intellectual Product': 'CONC', 'Language': 'CONC', 'Qualitative Concept': 'CONC', 'Quantitative Concept': 'CONC', 'Regulation or Law': 'CONC', 'Spatial Concept': 'CONC', 'Temporal Concept': 'CONC', 'Drug Delivery Device': 'DEVI', 'Medical Device': 'DEVI', 'Research Device': 'DEVI', 'Acquired Abnormality': 'DISO', 'Anatomical Abnormality': 'DISO', 'Cell or Molecular Dysfunction': 'DISO', 'Congenital Abnormality': 'DISO', 'Disease or Syndrome': 'DISO', 'Experimental Model of Disease': 'DISO', 'Finding': 'DISO', 'Injury or Poisoning': 'DISO', 'Mental or Behavioral Dysfunction': 'DISO', 'Neoplastic Process': 'DISO', 'Pathologic Function': 'DISO', 'Sign or Symptom': 'DISO', 'Amino Acid Sequence': 'GENE', 'Carbohydrate Sequence': 'GENE', 'Gene or Genome': 'GENE', 'Molecular Sequence': 'GENE', 'Nucleotide Sequence': 'GENE', 'Geographic Area': 'GEOG', 'Age Group': 'LIVB', 'Amphibian': 'LIVB', 'Animal': 'LIVB', 'Archaeon': 'LIVB', 'Bacterium': 'LIVB', 'Bird': 'LIVB', 'Eukaryote': 'LIVB', 'Family Group': 'LIVB', 'Fish': 'LIVB', 'Fungus': 'LIVB', 'Group': 'LIVB', 'Human': 'LIVB', 'Mammal': 'LIVB', 'Organism': 'LIVB', 'Patient or Disabled Group': 'LIVB', 'Plant': 'LIVB', 'Population Group': 'LIVB', 'Professional or Occupational Group': 'LIVB', 'Reptile': 'LIVB', 'Vertebrate': 'LIVB', 'Virus': 'LIVB', 'Entity': 'OBJC', 'Food': 'OBJC', 'Manufactured Object': 'OBJC', 'Physical Object': 'OBJC', 'Substance': 'OBJC', 'Biomedical Occupation or Discipline': 'OCCU', 'Occupation or Discipline': 'OCCU', 'Health Care Related Organization': 'ORGA', 'Organization': 'ORGA', 'Professional Society': 'ORGA', 'Self-help or Relief Organization': 'ORGA', 'Biologic Function': 'PHEN', 'Environmental Effect of Humans': 'PHEN', 'Human-caused Phenomenon or Process': 'PHEN', 'Laboratory or Test Result': 'PHEN', 'Natural Phenomenon or Process': 'PHEN', 'Phenomenon or Process': 'PHEN', 'Cell Function': 'PHYS', 'Clinical Attribute': 'PHYS', 'Genetic Function': 'PHYS', 'Mental Process': 'PHYS', 'Molecular Function': 'PHYS', 'Organism Attribute': 'PHYS', 'Organism Function': 'PHYS', 'Organ or Tissue Function': 'PHYS', 'Physiologic Function': 'PHYS', 'Diagnostic Procedure': 'PROC', 'Educational Activity': 'PROC', 'Health Care Activity': 'PROC', 'Laboratory Procedure': 'PROC', 'Molecular Biology Research Technique': 'PROC', 'Research Activity': 'PROC', 'Therapeutic or Preventive Procedure': 'PROC'}
+sty_groups = {'Activity': 'ACTI', 'Behavior': 'ACTI', 'Daily or Recreational Activity': 'ACTI', 'Event': 'ACTI', 'Governmental or Regulatory Activity': 'ACTI', 'Individual Behavior': 'ACTI',
+              'Machine Activity': 'ACTI', 'Occupational Activity': 'ACTI', 'Social Behavior': 'ACTI', 'Anatomical Structure': 'ANAT', 'Body Location or Region': 'ANAT',
+              'Body Part, Organ, or Organ Component': 'ANAT', 'Body Space or Junction': 'ANAT', 'Body Substance': 'ANAT', 'Body System': 'ANAT', 'Cell': 'ANAT', 'Cell Component': 'ANAT',
+              'Embryonic Structure': 'ANAT', 'Fully Formed Anatomical Structure': 'ANAT', 'Tissue': 'ANAT', 'Amino Acid, Peptide, or Protein': 'CHEM', 'Antibiotic': 'CHEM',
+              'Biologically Active Substance': 'CHEM', 'Biomedical or Dental Material': 'CHEM', 'Carbohydrate': 'CHEM', 'Chemical': 'CHEM', 'Chemical Viewed Functionally': 'CHEM',
+              'Chemical Viewed Structurally': 'CHEM', 'Clinical Drug': 'CHEM', 'Eicosanoid': 'CHEM', 'Element, Ion, or Isotope': 'CHEM', 'Enzyme': 'CHEM', 'Hazardous or Poisonous Substance': 'CHEM',
+              'Hormone': 'CHEM', 'Immunologic Factor': 'CHEM', 'Indicator, Reagent, or Diagnostic Aid': 'CHEM', 'Inorganic Chemical': 'CHEM', 'Lipid': 'CHEM',
+              'Neuroreactive Substance or Biogenic Amine': 'CHEM', 'Nucleic Acid, Nucleoside, or Nucleotide': 'CHEM', 'Organic Chemical': 'CHEM', 'Organophosphorus Compound': 'CHEM',
+              'Pharmacologic Substance': 'CHEM', 'Receptor': 'CHEM', 'Steroid': 'CHEM', 'Vitamin': 'CHEM', 'Classification': 'CONC', 'Conceptual Entity': 'CONC', 'Functional Concept': 'CONC',
+              'Group Attribute': 'CONC', 'Idea or Concept': 'CONC', 'Intellectual Product': 'CONC', 'Language': 'CONC', 'Qualitative Concept': 'CONC', 'Quantitative Concept': 'CONC',
+              'Regulation or Law': 'CONC', 'Spatial Concept': 'CONC', 'Temporal Concept': 'CONC', 'Drug Delivery Device': 'DEVI', 'Medical Device': 'DEVI', 'Research Device': 'DEVI',
+              'Acquired Abnormality': 'DISO', 'Anatomical Abnormality': 'DISO', 'Cell or Molecular Dysfunction': 'DISO', 'Congenital Abnormality': 'DISO', 'Disease or Syndrome': 'DISO',
+              'Experimental Model of Disease': 'DISO', 'Finding': 'DISO', 'Injury or Poisoning': 'DISO', 'Mental or Behavioral Dysfunction': 'DISO', 'Neoplastic Process': 'DISO',
+              'Pathologic Function': 'DISO', 'Sign or Symptom': 'DISO', 'Amino Acid Sequence': 'GENE', 'Carbohydrate Sequence': 'GENE', 'Gene or Genome': 'GENE', 'Molecular Sequence': 'GENE',
+              'Nucleotide Sequence': 'GENE', 'Geographic Area': 'GEOG', 'Age Group': 'LIVB', 'Amphibian': 'LIVB', 'Animal': 'LIVB', 'Archaeon': 'LIVB', 'Bacterium': 'LIVB', 'Bird': 'LIVB',
+              'Eukaryote': 'LIVB', 'Family Group': 'LIVB', 'Fish': 'LIVB', 'Fungus': 'LIVB', 'Group': 'LIVB', 'Human': 'LIVB', 'Mammal': 'LIVB', 'Organism': 'LIVB',
+              'Patient or Disabled Group': 'LIVB', 'Plant': 'LIVB', 'Population Group': 'LIVB', 'Professional or Occupational Group': 'LIVB', 'Reptile': 'LIVB', 'Vertebrate': 'LIVB', 'Virus': 'LIVB',
+              'Entity': 'OBJC', 'Food': 'OBJC', 'Manufactured Object': 'OBJC', 'Physical Object': 'OBJC', 'Substance': 'OBJC', 'Biomedical Occupation or Discipline': 'OCCU',
+              'Occupation or Discipline': 'OCCU', 'Health Care Related Organization': 'ORGA', 'Organization': 'ORGA', 'Professional Society': 'ORGA', 'Self-help or Relief Organization': 'ORGA',
+              'Biologic Function': 'PHEN', 'Environmental Effect of Humans': 'PHEN', 'Human-caused Phenomenon or Process': 'PHEN', 'Laboratory or Test Result': 'PHEN',
+              'Natural Phenomenon or Process': 'PHEN', 'Phenomenon or Process': 'PHEN', 'Cell Function': 'PHYS', 'Clinical Attribute': 'PHYS', 'Genetic Function': 'PHYS', 'Mental Process': 'PHYS',
+              'Molecular Function': 'PHYS', 'Organism Attribute': 'PHYS', 'Organism Function': 'PHYS', 'Organ or Tissue Function': 'PHYS', 'Physiologic Function': 'PHYS',
+              'Diagnostic Procedure': 'PROC', 'Educational Activity': 'PROC', 'Health Care Activity': 'PROC', 'Laboratory Procedure': 'PROC', 'Molecular Biology Research Technique': 'PROC',
+              'Research Activity': 'PROC', 'Therapeutic or Preventive Procedure': 'PROC'}
+
 
 class UMLS(Terminology):
     def __init__(self, path, try_improve_case=True, build_synonym_concepts_mapping=True, debug=False,
                  preferred_sab=(
-                  "MTH",
-                  "SNOMEDCT_US",
-                  "MSH",
-                  "MEDCIN",
-                  "NCI",
-                  "MTH",
+                       "MTH",
+                       "SNOMEDCT_US",
+                       "MSH",
+                       "MEDCIN",
+                       "NCI",
+                       "MTH",
                  ),
                  use_sty_groups=False,
                  preferred_lat=('ENG', 'FRE'),
