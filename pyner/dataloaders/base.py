@@ -200,6 +200,8 @@ class NERDataset(BaseDataset):
             for split in ["train", "val", "test"]
         }
         for split, split_docs in (("train", self.train_data), ("val", self.val_data), ("test", self.test_data)):
+            if split_docs is None:
+                continue
             for doc in split_docs:
                 counts[split]["documents"] += 1
                 for entity in doc["entities"]:
