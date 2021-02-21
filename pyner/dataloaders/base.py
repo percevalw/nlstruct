@@ -347,10 +347,10 @@ class NormalizationDataset(NERDataset):
                                     continue
                             elif unmappable_concepts == "default":
                                 if mode == "cui":
-                                    new_concept = (old_part if new_part is None else new_part for new_part, old_part in zip(new_concept, entity["concept"]))
+                                    new_concept = tuple(old_part if new_part is None else new_part for new_part, old_part in zip(new_concept, entity["concept"]))
                                 else:
                                     text = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
-                                    new_concept = (text if new_part is None else new_part for new_part in new_concept)
+                                    new_concept = tuple(text if new_part is None else new_part for new_part in new_concept)
                         else:
                             new_concept = fn(entity["concept"])
                             if unmappable_concepts == "drop" and new_concept is None:
