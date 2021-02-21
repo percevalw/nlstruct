@@ -1,5 +1,6 @@
 import enum
 import os
+import re
 import shutil
 import tempfile
 import urllib.request
@@ -11,6 +12,7 @@ import pytorch_lightning as pl
 import torch
 from sklearn.datasets._base import _sha256
 from tqdm import tqdm
+from unidecode import unidecode
 
 
 class NetworkLoadMode(enum.Enum):
@@ -82,8 +84,27 @@ class Terminology:
                  concept_synonym_pairs,
                  concept_mapping={},
                  concept_semantic_types={},
-                 build_synonym_concepts_mapping=False):
-        self.concept_synonyms = dict(concept_synonym_pairs)
+                 build_synonym_concepts_mapping=False,
+                 synonym_preprocess_fn=None,
+                 do_unidecode=False,
+                 subs=()):
+        if do_unidecode or len(subs):
+            res = {}
+            for concept, synonyms in self.concept_synonyms:
+                concept_res = []
+                for synonym in synonyms:
+                    if synonym_preprocess_fn is not None:
+                        synonym = synonym_preprocess_fn(synonym)
+                    if do_unidecode:
+                        synonym = unidecode(synonym)
+                    if subs:
+                        for pattern, replacement in subs:
+                            synonym = re.sub(pattern, replacement, synonym)
+                    concept_res.append(synonym)
+                res[concept] = concept_res
+            self.concept_synonyms = res
+        else:
+            self.concept_synonyms = dict(concept_synonym_pairs)
         self.concept_mapping = concept_mapping
         self.concept_semantic_types = concept_semantic_types
         if build_synonym_concepts_mapping:

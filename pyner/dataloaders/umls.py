@@ -43,7 +43,10 @@ class UMLS(Terminology):
                  use_sty_groups=False,
                  preferred_lat=('ENG', 'FRE'),
                  preferred_tty=('FN', 'PTN', 'PN', 'PT', 'RPT', 'SY'),
-                 query=None):
+                 query=None,
+                 synonym_preprocess_fn=None,
+                 do_unidecode=False,
+                 subs=(),):
         global mrconso
         mrconso = pd.read_csv(
             os.path.join(path, "MRCONSO.RRF"),
@@ -92,6 +95,9 @@ class UMLS(Terminology):
             concept_mapping=concept_mapping,
             concept_semantic_types=semantic_types,
             build_synonym_concepts_mapping=build_synonym_concepts_mapping,
+            synonym_preprocess_fn=synonym_preprocess_fn,
+            do_unidecode=do_unidecode,
+            subs=subs,
         )
 
     def try_improve_case(self, text):

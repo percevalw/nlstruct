@@ -5,7 +5,14 @@ import pandas as pd
 
 
 class MEDIC(Terminology):
-    def __init__(self, path, semantic_type="Disease", try_improve_case=True, build_synonym_concepts_mapping=True):
+    def __init__(self,
+                 path,
+                 semantic_type="Disease",
+                 try_improve_case=True,
+                 build_synonym_concepts_mapping=True,
+                 synonym_preprocess_fn=None,
+                 do_unidecode=False,
+                 subs=()):
         medic = pd.read_csv(
             path,
             comment='#',
@@ -34,6 +41,9 @@ class MEDIC(Terminology):
             concept_mapping=alt_disease_to_concept,
             concept_semantic_types=defaultdict(lambda: semantic_type),
             build_synonym_concepts_mapping=build_synonym_concepts_mapping,
+            synonym_preprocess_fn=synonym_preprocess_fn,
+            do_unidecode=do_unidecode,
+            subs=subs,
         )
 
     def try_improve_case(self, text):
