@@ -284,30 +284,27 @@ class NormalizationDataset(NERDataset):
         fn = lambda x: terminology.get_concept_semantic_type(x, missing=missing)
 
         for split, docs in [("train", self.train_data), ("val", self.val_data), ("test", self.test_data)]:
-            if docs is None:
-                new_splits[split] = docs
-            else:
-                new_docs = []
-                for doc in docs:
-                    new_entities = []
-                    for entity in doc["entities"]:
-                        if isinstance(entity["concept"], (list, tuple)):
-                            new_label = tuple(fn(concept) for concept in entity["concept"])
-                            if unmappable_concepts == "drop":
-                                new_label = tuple(part for part in new_label if part is not None)
-                                if not len(new_label):
-                                    continue
-                        else:
-                            new_label = fn(entity["concept"])
-                            if unmappable_concepts == "drop" and new_label is None:
+            new_docs = []
+            for doc in docs:
+                new_entities = []
+                for entity in doc["entities"]:
+                    if isinstance(entity["concept"], (list, tuple)):
+                        new_label = tuple(fn(concept) for concept in entity["concept"])
+                        if unmappable_concepts == "drop":
+                            new_label = tuple(part for part in new_label if part is not None)
+                            if not len(new_label):
                                 continue
+                    else:
+                        new_label = fn(entity["concept"])
+                        if unmappable_concepts == "drop" and new_label is None:
+                            continue
 
-                        if new_label is None and unmappable_concepts == "default":
-                            new_label = entity["label"]
+                    if new_label is None and unmappable_concepts == "default":
+                        new_label = entity["label"]
 
-                        new_entities.append({**entity, "label": new_label})
-                    new_docs.append({**doc, "entities": new_entities})
-                new_splits[split] = new_docs
+                    new_entities.append({**entity, "label": new_label})
+                new_docs.append({**doc, "entities": new_entities})
+            new_splits[split] = new_docs
 
         new_self = self if inplace else copy(self)
         new_self.train_data = new_splits["train"]
@@ -332,39 +329,36 @@ class NormalizationDataset(NERDataset):
             raise ValueError(f"Unrecognized argument mode={mode}")
 
         for split, docs in [("train", self.train_data), ("val", self.val_data), ("test", self.test_data)]:
-            if docs is None:
-                new_splits[split] = docs
-            else:
-                new_docs = []
-                for doc in docs:
-                    new_entities = []
-                    for entity in doc["entities"]:
-                        if isinstance(entity["concept"], (list, tuple)):
-                            new_concept = tuple(fn(concept) for concept in entity["concept"])
-                            if unmappable_concepts == "drop":
-                                new_concept = tuple(part for part in new_concept if part is not None)
-                                if not len(new_concept):
-                                    continue
-                            elif unmappable_concepts == "default":
-                                if mode == "cui":
-                                    new_concept = tuple(old_part if new_part is None else new_part for new_part, old_part in zip(new_concept, entity["concept"]))
-                                else:
-                                    text = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
-                                    new_concept = tuple(text if new_part is None else new_part for new_part in new_concept)
-                        else:
-                            new_concept = fn(entity["concept"])
-                            if unmappable_concepts == "drop" and new_concept is None:
+            new_docs = []
+            for doc in docs:
+                new_entities = []
+                for entity in doc["entities"]:
+                    if isinstance(entity["concept"], (list, tuple)):
+                        new_concept = tuple(fn(concept) for concept in entity["concept"])
+                        if unmappable_concepts == "drop":
+                            new_concept = tuple(part for part in new_concept if part is not None)
+                            if not len(new_concept):
                                 continue
+                        elif unmappable_concepts == "default":
+                            if mode == "cui":
+                                new_concept = tuple(old_part if new_part is None else new_part for new_part, old_part in zip(new_concept, entity["concept"]))
+                            else:
+                                text = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
+                                new_concept = tuple(text if new_part is None else new_part for new_part in new_concept)
+                    else:
+                        new_concept = fn(entity["concept"])
+                        if unmappable_concepts == "drop" and new_concept is None:
+                            continue
 
-                            if new_concept is None and unmappable_concepts == "default":
-                                if mode == "cui":
-                                    new_concept = entity["concept"]
-                                else:
-                                    new_concept = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
+                        if new_concept is None and unmappable_concepts == "default":
+                            if mode == "cui":
+                                new_concept = entity["concept"]
+                            else:
+                                new_concept = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
 
-                        new_entities.append({**entity, "concept": new_concept})
-                    new_docs.append({**doc, "entities": new_entities})
-                new_splits[split] = new_docs
+                    new_entities.append({**entity, "concept": new_concept})
+                new_docs.append({**doc, "entities": new_entities})
+            new_splits[split] = new_docs
 
         new_self = self if inplace else copy(self)
         new_self.train_data = new_splits["train"]

@@ -84,17 +84,20 @@ class QUAERO(NormalizationDataset):
         ]
         test_data = [doc for doc in test_data if doc["source"] in sources]
 
-        if version == "2015" and val_split:
-            shuffled_data = list(train_data)
-            if seed is not False:
-                random.Random(seed).shuffle(shuffled_data)
-            offset = val_split if isinstance(val_split, int) else int(val_split * len(shuffled_data))
-            val_data = shuffled_data[:offset]
-            train_data = shuffled_data[offset:]
+        if version == "2015":
+            if val_split:
+                shuffled_data = list(train_data)
+                if seed is not False:
+                    random.Random(seed).shuffle(shuffled_data)
+                offset = val_split if isinstance(val_split, int) else int(val_split * len(shuffled_data))
+                val_data = shuffled_data[:offset]
+                train_data = shuffled_data[offset:]
+            else:
+                val_data = []
 
         subset = slice(None) if not debug else slice(0, 50)
         train_data = train_data[subset]
-        val_data = val_data[subset] if val_data is not None else None
+        val_data = val_data[subset]
         test_data = test_data  # Never subset the test set, we don't want to give false hopes
 
         return train_data, val_data, test_data

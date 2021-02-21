@@ -214,7 +214,7 @@ class BRATDataset(NERDataset):
                 raise ValueError(f'No Brat file found in {test_source}')
         else:
             assert test_source is None
-            test_data = None
+            test_data = []
         if test_data is not None:
             test_data = self.filter_entities(test_data, dropped_entity_label, kept_entity_label)
 
@@ -229,7 +229,7 @@ class BRATDataset(NERDataset):
             train_data = shuffled_data[offset:]
         else:
             assert val_source is None
-            val_data = None
+            val_data = []
         if val_data is not None:
             val_data = self.filter_entities(val_data, dropped_entity_label, kept_entity_label)
 

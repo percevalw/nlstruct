@@ -89,7 +89,7 @@ class I2B2Temporal(NERDataset):
         train_data = splits["train"]
         test_data = splits["test"]
 
-        val_data = None
+        val_data = []
         if val_split is not None and val_split:
             shuffled_data = list(train_data)
             if seed is not False:
@@ -100,7 +100,7 @@ class I2B2Temporal(NERDataset):
 
         subset = slice(None) if not debug else slice(0, 50)
         train_data = train_data[subset]
-        val_data = val_data[subset] if val_data is not None else None
+        val_data = val_data[subset]
         test_data = test_data  # Never subset the test set, we don't want to give false hopes
 
         return train_data, val_data, test_data
