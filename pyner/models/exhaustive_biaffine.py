@@ -5,10 +5,10 @@ import torch
 import torch.nn.functional as F
 import transformers
 
-from .data_utils import *
-from .metrics import PrecisionRecallF1Metric
-from .optimization import ScheduledOptimizer, LinearSchedule
-from .torch_utils import batch_to_tensors, PytorchLightningBase, einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained, monkey_patch
+from ..data_utils import *
+from ..metrics import PrecisionRecallF1Metric
+from ..optimization import ScheduledOptimizer, LinearSchedule
+from ..torch_utils import batch_to_tensors, PytorchLightningBase, einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained, monkey_patch
 
 
 class LargeSentenceException(Exception):

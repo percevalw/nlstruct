@@ -6,9 +6,7 @@ import pytorch_lightning as pl
 import torch
 import transformers
 
-from pyner.torch_utils import einsum, fork_rng, monkey_patch
-
-monkey_patch()
+from pyner.torch_utils import einsum, fork_rng
 
 if "registry" not in globals():
     registry = {}
