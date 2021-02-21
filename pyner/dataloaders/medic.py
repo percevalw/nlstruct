@@ -1,9 +1,11 @@
+from collections import defaultdict
+
 from pyner.dataloaders.base import Terminology
 import pandas as pd
 
 
 class MEDIC(Terminology):
-    def __init__(self, path, try_improve_case=True, build_synonym_concepts_mapping=True):
+    def __init__(self, path, semantic_type="Disease", try_improve_case=True, build_synonym_concepts_mapping=True):
         medic = pd.read_csv(
             path,
             comment='#',
@@ -30,6 +32,7 @@ class MEDIC(Terminology):
         super().__init__(
             concept_synonym_pairs=concept_synonym_pairs,
             concept_mapping=alt_disease_to_concept,
+            concept_semantic_types=defaultdict(lambda: semantic_type),
             build_synonym_concepts_mapping=build_synonym_concepts_mapping,
         )
 
