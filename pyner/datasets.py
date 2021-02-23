@@ -113,7 +113,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                         "comment": comment,
                                     })
                             except:
-                                raise Exception("Could not parse line {} from {}: {}".format(line_idx, filename.replace(".txt", ".ann"), repr(line))
+                                raise Exception("Could not parse line {} from {}: {}".format(line_idx, filename.replace(".txt", ".ann"), repr(line)))
                 except FileNotFoundError:
                     yield {
                         "doc_id": doc_id,
