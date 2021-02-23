@@ -277,16 +277,19 @@ def batch_to_tensors(batch, ids_mapping={}, device=None, pad=0):
         batch = {key: [row[key] for row in batch] for key in batch[0]}
     result = {}
     for key, rows in batch.items():
-        dtype = get_nested_properties(rows)[1]
-        if dtype is None and key.endswith("_id"):
-            reference_id = ids_mapping.get(key, None)
-            factorized_rows = list_factorize(rows, reference_values=batch[reference_id] if reference_id is not None else None)[0]
-            result['@' + key] = pad_to_tensor(factorized_rows, device=device, pad=pad)
-            result[key] = rows
-        elif dtype is None:
-            result[key] = rows
-        else:
-            result[key] = pad_to_tensor(rows, dtype=dtype, device=device, pad=pad)
+        try:
+            dtype = get_nested_properties(rows)[1]
+            if dtype is None and key.endswith("_id"):
+                reference_id = ids_mapping.get(key, None)
+                factorized_rows = list_factorize(rows, reference_values=batch[reference_id] if reference_id is not None else None)[0]
+                result['@' + key] = pad_to_tensor(factorized_rows, device=device, pad=pad)
+                result[key] = rows
+            elif dtype is None:
+                result[key] = rows
+            else:
+                result[key] = pad_to_tensor(rows, dtype=dtype, device=device, pad=pad)
+        except:
+          raise Exception("Could not pad elements {} of the batch".format(key))
     return result
 
 
