@@ -7,7 +7,7 @@ from collections import defaultdict, Sequence
 from collections import namedtuple, Mapping
 from contextlib import contextmanager
 from string import ascii_letters
-from itertools import zip_longuest
+from itertools import zip_longest
 
 import einops as ops
 import numpy as np
