@@ -7,6 +7,7 @@ from collections import defaultdict, Sequence
 from collections import namedtuple, Mapping
 from contextlib import contextmanager
 from string import ascii_letters
+from itertools import zip_longuest
 
 import einops as ops
 import numpy as np
@@ -249,7 +250,7 @@ def pad_to_tensor(y, dtype=None, device=None, pad=0):
     def find_max_len(obj, depth=0):
         if depth >= n_depth:
             return (len(obj),)
-        return (len(obj), *(max(l) for l in zip(*[find_max_len(item, depth + 1) for item in obj])))
+        return (len(obj), *(max(l) for l in zip_longest(*[find_max_len(item, depth + 1) for item in obj], fillvalue=0)))
 
     max_len = find_max_len(y)
 
