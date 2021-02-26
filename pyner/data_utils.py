@@ -383,6 +383,8 @@ def regex_sentencize(text, reg_split, balance_chars=('()', '[]')):
     for match in re.finditer(reg_split, text):
         end = match.start()
         if all(text[begin:end].count(chars[0]) <= text[begin:end].count(chars[1]) for chars in balance_chars):
-            yield begin, end
+            if begin != end:
+                yield begin, end
             begin = match.end()
-    yield begin, len(text)
+    if begin != len(text):
+        yield begin, len(text)
