@@ -576,9 +576,10 @@ class NER(PytorchLightningBase):
             else:
                 sentences = (doc,)
             doc_entities = []
-            for prep in batchify(self.preprocessor(sentences, only_text=True), self.batch_size):
+            for batch in batchify(zip(sentences, self.preprocessor(sentences, only_text=True)), self.batch_size):
+                batch_sentences, prep = zip(*batch)
                 results = self(prep)
-                for sentence_entities, sentence, prep_sample in zip(results["preds"], sentences, prep):
+                for sentence_entities, sentence, prep_sample in zip(results["preds"], batch_sentences, prep):
                     sentence_begin = sentence["begin"] if "begin" in sentence else 0
                     for begin, end, label in sentence_entities:
                         begin = prep_sample["words_begin"][begin]
