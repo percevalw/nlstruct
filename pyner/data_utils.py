@@ -5,6 +5,7 @@ from copy import copy
 
 import numpy as np
 from unidecode import unidecode
+import warnings
 
 
 class DeltaCollection(object):
@@ -325,6 +326,10 @@ def huggingface_tokenize(text, tokenizer, subs=(), do_unidecode=True, text_col="
     res = tokenizer.encode_plus(text, return_offsets_mapping=True)
     begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
     words = tokenizer.convert_ids_to_tokens(res['input_ids'])
+    
+    model_max_length = getattr(tokenizer, 'model_max_length', None)
+    if model_max_length is not None and len(words) > model_max_length:
+        warnings.warn("Sentence {} is longer than maximum length of {} (count is {} wordpieces)".format(repr(text), model_max_length, len(words))
 
     # Apply substitutions on tokens
     if deltas is not None and len(deltas.begins):
