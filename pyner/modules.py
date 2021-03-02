@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 import warnings
+import itertools
 
 from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
@@ -275,7 +276,8 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
 
 @register("preprocessor")
 class Preprocessor(torch.nn.Module):
-    def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, substitutions=(), empty_entities="raise", vocabularies={}):
+    def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, max_tokens=512,
+                 substitutions=(), empty_entities="raise", vocabularies={}):
         super().__init__()
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(bert_name)
         self.do_unidecode = do_unidecode
@@ -284,6 +286,7 @@ class Preprocessor(torch.nn.Module):
         self.vocabularies = torch.nn.ModuleDict({key: get_instance(vocabulary) for key, vocabulary in vocabularies.items()})
         self.substitutions = substitutions
         self.empty_entities = empty_entities
+        self.max_tokens = max_tokens
         assert empty_entities in ("raise", "drop")
 
     @property
@@ -294,6 +297,74 @@ class Preprocessor(torch.nn.Module):
         if not isinstance(sample, dict):
             return map(functools.partial(self, only_text=only_text), sample)
         bert_tokens = huggingface_tokenize(sample["text"].lower() if self.bert_lower else sample["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
+        # if the sentence has too many tokens, split it
+        if len(bert_tokens['word']) > self.max_tokens:
+            warnings.warn(f'Sentences > {self.max_tokens} tokens will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
+            
+            subsample1_end_token = bert_tokens["end"][self.max_tokens - 2]
+            subsample1_begin = sample['begin']
+            subsample1_end = sample['begin'] + subsample1_end_token
+            subsample1_doc_id = sample['doc_id'] + "/1"
+            subsample1_text = sample['text'][:subsample1_end_token]
+            subsample1_entities = []
+            subsample1_size = subsample1_end - subsample1_begin
+            
+            subsample2_begin_token = bert_tokens["begin"][self.max_tokens - 1]
+            subsample2_begin = sample['begin'] + subsample2_begin_token
+            subsample2_end = sample['end']            
+            subsample2_doc_id = sample['doc_id'] + "/2"           
+            subsample2_text = sample['text'][subsample2_begin_token:]
+            subsample2_entities = []
+            subsample2_size = subsample2_end - subsample2_begin
+            
+            for entity in sample["entities"]:
+                min_begin = min(fragment["begin"] for fragment in entity["fragments"])
+                max_end = max(fragment["end"] for fragment in entity["fragments"])
+                # the entity is in the left part
+                if min_begin <= subsample1_end_token:
+                    # the entity is only in the left part
+                    if max_end <= subsample1_end_token:
+                        subsample1_entities.append(entity)
+                    # the entity overlaps left and right part -> split
+                    else:
+                        subsample1_entities.append({**entity, "fragments": [{"begin": fragment["begin"],
+                                                                       "end": min(fragment["end"], subsample1_end_token)}
+                                                                      for fragment in entity["fragments"]
+                                                                      if fragment["begin"] <= subsample1_end_token]})
+                        subsample2_entities.append({**entity, "fragments": [{"begin": max(fragment["begin"] - subsample2_begin_token, 0),
+                                                                       "end": fragment["end"] - subsample2_begin_token}
+                                                                      for fragment in entity["fragments"]
+                                                                      if subsample2_begin_token <= fragment["end"]]})
+                # the entity is only in the right part
+                else:                
+                    new_fragments = [{"begin": fragment["begin"] - subsample2_begin_token,
+                                     "end": fragment["end"] - subsample2_begin_token}
+                                     for fragment in entity["fragments"]]
+                    entity['fragments'] = new_fragments
+                    subsample2_entities.append(entity)
+                    
+            # build the two subsamples
+            subsample1 = {
+                "doc_id": subsample1_doc_id,
+                "text": subsample1_text,
+                "begin": subsample1_begin,
+                "end": subsample1_end,
+                "entities": subsample1_entities                
+            }
+            subsample2 = {
+                "doc_id": subsample2_doc_id,
+                "text": subsample2_text,
+                "begin": subsample2_begin,
+                "end": subsample2_end,
+                "entities": subsample2_entities                
+            }
+            
+            res1 = self(subsample1, only_text=only_text)
+            res2 = self(subsample2, only_text=only_text)
+            return itertools.chain(res1, res2)
+
+        # Here, we know that the sentence is not too long
+        
         if self.word_regex is not None:
             words = regex_tokenize(sample["text"], reg=self.word_regex, subs=self.substitutions, do_unidecode=self.do_unidecode)
         else:
@@ -322,7 +393,8 @@ class Preprocessor(torch.nn.Module):
             entities_begin, entities_end = entities_begin.tolist(), entities_end.tolist()
         else:
             entities_begin, entities_end, entities_label, entities_id = [], [], [], []
-        return {
+        #if len(tokens_indice) > self.max_tokens:
+        return [{
             "tokens": tokens_indice,
             "tokens_mask": [True] * len(tokens_indice),
             "words_mask": [True] * len(words_chars),
@@ -341,7 +413,7 @@ class Preprocessor(torch.nn.Module):
             "entities_doc_id": [sample["doc_id"]] * len(entities_id),
             "entities_mask": [True] * len(entities_id),
             "doc_id": sample["doc_id"],
-        }
+        }]
 
     def tensorize(self, batch, device=None):
         return batch_to_tensors(batch, ids_mapping={"entities_doc_id": "doc_id"}, device=device)
@@ -497,7 +569,8 @@ class NER(PytorchLightningBase):
     def preprocess(self, data, split='train'):
         if self.sentence_split_regex is not None:
             data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
-        data = list(self.preprocessor(data))
+
+        data = list(itertools.chain(*self.preprocessor(data)))
         return data
 
     def forward(self, inputs, return_loss=False):

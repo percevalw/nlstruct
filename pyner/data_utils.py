@@ -328,8 +328,8 @@ def huggingface_tokenize(text, tokenizer, subs=(), do_unidecode=True, text_col="
     words = tokenizer.convert_ids_to_tokens(res['input_ids'])
     
     model_max_length = getattr(tokenizer, 'model_max_length', None)
-    if model_max_length is not None and len(words) > model_max_length:
-        warnings.warn("Sentence {} is longer than maximum length of {} (count is {} wordpieces)".format(repr(text), model_max_length, len(words)))
+    #if model_max_length is not None and len(words) > model_max_length:
+    #    warnings.warn("Sentence {} is longer than maximum length of {} (count is {} wordpieces)".format(repr(text), model_max_length, len(words)))
 
     # Apply substitutions on tokens
     if deltas is not None and len(deltas.begins):
