@@ -4,6 +4,7 @@ from importlib import import_module
 import torch
 import torch.nn.functional as F
 import transformers
+import warnings
 
 from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
@@ -310,6 +311,7 @@ class Preprocessor(torch.nn.Module):
                 if self.empty_entities == "raise":
                     raise Exception(f"Entity {sample['doc_id']}/{entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
                 else:
+                    warnings.warn("Empty mentions (start = end or outside the text) have been skipped")                    
                     entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
                     entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
                     entities_end = np.asarray([end for end, begin in zip(entities_end, entities_begin) if begin != -1])
