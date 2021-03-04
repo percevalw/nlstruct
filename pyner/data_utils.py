@@ -7,6 +7,9 @@ import numpy as np
 from unidecode import unidecode
 import warnings
 
+import functools
+import textwrap
+
 
 class DeltaCollection(object):
     def __init__(self, begins, ends, deltas):
@@ -72,32 +75,127 @@ class DeltaCollection(object):
         return DeltaCollection(new_begins[sorter], new_ends[sorter], new_deltas[sorter])
 
 
+class StatefulMap():
+    def __init__(self, data, fn, args, kwargs):
+        self.fn = fn
+        self.data = data
+        self.args = args
+        self.kwargs = kwargs
+
+    def __iter__(self):
+        return StatefulMap(iter(self.data), self.fn, self.args, self.kwargs)
+
+    def state_dict(self):
+        return {
+            "data": self.data.state_dict() if hasattr(self.data, 'state_dict') else None,
+        }
+
+    def __len__(self):
+        return len(self.data)
+
+    def load_state_dict(self, state):
+        data_state = state.get("data", None)
+        if data_state is not None:
+            self.data.load_state_dict(data_state)
+
+    def __next__(self):
+        obj = next(self.data)
+        return self.fn(obj, *self.args, **self.kwargs)
+
+    def __repr__(self):
+        return "<map\n" + textwrap.indent("fn={}({})\ndata={}".format(
+            self.fn.__name__,
+            ", ".join((*map(repr, self.args), *("{}={}".format(k, repr(v)) for k, v in self.kwargs.items()))),
+            "{}({})".format(type(self.data).__name__, len(self.data) if isinstance(self.data, (list, tuple)) else repr(self.data)),
+        ), "  ") + "\n>"
+
+
+class StatefulChain():
+    def __init__(self, data):
+        self.data = data
+        self.current = []
+
+    def __iter__(self):
+        return StatefulChain(iter(self.data))
+
+    def state_dict(self):
+        return {
+            "data": self.data.state_dict() if hasattr(self.data, 'state_dict') else None,
+            "current": self.current,
+        }
+
+    def load_state_dict(self, state):
+        data_state = state.get("data", None)
+        if data_state is not None:
+            self.data.load_state_dict(data_state)
+        self.current = state["current"]
+
+    def __next__(self):
+        if len(self.current) == 0:
+            self.current = next(self.data)
+        [res, *self.current] = self.current
+        return res
+
+    def __repr__(self):
+        return "<chain\n" + textwrap.indent("data={}".format(
+            "{}({})".format(type(self.data).__name__, len(self.data) if isinstance(self.data, (list, tuple)) else repr(self.data))
+        ), "  ") + "\n>"
+
+
+def mappable(fn):
+    class wrap():
+        def __new__(cls, fn):
+            instance = super().__new__(cls)
+            return functools.wraps(fn)(instance)
+
+        def __init__(self, fn):
+            self.fn = fn
+
+        # @functools.wraps(fn)
+        def __call__(self, data, *args, **kwargs):
+            if hasattr(data, '__iter__') and not isinstance(data, (dict, str)):
+                iterator = StatefulMap(data, self.fn, args, kwargs)
+                chain = kwargs.pop("chain", False)
+                if chain:
+                    iterator = StatefulChain(iterator)
+                return iterator
+            else:
+                return self.fn(data, *args, **kwargs)
+
+            return self.fn(data, *args, **kwargs)
+
+        def __get__(self, instance, owner):
+            return wrap(self.fn.__get__(instance, owner))
+
+    return wrap(fn)
+
+
 class batchify:
-    def __init__(self, samples, batch_size):
-        self.samples = samples
+    def __init__(self, data, batch_size):
+        self.data = data
         self.buffer = []
         self.batch_size = batch_size
 
     def __iter__(self):
-        new_self = batchify(iter(self.samples), self.batch_size)
+        new_self = batchify(iter(self.data), self.batch_size)
         new_self.buffer = list(self.buffer)
         return new_self
 
     def state_dict(self):
         return {
-            "samples": self.samples.state_dict() if hasattr(self.samples, 'state_dict') else None,
+            "data": self.samples.state_dict() if hasattr(self.data, 'state_dict') else None,
             "buffer": list(self.buffer),
         }
 
     def load_state_dict(self, dico):
-        if dico['samples'] is not None:
-            self.samples.load_state_dict(dico['samples'])
+        if dico['data'] is not None:
+            self.data.load_state_dict(dico['data'])
         self.buffer = dico["buffer"]
 
     def __next__(self):
         try:
             while True:
-                sample = next(self.samples)
+                sample = next(self.data)
                 self.buffer.append(sample)
                 if len(self.buffer) >= self.batch_size:
                     res = self.buffer
@@ -112,7 +210,10 @@ class batchify:
                 raise
 
     def __repr__(self):
-        return f"<batchify samples={self.samples} batch_size={self.batch_size}>"
+        return "<batchify\n" + textwrap.indent("batch_size={}\ndata={}".format(
+            self.batch_size,
+            "{}({})".format(type(self.data).__name__, len(self.data)) if isinstance(self.data, (list, tuple)) else repr(self.data),
+        ), "  ") + "\n>"
 
 
 class mix:
@@ -172,73 +273,48 @@ class loop:
         return sample
 
 
-class sentencize:
-    def __init__(self, samples, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", multi_sentence_entities="raise", balance_chars=()):
-        self.samples = samples
-        self.reg_split = reg_split
-        self.balance_chars = balance_chars
-        self.current_doc = None
-        self.current_idx = -1
-        self.remaining_sentences = []
-        assert multi_sentence_entities in ("raise", "split")
-        self.multi_sentence_entities = multi_sentence_entities
+class OverlappingEntityException(Exception):
+    pass
 
-    def __iter__(self):
-        new_self = sentencize(iter(self.samples), self.reg_split, balance_chars=self.balance_chars, multi_sentence_entities=self.multi_sentence_entities)
-        return new_self
-
-    def state_dict(self):
-        return {
-            "samples": self.samples.state_dict() if hasattr(self.samples, 'state_dict') else None,
-            "current_doc": self.current_doc,
-            "current_idx": self.current_idx,
-            "remaining_sentences": self.remaining_sentences,
-        }
-
-    def load_state_dict(self, dico):
-        if dico['samples'] is not None:
-            self.samples.load_state_dict(dico['samples'])
-        self.current_doc = dico["current_doc"]
-        self.current_idx = dico["current_idx"]
-        self.remaining_sentences = dico["remaining_sentences"]
-
-    def __next__(self):
-        if not len(self.remaining_sentences):
-            self.current_doc = next(self.samples)
-            self.current_idx = -1
-            self.remaining_sentences = regex_sentencize(self.current_doc["text"], self.reg_split, balance_chars=self.balance_chars)
-
-        [(sentence_begin, sentence_end), *self.remaining_sentences] = self.remaining_sentences
-        self.current_idx += 1
-        new_entities = []
-        sentence_size = sentence_end - sentence_begin
-        if "entities" in self.current_doc:
-            for entity in self.current_doc["entities"]:
-                min_begin = min(fragment["begin"] for fragment in entity["fragments"])
-                max_end = max(fragment["end"] for fragment in entity["fragments"])
-                if min_begin <= sentence_end and sentence_begin <= max_end:
-                    if sentence_begin <= min_begin and max_end <= sentence_end:
-                        new_entities.append({**entity, "fragments": [{"begin": fragment["begin"] - sentence_begin,
-                                                                       "end": fragment["end"] - sentence_begin}
-                                                                      for fragment in entity["fragments"]]})
+def slice_document(doc, begin, end, entity_overlap='raise'):
+    assert entity_overlap in ("raise", "split")
+    absolute_begin = doc.get("begin", 0)
+    new_entities = []
+    sentence_size = end - begin
+    if "entities" in doc:
+        for entity in doc["entities"]:
+            min_begin = min(fragment["begin"] for fragment in entity["fragments"])
+            max_end = max(fragment["end"] for fragment in entity["fragments"])
+            if min_begin < end and begin < max_end:
+                if begin <= min_begin and max_end <= end:
+                    new_entities.append({**entity, "fragments": [{"begin": fragment["begin"] - begin,
+                                                                   "end": fragment["end"] - begin}
+                                                                  for fragment in entity["fragments"]]})
+                else:
+                    if entity_overlap == "raise":
+                        raise OverlappingEntityException(
+                            "Entity {} spans more than one sentence in document {}. "
+                            "Use multi_sentence_entities='split' to handle such cases.".format(
+                                repr(doc["text"][min_begin:max_end]), doc["doc_id"]))
                     else:
-                        if self.multi_sentence_entities == "raise":
-                            raise Exception("Entity {} spans more than one sentence in document {}. Use multi_sentence_entities='split' to handle such cases.".format(repr(self.current_doc["text"][min_begin:max_end]), self.current_doc["doc_id"]))
-                        else:
-                            new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - sentence_begin, 0), sentence_size),
-                                                                           "end": max(min(fragment["end"] - sentence_begin, sentence_size), 0)}
-                                                                          for fragment in entity["fragments"]
-                                                                          if fragment["begin"] <= sentence_end and sentence_begin <= fragment["end"]]})
-        return {
-            "doc_id": self.current_doc["doc_id"] + "/" + str(self.current_idx),
-            "text": self.current_doc["text"][sentence_begin:sentence_end],
-            "begin": sentence_begin,
-            "end": sentence_end,
-            "entities": new_entities
-        }
+                        new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - begin, 0), sentence_size),
+                                                                       "end": max(min(fragment["end"] - begin, sentence_size), 0)}
+                                                                      for fragment in entity["fragments"]
+                                                                      if fragment["begin"] <= end and begin <= fragment["end"]]})
+    return {
+        **doc,
+        "doc_id": doc["doc_id"] + "/{}-{}".format(absolute_begin + begin, absolute_begin + end),
+        "text": doc["text"][begin:end],
+        "begin": absolute_begin + begin,
+        "end": absolute_begin + end,
+        "entities": new_entities
+    }
 
-    def __repr__(self):
-        return f"<sentencize samples={self.samples} reg_split={self.reg_split}>"
+
+@mappable
+def sentencize(doc, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=('()', '[]'), multi_sentence_entities="raise", chain=False):
+    for begin, end in regex_sentencize(doc["text"], reg_split=reg_split, balance_chars=balance_chars):
+        yield slice_document(doc, begin, end, multi_sentence_entities=multi_sentence_entities)
 
 
 def reshape_variable_sequences(sequences, indices_map):

@@ -1,18 +1,18 @@
-import functools
 from importlib import import_module
+from math import ceil
 
 import torch
 import torch.nn.functional as F
 import transformers
-import warnings
-import itertools
 
 from .data_utils import *
 from .metrics import PrecisionRecallF1Metric
 from .optimization import ScheduledOptimizer, LinearSchedule
 from .torch_utils import batch_to_tensors, PytorchLightningBase, einsum, bce_with_logits, get_instance, register, fork_rng, get_config, save_pretrained, monkey_patch
 
-monkey_patch()
+
+class LargeSentenceException(Exception):
+    pass
 
 
 def has_len(x):
@@ -37,7 +37,7 @@ class Vocabulary(torch.nn.Module):
     def values(self):
         return list(self.inversed.keys())
 
-    def __getitem__(self, obj):
+    def get(self, obj):
         if self.training:
             return self.inversed.setdefault(obj, len(self.inversed))
         res = self.inversed.get(obj, None)
@@ -276,10 +276,71 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
 
 @register("preprocessor")
 class Preprocessor(torch.nn.Module):
-    def __init__(self, bert_name, word_regex=None, bert_lower=False, do_unidecode=True, max_tokens=512,
-                 substitutions=(), empty_entities="raise", vocabularies={}):
+    def __init__(
+          self,
+          bert_name,
+          bert_lower=False,
+          word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]',
+          substitutions=(),
+          do_unidecode=True,
+          sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
+          sentence_balance_chars=(),
+          sentence_entity_overlap="raise",
+          max_tokens=512,
+          large_sentences="equal-split",
+          empty_entities="raise",
+          vocabularies={},
+    ):
+        """
+        Preprocess the data
+        Since this is a big piece of logic, it was put in a separate class
+
+        :param bert_name:
+            Name/path of the transformer model
+        :param bert_lower:
+            Apply lower case before tokenizing into wordpieces
+        :param word_regex: str
+            Regex to use to split sentence into words
+            Optional: if False, only bert wordpieces will be used
+        :param substitutions: list of (str, str)
+            (pattern, replacement) regex substitutions to apply on sentence before tokenizing
+        :param do_unidecode: bool
+            Apply unidecode on strings before tokenizing
+        :param sentence_split_regex: str
+            Regex used to split sentences.
+            Ex: "(\n([ ]*\n)*)" will split on newlines / spaces, and not keep these tokens in the sentences, because they are matched in a captured group
+        :param sentence_balance_chars: tuple of str
+            Characters to "balance" when splitting sentence, ex: parenthesis, brackets, etc.
+            Will make sure that we always have (number of '[')  <= (number of ']')
+        :param sentence_entity_overlap: str
+            What to do when a entity overlaps multiple sentences ?
+            Choices: "raise" to raise an error or "split" to split the entity
+        :param max_tokens: int
+            Maximum number of bert tokens in a sample
+        :param large_sentences: str
+            One of "equal-split", "max-split", "raise"
+            If "equal-split", any sentence longer than max_tokens will be split into
+            min number of approx equal size sentences that fit into the model
+            If "max-split", make max number of max_tokens sentences, and make a small sentence if any token remains
+            If "raise", raises
+        :param empty_entities: str
+            One of "raise", "drop"
+            If "drop", remove any entity that does not contain any word
+            If "raise", raises when this happens
+        :param vocabularies: dict of (str, Vocabulary)
+            Vocabularies that will be used
+            To train them (fill them) before training the model, and differ
+            the matrices initialization until we know their sizes, make sure
+            to call .train() of them before passing them to the __init__
+        """
         super().__init__()
+        assert empty_entities in ("raise", "drop")
+        assert large_sentences in ("equal-split", "max-split", "raise")
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(bert_name)
+        self.sentence_split_regex = sentence_split_regex
+        self.sentence_balance_chars = sentence_balance_chars
+        self.sentence_entity_overlap = sentence_entity_overlap
+        self.large_sentences = large_sentences
         self.do_unidecode = do_unidecode
         self.bert_lower = bert_lower
         self.word_regex = word_regex
@@ -287,133 +348,87 @@ class Preprocessor(torch.nn.Module):
         self.substitutions = substitutions
         self.empty_entities = empty_entities
         self.max_tokens = max_tokens
-        assert empty_entities in ("raise", "drop")
 
-    @property
-    def bert_name(self):
-        return self.tokenizer.name_or_path
-
-    def __call__(self, sample, only_text=False):
-        if not isinstance(sample, dict):
-            return map(functools.partial(self, only_text=only_text), sample)
-        bert_tokens = huggingface_tokenize(sample["text"].lower() if self.bert_lower else sample["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
-        # if the sentence has too many tokens, split it
-        if len(bert_tokens['word']) > self.max_tokens:
-            warnings.warn(f'Sentences > {self.max_tokens} tokens will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
-            
-            subsample1_end_token = bert_tokens["end"][self.max_tokens - 2]
-            subsample1_begin = sample['begin']
-            subsample1_end = sample['begin'] + subsample1_end_token
-            subsample1_doc_id = sample['doc_id'] + "/1"
-            subsample1_text = sample['text'][:subsample1_end_token]
-            subsample1_entities = []
-            subsample1_size = subsample1_end - subsample1_begin
-            
-            subsample2_begin_token = bert_tokens["begin"][self.max_tokens - 1]
-            subsample2_begin = sample['begin'] + subsample2_begin_token
-            subsample2_end = sample['end']            
-            subsample2_doc_id = sample['doc_id'] + "/2"           
-            subsample2_text = sample['text'][subsample2_begin_token:]
-            subsample2_entities = []
-            subsample2_size = subsample2_end - subsample2_begin
-            
-            for entity in sample["entities"]:
-                min_begin = min(fragment["begin"] for fragment in entity["fragments"])
-                max_end = max(fragment["end"] for fragment in entity["fragments"])
-                # the entity is in the left part
-                if min_begin <= subsample1_end_token:
-                    # the entity is only in the left part
-                    if max_end <= subsample1_end_token:
-                        subsample1_entities.append(entity)
-                    # the entity overlaps left and right part -> split
-                    else:
-                        subsample1_entities.append({**entity, "fragments": [{"begin": fragment["begin"],
-                                                                       "end": min(fragment["end"], subsample1_end_token)}
-                                                                      for fragment in entity["fragments"]
-                                                                      if fragment["begin"] <= subsample1_end_token]})
-                        subsample2_entities.append({**entity, "fragments": [{"begin": max(fragment["begin"] - subsample2_begin_token, 0),
-                                                                       "end": fragment["end"] - subsample2_begin_token}
-                                                                      for fragment in entity["fragments"]
-                                                                      if subsample2_begin_token <= fragment["end"]]})
-                # the entity is only in the right part
-                else:                
-                    new_fragments = [{"begin": fragment["begin"] - subsample2_begin_token,
-                                     "end": fragment["end"] - subsample2_begin_token}
-                                     for fragment in entity["fragments"]]
-                    entity['fragments'] = new_fragments
-                    subsample2_entities.append(entity)
-                    
-            # build the two subsamples
-            subsample1 = {
-                "doc_id": subsample1_doc_id,
-                "text": subsample1_text,
-                "begin": subsample1_begin,
-                "end": subsample1_end,
-                "entities": subsample1_entities                
-            }
-            subsample2 = {
-                "doc_id": subsample2_doc_id,
-                "text": subsample2_text,
-                "begin": subsample2_begin,
-                "end": subsample2_end,
-                "entities": subsample2_entities                
-            }
-            
-            res1 = self(subsample1, only_text=only_text)
-            res2 = self(subsample2, only_text=only_text)
-            return itertools.chain(res1, res2)
-
-        # Here, we know that the sentence is not too long
-        
-        if self.word_regex is not None:
-            words = regex_tokenize(sample["text"], reg=self.word_regex, subs=self.substitutions, do_unidecode=self.do_unidecode)
+    @mappable
+    def forward(self, sample, only_text=False):
+        if self.sentence_split_regex is not None:
+            sentences_bounds = list(regex_sentencize(sample["text"], reg_split=self.sentence_split_regex, balance_chars=self.sentence_balance_chars))
         else:
-            words = bert_tokens
-        tokens_indice = self.tokenizer.convert_tokens_to_ids(bert_tokens["word"])
-        words_bert_begin, words_bert_end = split_spans(words["begin"], words["end"], bert_tokens["begin"], bert_tokens["end"])
-        words_bert_begin, words_bert_end = words_bert_begin.tolist(), words_bert_end.tolist()
-        words_chars = [[self.vocabularies["char"][char] for char in word] for word, word_bert_begin in zip(words["word"], words_bert_begin) if word_bert_begin != -1]
-        if not only_text and "entities" in sample and len(sample["entities"]):
-            entities_begin, entities_end, entities_label, entities_id = map(list, zip(*[[fragment["begin"], fragment["end"], entity["label"], entity["entity_id"] + "/" + str(i)]
-                                                                                        for entity in sample["entities"] for i, fragment in enumerate(entity["fragments"])]))
-            entities_begin, entities_end = split_spans(entities_begin, entities_end, words["begin"], words["end"])
-            empty_entity_idx = next((i for i, begin in enumerate(entities_begin) if begin == -1), None)
-            if empty_entity_idx is not None:
-                if self.empty_entities == "raise":
-                    raise Exception(f"Entity {sample['doc_id']}/{entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
+            sentences_bounds = [(0, len(sample["text"]))]
+        results = []
+        while len(sentences_bounds):
+            begin, end = sentences_bounds.pop(0)
+            if not sample["text"][begin:end].strip():
+                continue
+            sentence = slice_document(sample, begin, end, entity_overlap=self.sentence_entity_overlap)
+            bert_tokens = huggingface_tokenize(sentence["text"].lower() if self.bert_lower else sentence["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
+            if self.word_regex is not None:
+                words = regex_tokenize(sentence["text"], reg=self.word_regex, subs=self.substitutions, do_unidecode=self.do_unidecode)
+            else:
+                words = bert_tokens
+            tokens_indice = self.tokenizer.convert_tokens_to_ids(bert_tokens["word"])
+            words_bert_begin, words_bert_end = split_spans(words["begin"], words["end"], bert_tokens["begin"], bert_tokens["end"])
+            words_bert_begin, words_bert_end = words_bert_begin.tolist(), words_bert_end.tolist()
+
+            # if the sentence has too many tokens, split it
+            if len(bert_tokens['word']) > self.max_tokens:
+                warnings.warn(f'Sentences > {self.max_tokens} tokens will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
+                if self.large_sentences == "equal-split":
+                    stop_bert_token = len(bert_tokens['word']) // ceil(len(bert_tokens['word']) / self.max_tokens)
+                elif self.large_sentences == "max-split":
+                    stop_bert_token = self.max_tokens
                 else:
-                    warnings.warn("Empty mentions (start = end or outside the text) have been skipped")                    
-                    entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
-                    entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
-                    entities_end = np.asarray([end for end, begin in zip(entities_end, entities_begin) if begin != -1])
-                    entities_begin = np.asarray([begin for begin in entities_begin if begin != -1])
+                    raise LargeSentenceException(repr(sample["text"][begin:end]))
+                last_word = next(i for i in range(len(words_bert_end) - 1) if words_bert_end[i + 1] >= stop_bert_token)
+                sentences_bounds[:0] = [(begin, begin + words["end"][last_word]), (begin + words["begin"][last_word + 1], end)]
+                continue
 
-            entities_end -= 1  # end now means the index of the last word
-            entities_label = [self.vocabularies["label"][label] for label in entities_label]
-            entities_begin, entities_end = entities_begin.tolist(), entities_end.tolist()
-        else:
-            entities_begin, entities_end, entities_label, entities_id = [], [], [], []
-        #if len(tokens_indice) > self.max_tokens:
-        return [{
-            "tokens": tokens_indice,
-            "tokens_mask": [True] * len(tokens_indice),
-            "words_mask": [True] * len(words_chars),
-            "words": words["word"],
-            "words_id": [sample["doc_id"] + "-" + str(i) for i in range(len(words_chars))],
-            "words_chars": words_chars,
-            "words_chars_mask": [[True] * len(word_chars) for word_chars in words_chars],
-            "words_bert_begin": words_bert_begin,
-            "words_bert_end": words_bert_end,
-            "words_begin": words["begin"],
-            "words_end": words["end"],
-            "entities_begin": entities_begin,
-            "entities_end": entities_end,
-            "entities_label": entities_label,
-            "entities_id": entities_id,
-            "entities_doc_id": [sample["doc_id"]] * len(entities_id),
-            "entities_mask": [True] * len(entities_id),
-            "doc_id": sample["doc_id"],
-        }]
+            # Here, we know that the sentence is not too long
+            words_chars = [[self.vocabularies["char"].get(char) for char in word] for word, word_bert_begin in zip(words["word"], words_bert_begin) if word_bert_begin != -1]
+            if not only_text and "entities" in sentence and len(sentence["entities"]):
+                entities_begin, entities_end, entities_label, entities_id = map(list, zip(*[[fragment["begin"], fragment["end"], entity["label"], entity["entity_id"] + "/" + str(i)]
+                                                                                            for entity in sentence["entities"] for i, fragment in enumerate(entity["fragments"])]))
+                entities_begin, entities_end = split_spans(entities_begin, entities_end, words["begin"], words["end"])
+                empty_entity_idx = next((i for i, begin in enumerate(entities_begin) if begin == -1), None)
+                if empty_entity_idx is not None:
+                    if self.empty_entities == "raise":
+                        raise Exception(
+                            f"Entity {sentence['doc_id']}/{entities_id[empty_entity_idx]} could not be matched with any word (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
+                    else:
+                        warnings.warn("Empty mentions (start = end or outside the text) have been skipped")
+                        entities_label = [label for label, begin in zip(entities_label, entities_begin) if begin != -1]
+                        entities_id = [entity_id for entity_id, begin in zip(entities_id, entities_begin) if begin != -1]
+                        entities_end = np.asarray([end for end, begin in zip(entities_end, entities_begin) if begin != -1])
+                        entities_begin = np.asarray([begin for begin in entities_begin if begin != -1])
+
+                entities_end -= 1  # end now means the index of the last word
+                entities_label = [self.vocabularies["label"].get(label) for label in entities_label]
+                entities_begin, entities_end = entities_begin.tolist(), entities_end.tolist()
+            else:
+                entities_begin, entities_end, entities_label, entities_id = [], [], [], []
+            # if len(tokens_indice) > self.max_tokens:
+            results.append({
+                "tokens": tokens_indice,
+                "tokens_mask": [True] * len(tokens_indice),
+                "words_mask": [True] * len(words_chars),
+                "words": words["word"],
+                "words_id": [sentence["doc_id"] + "-" + str(i) for i in range(len(words_chars))],
+                "words_chars": words_chars,
+                "words_chars_mask": [[True] * len(word_chars) for word_chars in words_chars],
+                "words_bert_begin": words_bert_begin,
+                "words_bert_end": words_bert_end,
+                "words_begin": words["begin"],
+                "words_end": words["end"],
+                "entities_begin": entities_begin,
+                "entities_end": entities_end,
+                "entities_label": entities_label,
+                "entities_id": entities_id,
+                "entities_doc_id": [sentence["doc_id"]] * len(entities_id),
+                "entities_mask": [True] * len(entities_id),
+                "doc_id": sentence["doc_id"],
+                "original": sentence,
+            })
+        return results
 
     def tensorize(self, batch, device=None):
         return batch_to_tensors(batch, ids_mapping={"entities_doc_id": "doc_id"}, device=device)
@@ -430,22 +445,19 @@ class NER(PytorchLightningBase):
           preprocessor,
           word_encoders,
           decoder,
-          use_embedding_batch_norm=True,
+          use_embedding_batch_norm=False,
           seed=42,
           data_seed=None,
-          sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z])",
-          sentence_balance_chars=('()', '[]'),
-          sentence_entity_overlap="raise",
 
           init_labels_bias=True,
-          batch_size=16,
-          top_lr=1e-4,
-          main_lr=1e-4,
+          batch_size=24,
+          top_lr=1.5e-3,
+          main_lr=1.5e-3,
           bert_lr=4e-5,
           gradient_clip_val=5.,
           warmup_rate=0.1,
           use_lr_schedules=True,
-          optimizer_cls=torch.optim.Adam
+          optimizer_cls=transformers.AdamW
     ):
         """
 
@@ -461,15 +473,6 @@ class NER(PytorchLightningBase):
             Seed for the model weights
         :param data_seed: int
             Seed for the data shuffling
-        :param sentence_split_regex: str
-            Regex used to split sentences.
-            Ex: "(\n([ ]*\n)*)" will split on newlines / spaces, and not keep these tokens in the sentences, because they are matched in a captured group
-        :param sentence_balance_chars: tuple of str
-            Characters to "balance" when splitting sentence, ex: parenthesis, brackets, etc.
-            Will make sure that we always have (number of '[')  <= (number of ']')
-        :param sentence_entity_overlap: str
-            What to do when a entity overlaps multiple sentences ?
-            Choices: "raise" to raise an error or "split" to split the entity
         :param init_labels_bias: bool
             Initialize the labels bias vector with log frequencies of the labels in the dataset
         :param batch_size: int
@@ -491,13 +494,12 @@ class NER(PytorchLightningBase):
         """
         super().__init__()
 
+        monkey_patch()
+
         if data_seed is None:
             data_seed = seed
         self.seed = seed
         self.data_seed = data_seed
-        self.sentence_balance_chars = sentence_balance_chars
-        self.sentence_split_regex = sentence_split_regex
-        self.sentence_entity_overlap = sentence_entity_overlap
         self.train_metric = PrecisionRecallF1Metric(prefix="train_")
         self.val_metric = PrecisionRecallF1Metric(prefix="val_")
         self.test_metric = PrecisionRecallF1Metric(prefix="test_")
@@ -567,11 +569,7 @@ class NER(PytorchLightningBase):
                 self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
 
     def preprocess(self, data, split='train'):
-        if self.sentence_split_regex is not None:
-            data = sentencize(data, self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
-
-        data = list(itertools.chain(*self.preprocessor(data)))
-        return data
+        return list(self.preprocessor(data, chain=True))
 
     def forward(self, inputs, return_loss=False):
         self.last_inputs = inputs
@@ -644,33 +642,29 @@ class NER(PytorchLightningBase):
         ]))
         return optimizer
 
-    def predict(self, data):
-        for doc in data:
-            if self.sentence_split_regex is not None:
-                sentences = sentencize([doc], self.sentence_split_regex, balance_chars=self.sentence_balance_chars, multi_sentence_entities=self.sentence_entity_overlap)
-            else:
-                sentences = (doc,)
-            doc_entities = []
-            for batch in batchify(zip(sentences, self.preprocessor(sentences, only_text=True)), self.batch_size):
-                batch_sentences, prep = zip(*batch)
-                results = self(prep)
-                for sentence_entities, sentence, prep_sample in zip(results["preds"], batch_sentences, prep):
-                    sentence_begin = sentence["begin"] if "begin" in sentence else 0
-                    for begin, end, label in sentence_entities:
-                        begin = prep_sample["words_begin"][begin]
-                        end = prep_sample["words_end"][end]
-                        doc_entities.append({
-                            "entity_id": len(doc_entities),
-                            "fragments": [{
-                                              "begin": begin + sentence_begin,
-                                              "end": end + sentence_begin,
-                                          } if "begin" in sentence else {"begin": begin, "end": end}],
-                            "label": self.preprocessor.vocabularies["label"].values[label]
-                        })
-            yield {
-                "doc_id": doc["doc_id"],
-                "text": doc["text"],
-                "entities": doc_entities,
-            }
+    @mappable
+    def predict(self, doc):
+        doc_entities = []
+        for batch in batchify(self.preprocessor(doc, only_text=True), self.batch_size):
+            results = self(batch)
+            for sentence_entities, prep_sample in zip(results["preds"], batch):
+                sentence = prep_sample["original"]
+                sentence_begin = sentence["begin"] if "begin" in sentence else 0
+                for begin, end, label in sentence_entities:
+                    begin = prep_sample["words_begin"][begin]
+                    end = prep_sample["words_end"][end]
+                    doc_entities.append({
+                        "entity_id": len(doc_entities),
+                        "fragments": [{
+                                          "begin": begin + sentence_begin,
+                                          "end": end + sentence_begin,
+                                      } if "begin" in sentence else {"begin": begin, "end": end}],
+                        "label": self.preprocessor.vocabularies["label"].values[label]
+                    })
+        return {
+            "doc_id": doc["doc_id"],
+            "text": doc["text"],
+            "entities": doc_entities,
+        }
 
     save_pretrained = save_pretrained
