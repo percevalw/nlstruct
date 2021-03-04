@@ -372,7 +372,7 @@ class Preprocessor(torch.nn.Module):
 
             # if the sentence has too many tokens, split it
             if len(bert_tokens['word']) > self.max_tokens:
-                warnings.warn(f'Sentences > {self.max_tokens} tokens will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
+                warnings.warn('Sentences > {self.max_tokens} tokens will be split with option large_sentence="{self.large_sentences}". Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
                 if self.large_sentences == "equal-split":
                     stop_bert_token = len(bert_tokens['word']) // ceil(len(bert_tokens['word']) / self.max_tokens)
                 elif self.large_sentences == "max-split":

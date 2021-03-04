@@ -294,7 +294,7 @@ def slice_document(doc, begin, end, entity_overlap='raise'):
                     if entity_overlap == "raise":
                         raise OverlappingEntityException(
                             "Entity {} spans more than one sentence in document {}. "
-                            "Use multi_sentence_entities='split' to handle such cases.".format(
+                            "Use sentence_entity_overlap='split' in preprocessor to handle such cases.".format(
                                 repr(doc["text"][min_begin:max_end]), doc["doc_id"]))
                     else:
                         new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - begin, 0), sentence_size),
