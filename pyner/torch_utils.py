@@ -174,6 +174,7 @@ def load_pretrained(path, map_location=None):
     loaded = torch.load(path, map_location=map_location)
     instance = get_instance(loaded["config"])
     instance.load_state_dict(loaded["state_dict"])
+    instance.eval()
     return instance
 
 
