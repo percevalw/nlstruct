@@ -129,7 +129,7 @@ trainer = pl.Trainer(
     max_epochs=10)
 dataset = BRATDataset(
     train="path/to/brat/train",
-    test="path/to/brat/test",
+    test="path/to/brat/test",    # None for training only, test directory otherwise
     val=0.2,  # first 20% doc will be for validation
     seed=False,  # don't shuffle before splitting
 )
