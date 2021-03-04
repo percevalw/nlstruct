@@ -28,9 +28,10 @@ model = NER(
             #("(?<=[a-zA-Z])(?=[0-9])", r" "), # insert a space between letters and numbers
             #("(?<=[0-9])(?=[A-Za-z])", r" "), # insert a space between numbers and letters
         ),
-        max_tokens=512, # split when sentences contain more than 512 tokens
-        large_sentences="equal-split", # for these large sentences, split them in equal sub sentences < 512 tokens 
-        empty_entities="raise", # when an entity cannot be mapped to any word, raise
+        max_tokens=512,         # Maximum number of tokens in a sentence (will split if more than this number)
+                                # Must be equal to or lower than the max number of tokens in the Bert model
+        large_sentences="equal-split", # for these large sentences, split them in equal sub sentences < max_tokens tokens 
+        empty_entities="raise", # when an entity cannot be mapped to any word, "raise" or "drop"
         vocabularies=torch.nn.ModuleDict({ # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
             "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
             "label": Vocabulary(with_unk=False, with_pad=False),
