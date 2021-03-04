@@ -20,7 +20,7 @@ model = NER(
         bert_name=bert_name, # transformer name
         sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z-])", # regex to use to split sentences (must not contain consuming patterns)
         sentence_balance_chars=('()',), # try to avoid splitting between parentheses
-        sentence_entity_overlap="raise", # raise when an entity spans more than one sentence
+        sentence_entity_overlap="raise", # raise when an entity spans more than one sentence, or use "split" to split entities in 2 when this happens
         word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
         substitutions=( # Apply these regex substitutions on sentences before tokenizing
             (r"(?<=[{}\\])(?![ ])".format(string.punctuation), r" "), # insert a space before punctuations
