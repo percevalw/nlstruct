@@ -25,65 +25,36 @@ if "registry" not in globals():
     registry = {}
 
 
-def set_closure_variable(fn, name, new_obj):
-    def dummy():
-        return new_obj
-
-    new_closure = list(fn.__closure__ or ())
-    if name in fn.__code__.co_freevars:
-        new_closure[fn.__code__.co_freevars.index(name)] = dummy.__closure__[0]
-        code = fn.__code__
-    else:
-        c = fn.__code__
-        code = types.CodeType(c.co_argcount, c.co_kwonlyargcount, c.co_nlocals,
-                       c.co_stacksize, c.co_flags, c.co_code, c.co_consts, c.co_names,
-                       c.co_varnames, c.co_filename, c.co_name, c.co_firstlineno,
-                       c.co_lnotab, c.co_freevars + ('__class__',), c.co_cellvars)
-        new_closure.append(dummy.__closure__[0])
-
-    return types.FunctionType(
-        code,
-        fn.__globals__,
-        fn.__name__,
-        fn.__defaults__,
-        tuple(new_closure),
-    )
-
-
 def register(name, do_not_serialize=()):
     def fn(cls):
-        mro = list(cls.mro()[1:])
-        torch_index = mro.index(torch.nn.Module)
-        mro[torch_index + 1:torch_index + 1] = [SerializableModule]
-        new_cls = type(cls.__name__, tuple(mro), dict(cls.__dict__))
-        new_cls._do_not_serialize_ = do_not_serialize
-        new_cls.__init__ = set_closure_variable(cls.__init__, '__class__', new_cls)
-        new_cls.forward = set_closure_variable(cls.forward, '__class__', new_cls)
-        new_cls.__hash__ = torch.nn.Module.__hash__
-        new_cls.registry_name = name
+        class new_cls(cls, Mapping):
+            registry_name = name
+            _do_not_serialize_ = do_not_serialize
+
+            def __new__(cls, *args, **kwargs):
+                self = super().__new__(cls)
+                args = inspect.getcallargs(cls.__init__, self, *args, **kwargs)
+                for arg, value in args.items():
+                    if arg != "self" and arg not in self._do_not_serialize_ and not arg.startswith('_') and not hasattr(self, arg):
+                        self.__dict__[arg] = value
+                return self
+
+            def __len__(self):
+                return len(get_config(self))
+
+            def __iter__(self):
+                return iter(get_config(self))
+
+            def __hash__(self):
+                return torch.nn.Module.__hash__(self)
+
+            def __getitem__(self, item):
+                return get_config(self)[item]
+        new_cls.__name__ = cls.__name__
         registry[name] = new_cls
         return new_cls
 
     return fn
-
-
-class SerializableModule(Mapping):
-    def __new__(cls, *args, **kwargs):
-        self = super().__new__(cls)
-        args = inspect.getcallargs(cls.__init__, self, *args, **kwargs)
-        for arg, value in args.items():
-            if arg != "self" and arg not in self._do_not_serialize_ and not arg.startswith('_') and not hasattr(self, arg):
-                self.__dict__[arg] = value
-        return self
-
-    def __len__(self):
-        return len(get_config(self))
-
-    def __iter__(self):
-        return iter(get_config(self))
-
-    def __getitem__(self, item):
-        return get_config(self)[item]
 
 
 def get_module(name):
@@ -203,6 +174,7 @@ def load_pretrained(path, map_location=None):
     loaded = torch.load(path, map_location=map_location)
     instance = get_instance(loaded["config"])
     instance.load_state_dict(loaded["state_dict"])
+    instance.eval()
     return instance
 
 
