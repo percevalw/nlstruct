@@ -1,6 +1,6 @@
 import os
 
-from pyner.dataloaders.brat import BRATDataset
+from pyner.datasets.brat import BRATDataset
 
 
 class DEFT(BRATDataset):

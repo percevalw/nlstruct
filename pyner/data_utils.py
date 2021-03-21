@@ -5,7 +5,6 @@ from copy import copy
 
 import numpy as np
 from unidecode import unidecode
-import warnings
 
 import functools
 import textwrap
@@ -131,7 +130,7 @@ class StatefulChain():
         self.current = state["current"]
 
     def __next__(self):
-        if len(self.current) == 0:
+        while len(self.current) == 0:
             self.current = next(self.data)
         [res, *self.current] = self.current
         return res
@@ -276,20 +275,22 @@ class loop:
 class OverlappingEntityException(Exception):
     pass
 
-def slice_document(doc, begin, end, entity_overlap='raise'):
+def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None):
     assert entity_overlap in ("raise", "split")
     absolute_begin = doc.get("begin", 0)
     new_entities = []
     sentence_size = end - begin
-    if "entities" in doc:
+    if "entities" in doc and not only_text:
         for entity in doc["entities"]:
             min_begin = min(fragment["begin"] for fragment in entity["fragments"])
             max_end = max(fragment["end"] for fragment in entity["fragments"])
             if min_begin < end and begin < max_end:
                 if begin <= min_begin and max_end <= end:
-                    new_entities.append({**entity, "fragments": [{"begin": fragment["begin"] - begin,
-                                                                   "end": fragment["end"] - begin}
-                                                                  for fragment in entity["fragments"]]})
+                    new_entities.append({**entity, "fragments": [
+                        {**fragment,
+                         "begin": fragment["begin"] - begin,
+                         "end": fragment["end"] - begin}
+                        for fragment in entity["fragments"]]})
                 else:
                     if entity_overlap == "raise":
                         raise OverlappingEntityException(
@@ -297,10 +298,13 @@ def slice_document(doc, begin, end, entity_overlap='raise'):
                             "Use sentence_entity_overlap='split' in preprocessor to handle such cases.".format(
                                 repr(doc["text"][min_begin:max_end]), doc["doc_id"]))
                     else:
-                        new_entities.append({**entity, "fragments": [{"begin": min(max(fragment["begin"] - begin, 0), sentence_size),
-                                                                       "end": max(min(fragment["end"] - begin, sentence_size), 0)}
-                                                                      for fragment in entity["fragments"]
-                                                                      if fragment["begin"] <= end and begin <= fragment["end"]]})
+                        new_fragments = [{**fragment,
+                                          "begin": min(max(fragment["begin"] - begin, 0), sentence_size),
+                                          "end": max(min(fragment["end"] - begin, sentence_size), 0)}
+                                         for fragment in entity["fragments"]
+                                         if fragment["begin"] < end and begin < fragment["end"]]
+                        if len(new_fragments) and main_fragment_label is None or any(f.get("label", "main") == main_fragment_label for f in new_fragments):
+                            new_entities.append({**entity, "fragments": new_fragments})
     return {
         **doc,
         "doc_id": doc["doc_id"] + "/{}-{}".format(absolute_begin + begin, absolute_begin + end),
@@ -312,7 +316,7 @@ def slice_document(doc, begin, end, entity_overlap='raise'):
 
 
 @mappable
-def sentencize(doc, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=('()', '[]'), multi_sentence_entities="raise", chain=False):
+def sentencize(doc, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=(), multi_sentence_entities="raise"):
     for begin, end in regex_sentencize(doc["text"], reg_split=reg_split, balance_chars=balance_chars):
         yield slice_document(doc, begin, end, multi_sentence_entities=multi_sentence_entities)
 
@@ -397,7 +401,7 @@ def split_spans(span_begins, span_ends, token_begins, token_ends):
     return new_begins, new_ends
 
 
-def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, do_unidecode=True, **kwargs):
+def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, do_unidecode=True, space_token=None, **kwargs):
     deltas = None
     if do_unidecode:
         text, deltas = run_unidecode(text, return_deltas=return_offsets_mapping)
@@ -412,7 +416,7 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
             begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
 
         words = tokenizer.convert_ids_to_tokens(res['input_ids'])
-    except NotImplementedError as e:
+    except NotImplementedError:
         special_tokens = [t for token in tokenizer.special_tokens_map.values() for t in ((token,) if isinstance(token, str) else token)]
         special_tokens += ["▁", "##", "</w>"]
         i = 0
@@ -440,6 +444,9 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
             token_id += 1
         words = words.tolist()
 
+    if space_token is not None:
+        ends = [(e if token != space_token else b) for b, e, token in zip(begins, ends, words)]
+
     # Apply substitutions on tokens
     if deltas is not None and len(deltas.begins):
         dc = DeltaCollection(deltas.begins, deltas.ends, deltas.deltas)
@@ -447,9 +454,9 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
         ends = dc.unapply(np.asarray(ends), side="right").tolist()
 
     return {
-        "begin": begins,
-        "end": ends,
-        "word": words,
+        "begin": np.asarray(begins),
+        "end": np.asarray(ends),
+        "text": words,
     }
 
 
@@ -471,9 +478,8 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
 
     for match in re.finditer(reg, text):
         tokens.append(match.group())
-        if return_offsets_mapping:
-            begins.append(match.start())
-            ends.append(match.end())
+        begins.append(match.start())
+        ends.append(match.end())
         token_id += 1
 
     # Apply substitutions on tokens
@@ -483,9 +489,9 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
         ends = dc.unapply(np.asarray(ends), side="right").tolist()
 
     return {
-        "begin": begins,
-        "end": ends,
-        "word": tokens,
+        "begin": np.asarray(begins),
+        "end": np.asarray(ends),
+        "text": tokens,
     }
 
 

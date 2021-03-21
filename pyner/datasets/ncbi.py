@@ -2,7 +2,7 @@ import zipfile
 
 from sklearn.datasets._base import RemoteFileMetadata
 
-from pyner.dataloaders.base import NetworkLoadMode, ensure_files, NormalizationDataset
+from pyner.datasets.base import NetworkLoadMode, ensure_files, NormalizationDataset
 
 
 class NCBI(NormalizationDataset):

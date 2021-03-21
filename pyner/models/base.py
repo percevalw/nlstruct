@@ -1,94 +1,87 @@
+import functools
 import inspect
-import types
-from collections import Mapping
+import textwrap
+from collections import namedtuple, Mapping
+from copy import deepcopy
 
 import pytorch_lightning as pl
 import torch
 import transformers
 
+from pyner.data_utils import loop
 from pyner.torch_utils import einsum, fork_rng
+from .registry import registry
 
-if "registry" not in globals():
-    registry = {}
-
-
-def set_closure_variable(fn, name, new_obj):
-    def dummy():
-        return new_obj
-
-    new_closure = list(fn.__closure__ or ())
-    if name in fn.__code__.co_freevars:
-        new_closure[fn.__code__.co_freevars.index(name)] = dummy.__closure__[0]
-        code = fn.__code__
-    else:
-        c = fn.__code__
-        code = types.CodeType(c.co_argcount, c.co_kwonlyargcount, c.co_nlocals,
-                              c.co_stacksize, c.co_flags, c.co_code, c.co_consts, c.co_names,
-                              c.co_varnames, c.co_filename, c.co_name, c.co_firstlineno,
-                              c.co_lnotab, c.co_freevars + ('__class__',), c.co_cellvars)
-        new_closure.append(dummy.__closure__[0])
-
-    return types.FunctionType(
-        code,
-        fn.__globals__,
-        fn.__name__,
-        fn.__defaults__,
-        tuple(new_closure),
-    )
+RandomGeneratorState = namedtuple('RandomGeneratorState',
+                                  ['random', 'torch', 'numpy', 'torch_cuda'])
 
 
 def register(name, do_not_serialize=()):
     def fn(cls):
-        mro = list(cls.mro()[1:])
-        torch_index = mro.index(torch.nn.Module)
-        mro[torch_index + 1:torch_index + 1] = [SerializableModule]
-        new_cls = type(cls.__name__, tuple(mro), dict(cls.__dict__))
-        new_cls._do_not_serialize_ = do_not_serialize
-        new_cls.__init__ = set_closure_variable(cls.__init__, '__class__', new_cls)
-        new_cls.forward = set_closure_variable(cls.forward, '__class__', new_cls)
-        new_cls.__hash__ = torch.nn.Module.__hash__
-        new_cls.registry_name = name
+        class new_cls(cls, Mapping):
+            registry_name = name
+            _do_not_serialize_ = do_not_serialize
+            __doc__ = None
+
+            def __init__(self, *args, **kwargs):
+                kwargs.pop("module", None)
+                super().__init__(*args, **kwargs)
+
+            functools.update_wrapper(__init__, cls.__init__)
+            if __init__.__doc__ is not None:
+                __init__.__doc__ = textwrap.dedent(__init__.__doc__.strip("\n"))
+            functools.update_wrapper(cls.__call__, cls.forward)
+
+            def __new__(cls, *args, **kwargs):
+                module = kwargs.pop("module", None)
+                if module is not None:
+                    arg_cls = get_module(module)
+                    assert issubclass(arg_cls, cls), f"{arg_cls.__name__} is not a subclass of {cls.__name__}"
+                    cls = arg_cls
+                self = super().__new__(cls)
+                args = inspect.getcallargs(cls.__init__, self, *args, **kwargs)
+                for arg, value in args.items():
+                    if arg != "self" and not arg.startswith('_') and not hasattr(self, arg):
+                        self.__dict__[arg] = value
+                return self
+
+            def __len__(self):
+                return len(get_config(self))
+
+            def __iter__(self):
+                return iter(get_config(self))
+
+            def __hash__(self):
+                return torch.nn.Module.__hash__(self)
+
+            def __getitem__(self, item):
+                return get_config(self)[item]
+
+        new_cls.__name__ = cls.__name__
         registry[name] = new_cls
         return new_cls
 
     return fn
 
 
-class SerializableModule(Mapping):
-    def __new__(cls, *args, **kwargs):
-        self = super().__new__(cls)
-        args = inspect.getcallargs(cls.__init__, self, *args, **kwargs)
-        for arg, value in args.items():
-            if arg != "self" and arg not in self._do_not_serialize_ and not arg.startswith('_') and not hasattr(self, arg):
-                self.__dict__[arg] = value
-        return self
-
-    def __len__(self):
-        return len(get_config(self))
-
-    def __iter__(self):
-        return iter(get_config(self))
-
-    def __getitem__(self, item):
-        return get_config(self)[item]
-
-
 def get_module(name):
     return registry[name]
 
 
-def get_instance(kwargs, defaults={}):
+def get_instance(kwargs):
+    if isinstance(kwargs, torch.nn.Module):
+        return deepcopy(kwargs)
     if not isinstance(kwargs, dict):
         return kwargs
-    kwargs = {**defaults, **kwargs}
-    module = kwargs.pop("module")
+    kwargs = dict(kwargs)
+    module = kwargs["module"]
     return get_module(module)(**kwargs)
 
 
-def get_config(self, path=()):
+def get_config(self, path=(), drop_unserialized_keys=False):
     config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
     for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
-        if key.startswith('_'):
+        if key.startswith('_') or (drop_unserialized_keys and key in self.__class__._do_not_serialize_):
             continue
         value = getattr(self, key)
         if hasattr(value, 'to_diff_dict'):
@@ -96,14 +89,14 @@ def get_config(self, path=()):
         elif hasattr(value, 'to_dict'):
             config[key] = value.to_dict()
         elif isinstance(value, torch.nn.ModuleList):
-            config[key] = {i: get_config(item) for i, item in enumerate(value)}
+            config[key] = {i: get_config(item, drop_unserialized_keys=drop_unserialized_keys) for i, item in enumerate(value)}
         elif isinstance(value, torch.nn.ModuleDict):
-            config[key] = {name: get_config(item, path=(*path, key)) for name, item in value.items()}
+            config[key] = {name: get_config(item, path=(*path, key), drop_unserialized_keys=drop_unserialized_keys) for name, item in value.items()}
         elif isinstance(value, torch.nn.Module):
-            config[key] = get_config(value)
+            config[key] = get_config(value, drop_unserialized_keys=drop_unserialized_keys)
         elif isinstance(value, torch.Tensor):
             pass
-        elif isinstance(value, (int, float, str, tuple, list, dict)):
+        elif isinstance(value, (int, float, str, tuple, list, dict, slice, range)):
             config[key] = value
         elif value is None:
             config[key] = None
@@ -119,12 +112,18 @@ def identity(x):
 
 
 class DummyIterableDataset(torch.utils.data.IterableDataset):
-    def __init__(self, data):
+    def __init__(self, data, epoch_length=None):
         super().__init__()
-        self.data = data
+        self.data = iter(data)
+        self.epoch_length = epoch_length
 
     def __iter__(self):
-        return iter(self.data)
+        return self.data
+
+    def __len__(self):
+        if self.epoch_length is not None:
+            return self.epoch_length
+        raise AttributeError()
 
 
 class PytorchLightningBase(pl.LightningModule):
@@ -133,23 +132,45 @@ class PytorchLightningBase(pl.LightningModule):
         def fn():
             if getattr(self, 'train_data', None) is None:
                 return None
-            prep = self.preprocess(self.train_data, split="train")
             with fork_rng(self.data_seed):
-                return (
-                    torch.utils.data.DataLoader(prep, shuffle=True, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
-                    else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+                prep = self.preprocess(self.train_data, split="train")
+                batch_size = getattr(self, 'step_batch_size', self.batch_size)
+                non_default_epoch_length = (
+                    self.trainer.val_check_interval * batch_size
+                    if getattr(self, 'trainer', None) is not None and self.trainer.val_check_interval is not None
+                    else None
+                )
+                if hasattr(prep, '__getitem__') and non_default_epoch_length is None:
+                    return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=batch_size, collate_fn=identity)
+                elif non_default_epoch_length is not None and hasattr(prep, '__len__'):
+                    prep = loop(prep, shuffle=True)
+                    return torch.utils.data.DataLoader(
+                        DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
+                else:
+                    return torch.utils.data.DataLoader(
+                        DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
 
         return fn
+
+    def transfer_batch_to_device(self, inputs, device):
+        return inputs
 
     @property
     def val_dataloader(self):
         def fn():
             if getattr(self, 'val_data', None) is None:
                 return None
-            prep = self.preprocess(self.val_data, split="val")
-            return (
-                torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
-                else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+            with fork_rng(self.data_seed):
+                prep = self.preprocess(self.val_data, split="val")
+                batch_size = self.batch_size
+                if hasattr(prep, '__getitem__'):
+                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
+                else:
+                    return torch.utils.data.DataLoader(
+                        DummyIterableDataset(prep, None),
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
 
         return fn
 
@@ -158,10 +179,15 @@ class PytorchLightningBase(pl.LightningModule):
         def fn():
             if getattr(self, 'test_data', None) is None:
                 return None
-            prep = self.preprocess(self.test_data, split="test")
-            return (
-                torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity) if hasattr(prep, '__getitem__')
-                else torch.utils.data.DataLoader(DummyIterableDataset(prep), shuffle=False, batch_size=self.batch_size, collate_fn=identity))
+            with fork_rng(self.data_seed):
+                prep = self.preprocess(self.test_data, split="test")
+                batch_size = self.batch_size
+                if hasattr(prep, '__getitem__'):
+                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
+                else:
+                    return torch.utils.data.DataLoader(
+                        DummyIterableDataset(prep, None),
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
 
         return fn
 
@@ -192,7 +218,8 @@ def save_pretrained(self, filename):
 def load_pretrained(path, map_location=None):
     loaded = torch.load(path, map_location=map_location)
     instance = get_instance(loaded["config"])
-    instance.load_state_dict(loaded["state_dict"])
+    instance.load_state_dict(loaded["state_dict"], strict=False)
+    instance.eval()
     return instance
 
 
@@ -218,7 +245,7 @@ class Vocabulary(torch.nn.Module):
     def values(self):
         return list(self.inversed.keys())
 
-    def __getitem__(self, obj):
+    def get(self, obj):
         if self.training:
             return self.inversed.setdefault(obj, len(self.inversed))
         res = self.inversed.get(obj, None)
@@ -264,7 +291,7 @@ class CharCNNWordEncoder(torch.nn.Module):
         return embeds[batch["@words_id"]].rename(None)
 
 
-@register("rezero")
+@register("rezero_gate")
 class ReZeroGate(torch.nn.Module):
     def __init__(self, init_value=1e-3, dim=None, ln_mode="post"):
         super().__init__()

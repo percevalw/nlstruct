@@ -8,7 +8,7 @@ from itertools import chain
 from sklearn.datasets._base import RemoteFileMetadata
 
 from pyner.data_utils import sentencize
-from pyner.dataloaders.base import NetworkLoadMode, ensure_files, NERDataset
+from pyner.datasets.base import NetworkLoadMode, ensure_files, NERDataset
 
 
 class GENIA(NERDataset):

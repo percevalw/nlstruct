@@ -2,7 +2,7 @@ import os
 import random
 import re
 
-from pyner.dataloaders.base import NERDataset
+from pyner.datasets.base import NERDataset
 
 REGEX_ENTITY = re.compile('^(T\d+)\t([^ ]+)([^\t]+)\t(.*)$')
 REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')

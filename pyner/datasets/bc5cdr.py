@@ -1,6 +1,6 @@
 import os
 
-from pyner.dataloaders.base import NormalizationDataset
+from pyner.datasets.base import NormalizationDataset
 
 
 class BC5CDR(NormalizationDataset):

@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from pyner.dataloaders.base import Terminology
+from pyner.datasets.base import Terminology
 import pandas as pd
 
 
