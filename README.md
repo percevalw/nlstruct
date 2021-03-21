@@ -5,7 +5,7 @@ Named entity recognition (nested or not) in Python
 ### How to train
 
 ```python
-from pyner import NER, Vocabulary
+from pyner import ExhaustiveBiaffineNER, Vocabulary
 from pyner.datasets import BRATDataset
 import string
 import torch
@@ -13,7 +13,7 @@ import pytorch_lightning as pl
 from rich_logger import RichTableLogger
 
 bert_name = "camembert/camembert-base"
-model = NER(
+model = ExhaustiveBiaffineNER(
     seed=42,
     preprocessor=dict(
         module="preprocessor",
@@ -37,6 +37,7 @@ model = NER(
             "label": Vocabulary(with_unk=False, with_pad=False),
         }).train(),
     ),
+    dynamic_preprocessing=False,
 
     # Word encore parameters
     word_encoders=[
@@ -58,21 +59,20 @@ model = NER(
     
     # Decoder parameters
     decoder=dict(
-        module="exhaustive_biaffine_ner",
+        module="exhaustive_biaffine_ner_decoder",
         dim=192,
         label_dim=64,
         n_labels=None, # automatically inferred from data
         dropout_p=0.,
-        use_batch_norm=False,
         contextualizer=dict(
             module="lstm",
             # use gate = False for better performance but slower convergence (needs ~50 epochs)
             gate=dict(
                 module="sigmoid_gate",
                 ln_mode="pre",
+                dim=192,
                 init_value=0,
                 proj=False,
-                dim=192,
             ),
             input_size=768 + 150,
             hidden_size=192,
@@ -99,7 +99,7 @@ model = NER(
     
     # Optimizer, can be class or str
     optimizer_cls="transformers.AdamW",
-).train()
+)
 
 flt_format = (5, "{:.4f}".format)
 trainer = pl.Trainer(
@@ -190,6 +190,7 @@ def objective(trial):
                 "label": Vocabulary(with_unk=False, with_pad=False),
             }).train(),
         ),
+        dynamic_preprocessing=False,
     
         # Word encore parameters
         word_encoders=[
@@ -211,12 +212,11 @@ def objective(trial):
         
         # Decoder parameters
         decoder=dict(
-            module="exhaustive_biaffine_ner",
+            module="exhaustive_biaffine_ner_decoder",
             dim=trial.suggest_int("decoder/dim", 128, 256, 32),
             label_dim=trial.suggest_int("decoder/label_dim", 32, 128, 16),
             n_labels=None, # automatically inferred from data
             dropout_p=trial.suggest_int("decoder/dropout_p", 0, 0.4, step=0.05),
-            use_batch_norm=False,
             contextualizer=dict(
                 module="lstm",
                 gate=False,
