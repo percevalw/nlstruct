@@ -242,7 +242,6 @@ class Vocabulary(torch.nn.Module):
         self.eval()
 
     def train(self, mode=True):
-        print("training")
         return super().train()
 
     @property

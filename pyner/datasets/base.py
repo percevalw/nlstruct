@@ -14,6 +14,7 @@ from sklearn.datasets._base import _sha256
 from tqdm import tqdm
 from unidecode import unidecode
 import warnings
+from ..data_utils import mix, loop
 
 
 class NetworkLoadMode(enum.Enum):
@@ -434,3 +435,22 @@ class NormalizationDataset(NERDataset):
                             if label_as_semantic_type:
                                 concept_type[concept] = entity["label"]
         return Terminology(concept_synonym_pairs=concept_synonyms, concept_semantic_types=concept_type, **kwargs)
+
+
+class MixDataset(BaseDataset):
+    def __init__(self, datasets, rates=None):
+        super().__init__()
+        self.datasets = datasets
+        self.rates = rates if rates is not None else [1 / len(datasets) for _ in datasets]
+
+    @property
+    def train_data(self):
+        return mix(*[loop(d.train_data, shuffle=True) for d in self.datasets if d.train_data is not None], rates=self.rates)
+
+    @property
+    def val_data(self):
+        return list(chain.from_iterable([d.val_data for d in self.datasets if d.val_data is not None]))
+
+    @property
+    def test_data(self):
+        return list(chain.from_iterable([d.test_data for d in self.datasets if d.test_data is not None]))

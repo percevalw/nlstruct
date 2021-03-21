@@ -1,3 +1,4 @@
+from pyner.datasets.base import MixDataset
 from pyner.datasets.brat import BRATDataset, load_from_brat, export_to_brat
 from pyner.datasets.deft import DEFT
 from pyner.datasets.genia import GENIA
