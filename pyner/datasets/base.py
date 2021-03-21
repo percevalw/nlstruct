@@ -13,6 +13,7 @@ import torch
 from sklearn.datasets._base import _sha256
 from tqdm import tqdm
 from unidecode import unidecode
+import warnings
 
 
 class NetworkLoadMode(enum.Enum):
@@ -90,7 +91,7 @@ class Terminology:
                  do_unidecode=False,
                  subs=()):
         self.concept_synonyms = dict(concept_synonym_pairs)
-        if do_unidecode or len(subs):
+        if do_unidecode or len(subs) or synonym_preprocess_fn is not None:
             res = {}
             for concept, synonyms in tqdm(self.concept_synonyms.items(), desc="Preprocessing synonyms"):
                 concept_res = []
@@ -146,12 +147,15 @@ class Terminology:
 
     def map_concept(self, concept, missing='raise'):
         try:
+            if concept in self.concept_synonyms:
+                return concept
             return self.concept_mapping[concept]
         except KeyError:
             pass
         if missing == "raise":
             raise KeyError(f"Could not find concept mapping for {concept}")
         if missing == "null":
+            warnings.warn("Missing concept: {}".format(concept))
             return None
 
     def get_concept_semantic_type(self, concept, missing='raise'):
@@ -200,17 +204,29 @@ class Terminology:
 
     def __or__(self, other):
         concept_synonym_pairs = defaultdict(lambda: {})
+        concept_mapping = {**self.concept_mapping, **other.concept_mapping}
+        concept_semantic_types = {}
 
         for cui, synonyms in other.concept_synonyms.items():
+            if cui == "OMIM:153400":
+                print(cui, synonyms,concept_mapping.get(cui, cui))
+            cui = concept_mapping.get(cui, cui)
             concept_synonym_pairs[cui].update(dict.fromkeys(synonyms))
+            sty = other.concept_semantic_types.get(cui, None)
+            if sty is not None:
+                concept_semantic_types[cui] = sty
 
         for cui, synonyms in self.concept_synonyms.items():
+            if cui == "OMIM:153400":
+                print(cui, synonyms,concept_mapping.get(cui, cui))
+            cui = concept_mapping.get(cui, cui)
             concept_synonym_pairs[cui].update(dict.fromkeys(synonyms))
-
-        concept_semantic_types = {**self.concept_semantic_types, **other.concept_semantic_types}
+            sty = self.concept_semantic_types.get(cui, None)
+            if sty is not None:
+                concept_semantic_types[cui] = sty
 
         return Terminology({concept: list(syns) for concept, syns in concept_synonym_pairs.items()},
-                           concept_mapping={**self.concept_mapping, **other.concept_mapping},
+                           concept_mapping=concept_mapping,
                            concept_semantic_types=concept_semantic_types,
                            build_synonym_concepts_mapping=self.synonym_concepts is not None and other.synonym_concepts is not None)
 
@@ -335,7 +351,7 @@ class NormalizationDataset(NERDataset):
         if not inplace:
             return new_self
 
-    def map_concepts(self, terminology, mode=True, unmappable_concepts="raise", inplace=False):
+    def map_concepts(self, terminology, mode=True, unmappable_concepts="raise", inplace=False, deduplicate=True):
         new_splits = {}
         if unmappable_concepts == "raise":
             missing = "raise"
@@ -367,6 +383,8 @@ class NormalizationDataset(NERDataset):
                             else:
                                 text = " ".join([doc["text"][frag["begin"]:frag["end"]] for frag in entity["fragments"]])
                                 new_concept = tuple(text if new_part is None else new_part for new_part in new_concept)
+                        if deduplicate:
+                            new_concept = list(dict.fromkeys(new_concept))
                     else:
                         new_concept = fn(entity["concept"])
                         if unmappable_concepts == "drop" and new_concept is None:
@@ -388,3 +406,31 @@ class NormalizationDataset(NERDataset):
         new_self.test_data = new_splits["test"]
         if not inplace:
             return new_self
+
+    def to_terminology(self, splits=['train'], label_as_semantic_type=False, multi_concepts="drop", **kwargs):
+        concept_synonyms = defaultdict(lambda: [])
+        concept_type = dict()
+        for docs, split in ((self.train_data, 'train'), (self.val_data, 'val'), (self.test_data, 'test')):
+            if split in splits:
+                for doc in docs:
+                    for entity in doc["entities"]:
+                        if isinstance(entity["concept"], (list, tuple)) and len(entity["concept"]) > 1:
+                            if multi_concepts == "drop":
+                                continue
+                            elif hasattr(multi_concepts, '__call__'):
+                                text, split_entities = multi_concepts(doc["text"], entity)
+                                original_begin = entity["fragments"][0]["begin"]
+                                if len(split_entities) == len(entity["concept"]):
+                                    for composite_entity in split_entities:
+                                        entity_text = " ".join(text[fragment["begin"]-original_begin:fragment["end"]-original_begin] for fragment in composite_entity["fragments"])
+                                        concept = composite_entity["concept"]
+                                        concept_synonyms[concept].append(entity_text)
+                                        if label_as_semantic_type:
+                                            concept_type[concept] = composite_entity["label"]
+                        else:
+                            concept = entity["concept"] if isinstance(entity["concept"], str) else entity["concept"][0]
+                            entity_text = " ".join(doc["text"][fragment["begin"]:fragment["end"]] for fragment in entity["fragments"])
+                            concept_synonyms[concept].append(entity_text)
+                            if label_as_semantic_type:
+                                concept_type[concept] = entity["label"]
+        return Terminology(concept_synonym_pairs=concept_synonyms, concept_semantic_types=concept_type, **kwargs)
