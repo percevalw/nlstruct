@@ -378,7 +378,7 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
                 self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
 
     def preprocess(self, data, split='train'):
-        if self.dynamic_preprocessing:
+        if not self.dynamic_preprocessing:
             assert has_len(data), "Data must have finite length to perform preprocessing before training"
             return list(self.preprocessor(data, chain=True))
         return self.preprocessor(data, chain=True)
