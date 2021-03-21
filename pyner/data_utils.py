@@ -385,6 +385,7 @@ def split_spans(span_begins, span_ends, token_begins, token_ends):
           ((token_begins != token_ends) &
            ((token_begins < span_ends) & (span_begins < token_ends))) |
           ((token_begins == token_ends) &
+           ((token_begins > span_begins) & (token_ends < span_ends)) |
            ((token_begins == span_begins) & (token_ends == span_ends)))
     )
     token_span_overlap = np.concatenate([token_span_overlap, np.zeros_like(token_span_overlap[:, [-1]])], axis=1)
@@ -457,7 +458,7 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
         "begin": np.asarray(begins),
         "end": np.asarray(ends),
         "text": words,
-    }
+    } if return_offsets_mapping else {"text": words}
 
 
 def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_offsets_mapping=False, do_unidecode=True, lower=False, subs=()):
@@ -478,8 +479,9 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
 
     for match in re.finditer(reg, text):
         tokens.append(match.group())
-        begins.append(match.start())
-        ends.append(match.end())
+        if return_offsets_mapping:
+            begins.append(match.start())
+            ends.append(match.end())
         token_id += 1
 
     # Apply substitutions on tokens
@@ -492,7 +494,7 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
         "begin": np.asarray(begins),
         "end": np.asarray(ends),
         "text": tokens,
-    }
+    } if return_offsets_mapping else {"text": tokens}
 
 
 def regex_sentencize(text, reg_split, balance_chars=('()', '[]')):

@@ -1,3 +1,4 @@
+import warnings
 from importlib import import_module
 from math import ceil
 
@@ -31,7 +32,6 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
             self.weight,
             self.bias,
             *self.ff.parameters(),
-            *(self.batch_norm.parameters() if self.batch_norm is not None else ()),
         ]
 
     def forward(self, features, batch, return_loss=False):
@@ -41,8 +41,6 @@ class ExhaustiveBiaffineNERDecoder(torch.nn.Module):
         if self.contextualizer is not None:
             features = self.contextualizer(features, mask)
 
-        if self.batch_norm is not None:
-            features = self.batch_norm(features, mask)
         features = F.relu(self.ff(self.dropout(features)))
         start_features, end_features = features.rearrange("... (n_labels label_dim bounds) -> ... n_labels label_dim bounds", n_labels=self.n_labels, bounds=2).unbind("bounds")
 
@@ -167,21 +165,29 @@ class Preprocessor(torch.nn.Module):
             if not sample["text"][begin:end].strip():
                 continue
             sentence = slice_document(sample, begin, end, entity_overlap=self.sentence_entity_overlap)
-            bert_tokens = huggingface_tokenize(sentence["text"].lower() if self.bert_lower else sentence["text"], tokenizer=self.tokenizer, subs=self.substitutions, do_unidecode=self.do_unidecode)
+            bert_tokens = huggingface_tokenize(sentence["text"].lower() if self.bert_lower else sentence["text"],
+                                               tokenizer=self.tokenizer,
+                                               subs=self.substitutions,
+                                               do_unidecode=self.do_unidecode,
+                                               return_offsets_mapping=True)
             if self.word_regex is not None:
-                words = regex_tokenize(sentence["text"], reg=self.word_regex, subs=self.substitutions, do_unidecode=self.do_unidecode)
+                words = regex_tokenize(sentence["text"],
+                                       reg=self.word_regex,
+                                       subs=self.substitutions,
+                                       do_unidecode=self.do_unidecode,
+                                       return_offsets_mapping=True)
             else:
                 words = bert_tokens
-            tokens_indice = self.tokenizer.convert_tokens_to_ids(bert_tokens["word"])
+            tokens_indice = self.tokenizer.convert_tokens_to_ids(bert_tokens["text"])
             words_bert_begin, words_bert_end = split_spans(words["begin"], words["end"], bert_tokens["begin"], bert_tokens["end"])
             words_bert_begin, words_bert_end = words_bert_begin.tolist(), words_bert_end.tolist()
 
             # if the sentence has too many tokens, split it
-            if len(bert_tokens['word']) > self.max_tokens:
+            if len(bert_tokens["text"]) > self.max_tokens:
                 warnings.warn(
-                    'Sentences > {self.max_tokens} tokens will be split with option large_sentence="{self.large_sentences}". Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
+                    f'Sentences > {self.max_tokens} tokens will be split with option large_sentence="{self.large_sentences}". Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
                 if self.large_sentences == "equal-split":
-                    stop_bert_token = len(bert_tokens['word']) // ceil(len(bert_tokens['word']) / self.max_tokens)
+                    stop_bert_token = len(bert_tokens["text"]) // ceil(len(bert_tokens["text"]) / self.max_tokens)
                 elif self.large_sentences == "max-split":
                     stop_bert_token = self.max_tokens
                 else:
@@ -191,7 +197,7 @@ class Preprocessor(torch.nn.Module):
                 continue
 
             # Here, we know that the sentence is not too long
-            words_chars = [[self.vocabularies["char"].get(char) for char in word] for word, word_bert_begin in zip(words["word"], words_bert_begin) if word_bert_begin != -1]
+            words_chars = [[self.vocabularies["char"].get(char) for char in word] for word, word_bert_begin in zip(words["text"], words_bert_begin) if word_bert_begin != -1]
             if not only_text and "entities" in sentence and len(sentence["entities"]):
                 entities_begin, entities_end, entities_label, entities_id = map(list, zip(*[[fragment["begin"], fragment["end"], entity["label"], entity["entity_id"] + "/" + str(i)]
                                                                                             for entity in sentence["entities"] for i, fragment in enumerate(entity["fragments"])]))
@@ -218,7 +224,7 @@ class Preprocessor(torch.nn.Module):
                 "tokens": tokens_indice,
                 "tokens_mask": [True] * len(tokens_indice),
                 "words_mask": [True] * len(words_chars),
-                "words": words["word"],
+                "words": words["text"],
                 "words_id": [sentence["doc_id"] + "-" + str(i) for i in range(len(words_chars))],
                 "words_chars": words_chars,
                 "words_chars_mask": [[True] * len(word_chars) for word_chars in words_chars],
@@ -252,7 +258,6 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
           preprocessor,
           word_encoders,
           decoder,
-          use_embedding_batch_norm=False,
           seed=42,
           data_seed=None,
 
@@ -264,6 +269,7 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
           gradient_clip_val=5.,
           warmup_rate=0.1,
           use_lr_schedules=True,
+          dynamic_preprocessing=False,
           optimizer_cls=transformers.AdamW
     ):
         """
@@ -274,8 +280,6 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
             Word encoders module parameters
         :param decoder: dict
             Decoder module parameters
-        :param use_embedding_batch_norm: bool
-            Apply batch norm on features computed from word_encoders ?
         :param seed: int
             Seed for the model weights
         :param data_seed: int
@@ -320,14 +324,13 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
         self.warmup_rate = warmup_rate
         self.batch_size = batch_size
         self.optimizer_cls = getattr(import_module(optimizer_cls.rsplit(".", 1)[0]), optimizer_cls.rsplit(".", 1)[1]) if isinstance(optimizer_cls, str) else optimizer_cls
+        self.dynamic_preprocessing = dynamic_preprocessing
 
         self.preprocessor = get_instance(preprocessor)
 
         # Init postponed to setup
         self.word_encoders = word_encoders if isinstance(word_encoders, list) else word_encoders.values()
-        self.embedding_batch_norm = None
         self.decoder = decoder
-        self.use_embedding_batch_norm = use_embedding_batch_norm
 
         if not any(voc.training for voc in self.preprocessor.vocabularies.values()):
             self.init_modules()
@@ -375,16 +378,17 @@ class ExhaustiveBiaffineNER(PytorchLightningBase):
                 self.decoder.bias.data = (torch.log(frequencies) - torch.log1p(frequencies)).to(self.decoder.bias.data.device)
 
     def preprocess(self, data, split='train'):
-        return list(self.preprocessor(data, chain=True))
+        if self.dynamic_preprocessing:
+            assert has_len(data), "Data must have finite length to perform preprocessing before training"
+            return list(self.preprocessor(data, chain=True))
+        return self.preprocessor(data, chain=True)
 
     def forward(self, inputs, return_loss=False):
         self.last_inputs = inputs
         device = next(self.parameters()).device
         input_tensors = self.preprocessor.tensorize(inputs, device=device)
-        embeds = torch.cat([word_encoder(input_tensors).rename("sample", "word", "dim") for word_encoder in self.word_encoders], dim="dim")
+        embeds = torch.cat([word_encoder(input_tensors).rename("sample", "text", "dim") for word_encoder in self.word_encoders], dim="dim")
 
-        if self.embedding_batch_norm is not None:
-            embeds = self.embedding_batch_norm(embeds, input_tensors["words_mask"].rename("sample", "word"))
         results = self.decoder(embeds, input_tensors, return_loss=return_loss)
         preds = [[] for _ in range(len(embeds))]
         for doc_id, begin, end, label in zip(results["doc_ids"].tolist(), results["begins"].tolist(), results["ends"].tolist(), results["labels"].tolist()):

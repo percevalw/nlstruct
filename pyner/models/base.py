@@ -134,23 +134,24 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.train_data, split="train")
-                batch_size = getattr(self, 'step_batch_size', self.batch_size)
                 non_default_epoch_length = (
-                    self.trainer.val_check_interval * batch_size
-                    if getattr(self, 'trainer', None) is not None and self.trainer.val_check_interval is not None
+                    self.trainer.val_check_interval * self.batch_size
+                    if getattr(self, 'trainer', None) is not None
+                       and self.trainer.val_check_interval is not None
+                       and self.trainer.max_steps is not None
                     else None
                 )
                 if hasattr(prep, '__getitem__') and non_default_epoch_length is None:
-                    return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=batch_size, collate_fn=identity)
+                    return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=self.batch_size, collate_fn=identity)
                 elif non_default_epoch_length is not None and hasattr(prep, '__len__'):
                     prep = loop(prep, shuffle=True)
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
-                        shuffle=False, batch_size=batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
                 else:
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
-                        shuffle=False, batch_size=batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
 
         return fn
 
@@ -164,13 +165,12 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.val_data, split="val")
-                batch_size = self.batch_size
                 if hasattr(prep, '__getitem__'):
-                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
+                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity)
                 else:
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, None),
-                        shuffle=False, batch_size=batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
 
         return fn
 
@@ -240,6 +240,10 @@ class Vocabulary(torch.nn.Module):
         values = (["__pad__"] if with_pad and "__pad__" not in values else []) + (["__unk__"] if with_unk and "__unk__" not in values else []) + list(values)
         self.inversed = {v: i for i, v in enumerate(values)}
         self.eval()
+
+    def train(self, mode=True):
+        print("training")
+        return super().train()
 
     @property
     def values(self):
@@ -311,7 +315,7 @@ class ReZeroGate(torch.nn.Module):
 
 @register("sigmoid_gate")
 class SigmoidGate(torch.nn.Module):
-    def __init__(self, dim, init_value=1e-3, proj=False, ln_mode="post"):
+    def __init__(self, init_value=1e-3, dim=None, ln_mode="post", proj=False):
         super().__init__()
         if proj:
             self.linear = torch.nn.Linear(dim, 1)
@@ -386,7 +390,7 @@ class LSTMContextualizer(torch.nn.Module):
                 get_instance(gate)
                 for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
-            torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
+            torch.nn.LSTM(input_size=dim, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
             for dim in [hidden_size] * num_layers
         ])
 
