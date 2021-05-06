@@ -59,7 +59,6 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                     begins_ends = sorted([(int(s.split()[0]), int(s.split()[1])) for s in span.split(';')])
 
                                     for begin, end in begins_ends:
-                                        # begin, end = int(s.split()[0]), int(s.split()[1])
                                         # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
                                         # multiple fragments for a entity that spans over more than one line)
                                         if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
@@ -71,7 +70,6 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                         })
                                         fragment_i += 1
                                         last_end = end
-                                    # entities[ann_id]["fragments"] = sorted(entities[ann_id]["fragments"], key=lambda f:f['begin'])
                                 elif line.startswith('A'):
                                     REGEX_ATTRIBUTE = re.compile('^(A\d+)\t(.+)$')
                                     match = REGEX_ATTRIBUTE.match(line)
