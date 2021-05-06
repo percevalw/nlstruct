@@ -275,7 +275,7 @@ class loop:
 class OverlappingEntityException(Exception):
     pass
 
-def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None):
+def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None, offset_indices=True):
     assert entity_overlap in ("raise", "split")
     absolute_begin = doc.get("begin", 0)
     new_entities = []
@@ -284,12 +284,13 @@ def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', mai
         for entity in doc["entities"]:
             min_begin = min(fragment["begin"] for fragment in entity["fragments"])
             max_end = max(fragment["end"] for fragment in entity["fragments"])
+            offset = begin if offset_indices else 0
             if min_begin < end and begin < max_end:
                 if begin <= min_begin and max_end <= end:
                     new_entities.append({**entity, "fragments": [
                         {**fragment,
-                         "begin": fragment["begin"] - begin,
-                         "end": fragment["end"] - begin}
+                         "begin": fragment["begin"] - offset,
+                         "end": fragment["end"] - offset}
                         for fragment in entity["fragments"]]})
                 else:
                     if entity_overlap == "raise":
@@ -299,8 +300,8 @@ def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', mai
                                 repr(doc["text"][min_begin:max_end]), doc["doc_id"]))
                     else:
                         new_fragments = [{**fragment,
-                                          "begin": min(max(fragment["begin"] - begin, 0), sentence_size),
-                                          "end": max(min(fragment["end"] - begin, sentence_size), 0)}
+                                          "begin": min(max(fragment["begin"] - offset, 0), sentence_size),
+                                          "end": max(min(fragment["end"] - offset, sentence_size), 0)}
                                          for fragment in entity["fragments"]
                                          if fragment["begin"] < end and begin < fragment["end"]]
                         if len(new_fragments) and main_fragment_label is None or any(f.get("label", "main") == main_fragment_label for f in new_fragments):
@@ -316,9 +317,11 @@ def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', mai
 
 
 @mappable
-def sentencize(doc, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=(), multi_sentence_entities="raise"):
+def sentencize(doc, reg_split=r"(?<=[.])(?:\s+)(?=[A-Z])", balance_chars=(), only_text=False, entity_overlap="raise", main_fragment_label=None):
+    sentences = []
     for begin, end in regex_sentencize(doc["text"], reg_split=reg_split, balance_chars=balance_chars):
-        yield slice_document(doc, begin, end, multi_sentence_entities=multi_sentence_entities)
+        sentences.append(slice_document(doc, begin, end, entity_overlap=entity_overlap, only_text=only_text, main_fragment_label=main_fragment_label))
+    return sentences
 
 
 def reshape_variable_sequences(sequences, indices_map):
@@ -413,8 +416,11 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
     ends = []
     try:
         res = tokenizer.encode_plus(text, return_offsets_mapping=return_offsets_mapping, **kwargs)
-        if 'offset_mapping' in res:
-            begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
+        if 'offset_mapping' in res:# and kwargs.get("add_special_tokens", True):
+            if kwargs.get("add_special_tokens", True):
+                begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
+            else:
+                begins, ends = zip(*res['offset_mapping'])
 
         words = tokenizer.convert_ids_to_tokens(res['input_ids'])
     except NotImplementedError:
