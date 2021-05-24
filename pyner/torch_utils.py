@@ -1,6 +1,7 @@
 import functools
 import random
 import re
+import math
 from collections import defaultdict, Sequence
 from collections import namedtuple
 from contextlib import contextmanager
@@ -38,6 +39,7 @@ def list_factorize(values, reference_values=None, freeze_reference=None):
 
 def get_nested_properties(nested, dtype=None):
     max_depth = 0
+
     def explore(obj):
         nonlocal dtype
         if isinstance(obj, Sequence) and not isinstance(obj, str):
@@ -57,6 +59,7 @@ def get_nested_properties(nested, dtype=None):
     n_depth = explore(nested)[0] - 1
     return n_depth, dtype
 
+
 def pad_to_tensor(y, dtype=None, device=None, pad=0):
     n_depth, dtype = get_nested_properties(y, dtype=dtype)
 
@@ -65,15 +68,19 @@ def pad_to_tensor(y, dtype=None, device=None, pad=0):
 
     def find_max_len(obj, depth=0):
         if depth >= n_depth:
-            return (len(obj),)
-        return (len(obj), *(max(l) for l in zip_longest(*[find_max_len(item, depth + 1) for item in obj], fillvalue=0)))
+            return ((len(obj), True),)
+        # print(list(zip(*[find_max_len(item, depth+1) for item in obj])))
+        return ((len(obj), True), *((max(all_lengths), len(set(all_lengths)) == 1 and all(all_is_unique))
+                                    for zipped_by_depth in zip_longest(*[find_max_len(item, depth + 1) for item in obj], fillvalue=(0, True))
+                                    for all_lengths, all_is_unique in (zip(*zipped_by_depth),)))
 
-    max_len = find_max_len(y)
+    max_len, is_unique = zip(*find_max_len(y))
 
     block_sizes = [1]
     for l in max_len[::-1]:
         block_sizes.insert(0, block_sizes[0] * l)
     [total, *block_sizes] = block_sizes
+    n_depth = n_depth - (is_unique[::-1].index(False) if False in is_unique else n_depth)
 
     array = torch.full((total,), fill_value=pad, dtype=dtype)
 
@@ -81,7 +88,8 @@ def pad_to_tensor(y, dtype=None, device=None, pad=0):
         for i, obj in enumerate(sequence):
             current_idx = parent_idx + i * block_sizes[depth]
             if depth + 1 >= n_depth:
-                array[current_idx:current_idx + len(obj)] = torch.as_tensor(obj, dtype=dtype, device=device)
+                obj = torch.as_tensor(obj, dtype=dtype, device=device).view(-1)
+                array[current_idx:current_idx + obj.numel()] = obj
             else:
                 flat_rec(obj, current_idx, depth + 1)
 
@@ -100,17 +108,20 @@ def batch_to_tensors(batch, dtypes={}, ids_mapping={}, device=None, pad=0):
         for key, rows in batch.items():
             pad_value = pad.get(key, 0) if isinstance(pad, dict) else pad
             dtype = dtypes.get(key, None)
-            if dtype is None:
-                dtype = get_nested_properties(rows)[1]
-            if dtype is None and key.endswith("_id"):
-                reference_id = ids_mapping.get(key, None)
-                factorized_rows = list_factorize(rows, reference_values=batch[reference_id] if reference_id is not None else None)[0]
-                result['@' + key] = pad_to_tensor(factorized_rows, device=device, pad=pad_value)
-                result[key] = rows
-            elif dtype is None:
-                result[key] = rows
+            if rows is None or all(row is None for row in rows):
+                result[key] = None
             else:
-                result[key] = pad_to_tensor(rows, dtype=dtype, device=device, pad=pad_value)
+                if dtype is None:
+                    dtype = get_nested_properties(rows)[1]
+                if dtype is None and key.endswith("_id"):
+                    reference_id = ids_mapping.get(key, None)
+                    factorized_rows = list_factorize(rows, reference_values=batch[reference_id] if reference_id is not None else None)[0]
+                    result['@' + key] = pad_to_tensor(factorized_rows, device=device, pad=pad_value)
+                    result[key] = rows
+                elif dtype is None:
+                    result[key] = rows
+                else:
+                    result[key] = pad_to_tensor(rows, dtype=dtype, device=device, pad=pad_value)
     except (ValueError, IndexError) as e:
         raise Exception(f"Error during padding of {key}")
     return result
@@ -143,13 +154,13 @@ def einsum(*tensors):
         ",".join("".join(ascii_letters[i - 1] if i > 0 else '...' for i in part) for part in before_indices),
         "".join(ascii_letters[i - 1] if i > 0 else '...' for i in after_indices)
     )
-    res = torch.einsum(expr, *(t.rename(None) for t in tensors))
+    res = torch.einsum(expr, *(t for t in tensors))
     if '...' in after:
         ellipsis_names = next(infer_names(tensor, before_item, only_ellipsis=True) for tensor, before_item in zip(tensors, before))
         new_names = tuple(after[:after.index('...')]) + ellipsis_names + tuple(after[after.index('...') + 1:])
     else:
         new_names = after
-    return res.refine_names(*new_names)
+    return res #.refine_names(*new_names)
 
 
 def complete_expr(*tensors, dims=()):
@@ -186,12 +197,12 @@ def complete_expr(*tensors, dims=()):
 
 def rearrange(tensor, expr, *args, **kwargs):
     expr, new_names, _ = complete_expr(tensor, expr)
-    return ops.rearrange(tensor.rename(None), expr, *args, **kwargs).refine_names(*new_names)
+    return ops.rearrange(tensor, expr, *args, **kwargs) #.refine_names(*new_names)
 
 
 def reduce(tensor, expr, *args, **kwargs):
     expr, new_names, _ = complete_expr(tensor, expr)
-    return ops.reduce(tensor.rename(None), expr, *args, **kwargs).refine_names(*new_names)
+    return ops.reduce(tensor, expr, *args, **kwargs) #.refine_names(*new_names)
 
 
 def wrap_repeat():
@@ -205,7 +216,7 @@ def wrap_repeat():
         elif isinstance(expr, int):
             return fn(self, expr, *args, **kwargs)
         expr, new_names, _ = complete_expr(self, expr)
-        return ops.repeat(self.rename(None), expr, *args, **kwargs).refine_names(*new_names)
+        return ops.repeat(self, expr, *args, **kwargs) #.refine_names(*new_names)
 
     repeat.back = fn
     torch.Tensor.repeat = repeat
@@ -222,31 +233,56 @@ def einsum(*tensors, **kwargs):
         ",".join("".join(ascii_letters[i - 1] if i > 0 else '...' for i in part) for part in before_indices),
         "".join(ascii_letters[i - 1] if i > 0 else '...' for i in after_indices)
     )
-    res = torch.einsum(expr, *(t.rename(None) for t in tensors))
-    return res.refine_names(*new_names)
+    res = torch.einsum(expr, *(t for t in tensors))
+    return res #.refine_names(*new_names)
 
 
 def bce_with_logits(input, target, **kwargs):
     dim = input.shape[-1]
-    res = F.binary_cross_entropy_with_logits(input.rename(None).reshape(-1, dim), target.float().rename(None).reshape(-1, dim), **kwargs)
-    if kwargs.get('reduction', 'mean') == 'none':
-        res = res.view(input.shape).rename(*input.names)
+    names = input.names
+    input = input
+    target = target.float()
+
+    max_val = (-input).clamp_min(0);
+    pos_weight = kwargs.get('pos_weight', None)
+    weight = kwargs.get('weight', None)
+    if pos_weight is not None:
+        # pos_weight need to be broadcasted, thus mul(target) is not inplace.
+        log_weight = ((pos_weight - 1) * target) + 1;
+        loss = ((1 - target) * input) + (log_weight * ((((-max_val).exp() + ((-input - max_val).exp())).log()) + max_val));
+    else:
+        loss = ((1 - target) * input) + (max_val) + (((-max_val).exp() + ((-input - max_val).exp())).log());
+
+    if weight is not None:
+        loss = loss * weight;
+
+    # res = F.binary_cross_entropy_with_logits(input.reshape(-1, dim), target.float().reshape(-1, dim), **kwargs)
+    reduction = kwargs.get('reduction', 'mean')
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    else:
+        assert reduction == 'none'
+        return loss
+        # res = res.view(input.shape).rename(*input.names)
     return res
 
+
 def nll(input, target, **kwargs):
-    dim = input.shape[-1]
-    res = F.nll_loss(input.rename(None).reshape(-1, dim), target.float().rename(None).reshape(-1, dim), **kwargs)
+    size = input.shape[-1]
+    res = F.nll_loss(input.reshape(-1, size), target.reshape(-1), **kwargs)
     if kwargs.get('reduction', 'mean') == 'none':
-        res = res.view(input.shape).rename(*input.names)
+        res = res.view(target.shape)
     return res
+
 
 def cross_entropy_with_logits(input, target, **kwargs):
     dim = input.shape[-1]
-    res = F.cross_entropy(input.rename(None).reshape(-1, dim), target.rename(None).reshape(-1), **kwargs)
+    res = F.cross_entropy(input.reshape(-1, dim), target.reshape(-1), **kwargs)
     if kwargs.get('reduction', 'mean') == 'none':
-        res = res.view(target.shape).rename(*target.names)
+        res = res.view(target.shape)
     return res
-
 
 
 def pad(tensor, expr='...', value=0, **kwargs):
@@ -256,17 +292,17 @@ def pad(tensor, expr='...', value=0, **kwargs):
     min_dim_to_pad = min(dims_to_pad)
     padding = [item for i in range(tensor.ndim - 1, min_dim_to_pad - 1, -1) for item in dims_to_pad.get(i, (0, 0))]
     if tensor.shape[-1] == 0:
-        padding = ([0, 0] * (tensor.ndim - len(padding)//2)) + list(reversed(padding))
+        padding = ([0, 0] * (tensor.ndim - len(padding) // 2)) + list(reversed(padding))
         new_shape = list(tensor.shape)
         for i, p in enumerate(padding):
-            new_shape[i//2] += p
+            new_shape[i // 2] += p
         new_tensor = torch.full(new_shape, fill_value=value, device=tensor.device)
         new_tensor[tuple(
             slice(before, before + size)
             for before, size in zip(padding[::2], tensor.shape)
         )] = tensor
         return new_tensor
-    return F.pad(tensor.rename(None), padding, value=value).refine_names(*tensor.names)
+    return F.pad(tensor, padding, value=value) #.refine_names(*tensor.names)
 
 
 def wrap_unary_op(op_name):
@@ -276,12 +312,12 @@ def wrap_unary_op(op_name):
 
     def wrapper(self, dim=None):
         if dim is None:
-            return fn(self.rename(None))
+            return fn(self)
         names = list(self.names)
         if dim in self.names:
             dim = self.names.index(dim)
         names.pop(dim)
-        return fn(self.rename(None), dim).rename(*names)
+        return fn(self, dim)
 
     wrapper.back = fn
     setattr(torch.Tensor, op_name, wrapper)
@@ -295,7 +331,7 @@ def wrap_bin_op(op_name):
     def wrapper(self, other):
         if hasattr(other, 'names') and hasattr(self, 'names') and None not in self.names and None not in other.names:
             other = other.rearrange(" ".join(name if name in other.names else name + "=1" for name in self.names))
-            return fn(self.rename(None), other.rename(None)).rename(*self.names)
+            return fn(self, other)
         else:
             return fn(self, other)
 
@@ -312,7 +348,7 @@ def wrap_argsort():
         names = list(self.names)
         if dim in self.names:
             dim = self.names.index(dim)
-        return fn(self.rename(None), dim).rename(*names)
+        return fn(self, dim)
 
     argsort.back = fn
     torch.Tensor.argsort = argsort
@@ -327,8 +363,8 @@ def wrap_sort():
         names = list(self.names)
         if dim in self.names:
             dim = self.names.index(dim)
-        values, indices = fn(self.rename(None), dim)
-        return values.rename(*names), indices.rename(*names)
+        values, indices = fn(self, dim)
+        return values, indices
 
     sort.back = fn
     torch.Tensor.sort = sort
@@ -340,7 +376,7 @@ def wrap_nonzero():
         fn = fn.back
 
     def nonzero(self, *args, **kwargs):
-        return fn(self.rename(None), *args, **kwargs)
+        return fn(self, *args, **kwargs)
 
     nonzero.back = fn
     torch.Tensor.nonzero = nonzero
@@ -352,10 +388,10 @@ def wrap_setitem():
         fn = fn.back
 
     def __setitem__(self, index, other):
-        index = index.rename(None) if torch.is_tensor(index) else index
-        other = other.rename(None) if torch.is_tensor(other) else other
+        index = index if torch.is_tensor(index) else index
+        other = other if torch.is_tensor(other) else other
         names = self.names
-        self = self.rename(None)
+        self = self
         if not isinstance(index, tuple):
             index = index,
         fn(self, index, other)
@@ -392,7 +428,7 @@ def wrap_getitem():
                     else:
                         assert set(index.names) <= set(self.names), "Index names must exist in indexed tensor: tensor = {}, index = {} ".format(self_names, index_names)
                     names = (index.names[-1], *self.names[index.ndim:])
-                    index = index.rename(None)
+                    index = index
                 else:
                     index = index,
             elif isinstance(index, int):
@@ -415,11 +451,11 @@ def wrap_getitem():
                     elif isinstance(item, slice):
                         last_names.append(name)
                 names = tuple(first_names + last_names)
-                index = tuple(item.rename(None) if torch.is_tensor(item) else item for item in index)
+                index = tuple(item if torch.is_tensor(item) else item for item in index)
             if not isinstance(index, tuple):
                 index = index,
-            self = self.rename(None)
-            self = fn.__get__(self)(index).rename(*names)
+            self = self
+            self = fn.__get__(self)(index)
             if new_names is not None:
                 self = self.align_to(*new_names)
             return self
@@ -431,7 +467,7 @@ def wrap_getitem():
 
 
 def one_hot(tensor, num_classes, new_name):
-    return F.one_hot(tensor.rename(None), num_classes).rename(*tensor.names, new_name)
+    return F.one_hot(tensor, num_classes).rename(*tensor.names, new_name)
 
 
 def wrap_masked_fill():
@@ -442,7 +478,7 @@ def wrap_masked_fill():
     def masked_fill(self, mask, value):
         if hasattr(mask, 'names') and hasattr(self, 'names') and None not in self.names and None not in mask.names:
             tensor_names = [name for name in self.names if name not in mask.names] + list(mask.names)
-            return fn(self.align_to(*tensor_names).rename(None), mask.rename(None), value).rename(*tensor_names).align_to(*self.names)
+            return fn(self.align_to(*tensor_names), mask, value).rename(*tensor_names).align_to(*self.names)
         else:
             return fn(self, mask, value)
 
@@ -459,9 +495,21 @@ def smart_gather(tensor, index, dim):
     common = [name for name in tensor.names if name in index.names]
     missing_tensor = [name for name in tensor.names if name not in common and name != dim]
     missing_index = [name for name in index.names if name not in common]
-    tensor = tensor.align_to(*common, dim, *missing_tensor).rename(None)
-    index = index.align_to(*common, *missing_index).rename(None)
+    tensor = tensor.align_to(*common, dim, *missing_tensor)
+    index = index.align_to(*common, *missing_index)
     return tensor[tuple([arange_at_dim(dim, i, index.ndim) for i, dim in enumerate(tensor.shape[:len(common)])]) + (index,)].rename(*common, *missing_index, *missing_tensor)
+
+
+def gather(tensor, index, dim):
+    def arange_at_dim(n, dim, ndim):
+        view = [1] * ndim
+        view[dim] = -1
+        return torch.arange(n, device=tensor.device).view(view)
+
+    dim = (dim + tensor.ndim) % tensor.ndim
+    indices = [(arange_at_dim(size, i, index.ndim) if i != dim else index)
+               for i, size in enumerate(tensor.shape)]
+    return tensor[tuple(indices)]
 
 
 def repeat_like(tensor, other):
@@ -472,6 +520,97 @@ def repeat_like(tensor, other):
         if other_dim != self_dim:
             n_repeats[other_name] = other_dim // (self_dim if self_dim is not None else 1)
     return tensor.repeat(" ".join(other.names), **n_repeats)
+
+
+def multi_dim_triu(x, diagonal=0):
+    return x.masked_fill(~torch.ones(x.shape[-2], x.shape[-1], dtype=torch.bool, device=x.device).triu(diagonal=diagonal), 0)
+
+
+def multi_dim_topk(x, topk, mask=None):
+    flat = x.masked_fill(~mask, -1000000).reshape(x.shape[0], -1)
+    actual_top_k = min(topk, mask.reshape(mask.shape[0], -1).sum(1).max().item())
+    top_values, flat_top_indices = flat.topk(actual_top_k, dim=-1)
+    top_indices = []
+    for dim_size in reversed(x.shape[1:]):
+        top_indices.insert(0, flat_top_indices % dim_size)
+        flat_top_indices = flat_top_indices // dim_size
+    if mask is not None:
+        top_mask = mask[(torch.arange(len(mask)).unsqueeze(1), *top_indices)][:, :actual_top_k]
+        return top_indices, top_mask
+    return top_indices
+
+
+def log1mexp(a):
+    # log (1 - exp(x))
+    return torch.where(a < math.log(.5), torch.log1p(-a.exp()), (-torch.expm1(a)).log())
+
+
+def shift(x, dim, n):
+    shape = list(x.shape)
+    shape[dim] = abs(n)
+
+    slices = [slice(None)] * x.ndim
+    slices[dim] = slice(n, None) if n >= 0 else slice(None, n)
+    pad = torch.zeros(*shape, dtype=x.dtype, device=x.device)
+    x = torch.cat(([pad] if n > 0 else []) + [x] + ([pad] if n < 0 else []), dim=dim).roll(dims=dim, shifts=n)
+    return x[tuple(slices)]
+
+
+def identity(x):
+    return x
+
+
+def get_activation_fn(activation):
+    """Return an activation function given a string"""
+    if activation == "relu":
+        return F.relu
+    if activation == "gelu":
+        return F.gelu
+    if activation == "glu":
+        return F.glu
+    if activation == None:
+        return identity
+    raise RuntimeError(F"activation should be relu/gelu/glu/None, not {activation}.")
+
+
+def masked_flip(x, mask, dim_x=-2):
+    flipped_x = torch.zeros_like(x)
+    flipped_x[mask] = x.flip(dim_x)[mask.flip(-1)]
+    return flipped_x
+
+
+from torch.cuda.amp import custom_bwd, custom_fwd
+
+
+class DifferentiableClamp(torch.autograd.Function):
+    """
+    In the forward pass this operation behaves like torch.clamp.
+    But in the backward pass its gradient is 1 everywhere, as if instead of clamp one had used the identity function.
+    """
+
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, input, min, max):
+        return input.clamp_min(min) if max is None else input.clamp_max(max) if min is None else input.clamp(min=min, max=max)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, grad_output):
+        return grad_output.clone(), None, None
+
+
+def dclamp(input, min=None, max=None):
+    """
+    Like torch.clamp, but with a constant 1-gradient.
+    :param input: The input that is to be clamped.
+    :param min: The minimum value of the output.
+    :param max: The maximum value of the output.
+    """
+    return DifferentiableClamp.apply(input, min, max)
+
+
+def repeat(t, n, dim):
+    return t.unsqueeze(dim).repeat_interleave(n, dim).view(tuple(-1 if (i - dim + t.ndim) % t.ndim == 0 else s for i, s in enumerate(t.shape)))
 
 
 def monkey_patch():
@@ -550,6 +689,8 @@ def fork_rng(seed=None, cuda=torch.cuda.is_available()):
         If `True` saves the `cuda` seed also. Getting and setting the random
         generator state can be quite slow if you have a lot of GPUs.
     """
+    if seed is True:
+        seed = random.randint(1, 2 ** 16)
     state = get_random_generator_state(cuda)
     if seed is not None:
         set_seed(seed, cuda)

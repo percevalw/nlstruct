@@ -2,8 +2,8 @@ import torch
 from pytorch_lightning.metrics import Metric
 
 from pyner.data_utils import regex_tokenize, split_spans
-from pyner.models.base import register
-from pyner.torch_utils import pad_to_tensor, einsum
+from pyner.registry import register
+from pyner.torch_utils import pad_to_tensor
 
 
 @register("precision_recall_f1")
@@ -65,11 +65,13 @@ class PrecisionRecallF1Metric(Metric):
         }
 
 
-@register("document_entity_metric")
+@register("dem")
 class DocumentEntityMetric(Metric):
     def __init__(
           self,
-          word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]',
+          word_regex=r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|}~]',
+          filter_entities=None,
+          joint_matching=False,
           binarize_label_threshold=1.,
           binarize_tag_threshold=0.5,
           eval_attributes=False,
@@ -87,6 +89,8 @@ class DocumentEntityMetric(Metric):
             dist_sync_fn=dist_sync_fn,
         )
 
+        self.joint_matching = joint_matching
+        self.filter_entities = filter_entities
         self.prefix = prefix
         self.eval_attributes = eval_attributes
         self.eval_fragments_label = eval_fragments_label
@@ -111,17 +115,23 @@ class DocumentEntityMetric(Metric):
             self.pred_count += pc
             self.gold_count += gc
 
-    def compare_two_samples(self, pred_doc, gold_doc):
+    def compare_two_samples(self, pred_doc, gold_doc, return_match_scores=False):
         assert pred_doc["text"] == gold_doc["text"]
 
-        words = regex_tokenize(gold_doc["text"], reg=self.word_regex, do_unidecode=True)
+        pred_doc_entities = [entity for entity in pred_doc["entities"]
+                             if self.filter_entities is None
+                             or any(label in self.filter_entities for label in (entity["label"] if isinstance(entity["label"], (tuple, list)) else (entity["label"],)))]
+        gold_doc_entities = [entity for entity in gold_doc["entities"]
+                             if self.filter_entities is None
+                             or any(label in self.filter_entities for label in (entity["label"] if isinstance(entity["label"], (tuple, list)) else (entity["label"],)))]
+        words = regex_tokenize(gold_doc["text"], reg=self.word_regex, do_unidecode=True, return_offsets_mapping=True)
 
         all_fragment_labels = set()
         all_entity_labels = set()
         fragments_begin = []
         fragments_end = []
         pred_entities_fragments = []
-        for entity in pred_doc["entities"]:
+        for entity in pred_doc_entities:
             all_entity_labels.update(set(entity["label"] if isinstance(entity["label"], (tuple, list)) else (entity["label"],)))
             #                                          *(("{}:{}".format(att["name"], att["label"]) for att in entity["attributes"]) if self.eval_attributes else ()))))
             pred_entities_fragments.append([])
@@ -132,7 +142,7 @@ class DocumentEntityMetric(Metric):
                 all_fragment_labels.add(fragment["label"] if self.eval_fragments_label else "main")
 
         gold_entities_fragments = []
-        for entity in gold_doc["entities"]:
+        for entity in gold_doc_entities:
             all_entity_labels.update(set(entity["label"] if isinstance(entity["label"], (tuple, list)) else (entity["label"],)))
             #                                          *(("{}:{}".format(att["name"], att["value"]) for att in entity["attributes"]) if self.eval_attributes else ()))))
             gold_entities_fragments.append([])
@@ -149,12 +159,12 @@ class DocumentEntityMetric(Metric):
             all_entity_labels = ["main"]
 
         fragments_begin, fragments_end = split_spans(fragments_begin, fragments_end, words["begin"], words["end"])
-        pred_entities_labels = [[False] * len(all_entity_labels)] * max(len(pred_doc["entities"]), 1)
-        pred_tags = [[[False] * len(words["begin"]) for _ in range(len(all_fragment_labels))] for _ in range(max(len(pred_doc["entities"]), 1))]  # n_entities * n_token_labels * n_tokens
-        gold_entities_labels = [[False] * len(all_entity_labels)] * max(len(gold_doc["entities"]), 1)
-        gold_tags = [[[False] * len(words["begin"]) for _ in range(len(all_fragment_labels))] for _ in range(max(len(gold_doc["entities"]), 1))]  # n_entities * n_token_labels * n_tokens
+        pred_entities_labels = [[False] * len(all_entity_labels)] * max(len(pred_doc_entities), 1)
+        pred_tags = [[[False] * len(words["begin"]) for _ in range(len(all_fragment_labels))] for _ in range(max(len(pred_doc_entities), 1))]  # n_entities * n_token_labels * n_tokens
+        gold_entities_labels = [[False] * len(all_entity_labels)] * max(len(gold_doc_entities), 1)
+        gold_tags = [[[False] * len(words["begin"]) for _ in range(len(all_fragment_labels))] for _ in range(max(len(gold_doc_entities), 1))]  # n_entities * n_token_labels * n_tokens
 
-        for entity_idx, (entity_fragments, entity) in enumerate(zip(pred_entities_fragments, pred_doc["entities"])):
+        for entity_idx, (entity_fragments, entity) in enumerate(zip(pred_entities_fragments, pred_doc_entities)):
             for fragment_idx, fragment in zip(entity_fragments, entity["fragments"]):
                 begin = fragments_begin[fragment_idx]
                 end = fragments_end[fragment_idx]
@@ -164,7 +174,7 @@ class DocumentEntityMetric(Metric):
             # *(("{}:{}".format(att["name"], att["label"]) for att in entity["attributes"]) if self.eval_attributes else ())]
             pred_entities_labels[entity_idx] = [label in entity_labels for label in all_entity_labels]
 
-        for entity_idx, (entity_fragments, entity) in enumerate(zip(gold_entities_fragments, gold_doc["entities"])):
+        for entity_idx, (entity_fragments, entity) in enumerate(zip(gold_entities_fragments, gold_doc_entities)):
             for fragment_idx, fragment in zip(entity_fragments, entity["fragments"]):
                 begin = fragments_begin[fragment_idx]
                 end = fragments_end[fragment_idx]
@@ -180,27 +190,35 @@ class DocumentEntityMetric(Metric):
         pred_entities_labels = pad_to_tensor(pred_entities_labels)
 
         score = 0.
-        tag_match_scores = 2 * einsum(pred_tags.float(), gold_tags.float(), "slot rationale token, entity rationale token -> slot entity") / (
-              pred_tags.float().reduce("slot rationale token -> slot entity=1", "sum") +
-              gold_tags.float().reduce("entity rationale token -> slot=1 entity", "sum")
-        )
+        tag_match_scores = 2 * torch.einsum("pkt,gkt->pg", pred_tags.float(), gold_tags.float()) / (
+              pred_tags.float().sum(-1).sum(-1).unsqueeze(1) +
+              gold_tags.float().sum(-1).sum(-1).unsqueeze(0)
+        ).clamp_min(1)
 
         if self.binarize_tag_threshold is not False:
             tag_match_scores = (tag_match_scores >= self.binarize_tag_threshold).float()
-        label_match_scores = 2 * einsum(pred_entities_labels.float(), gold_entities_labels.float(), "slot label, entity label -> slot entity") / (
-              pred_entities_labels.float().reduce("slot label -> slot entity=1", "sum") +
-              gold_entities_labels.float().reduce("entity label -> slot=1 entity", "sum")
-        )
+        label_match_scores = 2 * torch.einsum("pk,gk->pg", pred_entities_labels.float(), gold_entities_labels.float()) / (
+              pred_entities_labels.float().sum(-1).unsqueeze(1) +
+              gold_entities_labels.float().sum(-1).unsqueeze(0)
+        ).clamp_min(1)
         if self.binarize_label_threshold is not False:
             label_match_scores = (label_match_scores >= self.binarize_label_threshold).float()
         match_scores = label_match_scores * tag_match_scores
 
-        pred_count, gold_count = len(pred_doc["entities"]), len(gold_doc["entities"])
-        for pred_idx in range(min(match_scores.shape)):
+        if return_match_scores:
+            return match_scores
+
+        pred_count, gold_count = len(pred_doc_entities), len(gold_doc_entities)
+        for pred_idx in range(match_scores.shape[0]):
+            if self.joint_matching:
+                pred_idx = match_scores.max(-1).values.argmax()
+            # pred_idx = gold_scores.argmax()
             gold_idx = match_scores[pred_idx].argmax()
             best_score = max(0, match_scores[pred_idx, gold_idx])
-            score += best_score
-            match_scores[pred_idx, gold_idx] = -float('inf')
+            if best_score > 0:
+                score += best_score
+                match_scores[:, gold_idx] = 0.
+                match_scores[pred_idx, :] = 0.
         return float(score), pred_count, gold_count
 
     def compute(self):

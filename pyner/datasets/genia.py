@@ -24,8 +24,8 @@ class GENIA(NERDataset):
         ),
     }
 
-    def __init__(self, path, version="3.02p", debug=False):
-        train_data, val_data, test_data = self.download_and_extract(path, version, debug)
+    def __init__(self, path, test_split=0.1, val_split=0.1, version="3.02p", debug=False):
+        train_data, val_data, test_data = self.download_and_extract(path, version, debug, test_split=test_split, val_split=val_split)
         super().__init__(train_data, val_data, test_data)
 
     def process_xml(self, root_node, idx=0):
@@ -60,7 +60,7 @@ class GENIA(NERDataset):
             return "cell_line"
         return None
 
-    def download_and_extract(self, path, version, debug=False, raw=False, merge_composite_types=True, drop_duplicates=False):
+    def download_and_extract(self, path, version, debug=False, raw=False, merge_composite_types=True, drop_duplicates=False, test_split=0.1, val_split=0.1):
         remote = self.REMOTE_FILES[version]
         [file] = ensure_files(path, [remote], mode=NetworkLoadMode.AUTO)
         with tarfile.open(file, "r:gz") as tar:
@@ -111,21 +111,22 @@ class GENIA(NERDataset):
                 "text": text,
                 "entities": list(filter(lambda x: x["label"] is not None, (
                     {
+                        "entity_id": doc_id + "-" + str(i),
                         "fragments": [{"begin": m["begin"], "end": m["end"]}],
                         "text": m["text"],
                         **m["attrib"],
                         "label": self.agg_type(m["attrib"]["sem"], merge_composite_types=merge_composite_types) if not raw else m["attrib"]["sem"]
                     }
-                    for m in mentions
+                    for i, m in enumerate(mentions)
                     if m["attrib"].get("sem", None)
                 ))),
             })
 
-        genia_sentences = list(sentencize(genia_docs, reg_split="(\n+)", balance_chars=()))
+        genia_sentences = list(sentencize(genia_docs, reg_split="(\n+)", balance_chars=(), chain=True))
         subset = slice(None) if not debug else slice(0, 50)
-        train_sentences = genia_sentences[:int(len(genia_sentences) * 0.9)]
-        val_data = sorted(train_sentences[int(len(train_sentences) * 0.9):], key=lambda x: len(x["text"]))[subset]
-        train_data = sorted(train_sentences[:int(len(train_sentences) * 0.9)], key=lambda x: len(x["text"]))[subset]
-        test_data = sorted(genia_sentences[int(len(genia_sentences) * 0.9):], key=lambda x: len(x["text"]))
+        train_sentences = genia_sentences[:int(len(genia_sentences) * (1-test_split))]
+        val_data = sorted(train_sentences[int(len(train_sentences) * (1-val_split)):], key=lambda x: len(x["text"]))[subset]
+        train_data = sorted(train_sentences[:int(len(train_sentences) * (1-val_split))], key=lambda x: len(x["text"]))[subset]
+        test_data = sorted(genia_sentences[int(len(genia_sentences) * (1-test_split)):], key=lambda x: len(x["text"]))
 
         return train_data, val_data, test_data

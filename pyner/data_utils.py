@@ -275,7 +275,7 @@ class loop:
 class OverlappingEntityException(Exception):
     pass
 
-def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None, offset_indices=True):
+def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None, offset_spans=True):
     assert entity_overlap in ("raise", "split")
     absolute_begin = doc.get("begin", 0)
     new_entities = []
@@ -284,7 +284,7 @@ def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', mai
         for entity in doc["entities"]:
             min_begin = min(fragment["begin"] for fragment in entity["fragments"])
             max_end = max(fragment["end"] for fragment in entity["fragments"])
-            offset = begin if offset_indices else 0
+            offset = begin if offset_spans else 0
             if min_begin < end and begin < max_end:
                 if begin <= min_begin and max_end <= end:
                     new_entities.append({**entity, "fragments": [
@@ -330,12 +330,13 @@ def reshape_variable_sequences(sequences, indices_map):
 
 def make_str_from_groups(replacement, groups):
     for i, group in enumerate(groups):
-        replacement = replacement.replace(f"\\{i + 1}", group)
+        group = group or ""
+        replacement = replacement.replace(f"\\{i + 1}", group).replace(f"\\g<{i + 1}>", group)
     return replacement
 
 
 def regex_sub_with_spans(pattern, replacement, text):
-    needed_groups = [int(i) for i in re.findall(r"\\([0-9]+)", replacement)]
+    needed_groups = [int(next(j for j in i if j)) for i in re.findall(r"\\([0-9]+)|\\g<([0-9]+)>", replacement)]
     begins = []
     ends = []
     deltas = []
