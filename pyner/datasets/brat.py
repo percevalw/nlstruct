@@ -56,8 +56,9 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                     }
                                     last_end = None
                                     fragment_i = 0
-                                    for s in span.split(';'):
-                                        begin, end = int(s.split()[0]), int(s.split()[1])
+                                    begins_ends = sorted([(int(s.split()[0]), int(s.split()[1])) for s in span.split(';')])
+
+                                    for begin, end in begins_ends:
                                         # If merge_spaced_fragments, merge two fragments that are only separated by a newline (brat automatically creates
                                         # multiple fragments for a entity that spans over more than one line)
                                         if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
