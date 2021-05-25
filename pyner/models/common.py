@@ -349,7 +349,7 @@ class LSTMContextualizer(Contextualizer):
             self.gate_modules = [None] * num_layers
         else:
             self.gate_modules = torch.nn.ModuleList([
-                Gate(**{**gate, "size": hidden_size})
+                Gate(**{**gate, "input_size": hidden_size})
                 for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
             torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
