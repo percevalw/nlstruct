@@ -201,10 +201,12 @@ class BRATDataset(NERDataset):
             if len(train_data) == 0:
                 raise ValueError(f'No Brat file found in {train_source}')
         else:
-            raise ValueError("train source for BRATDataset must be str or list of str")
+            assert train_source is None
+            train_data = []
+            #raise ValueError("train source for BRATDataset must be str or list of str")
 
-        if sum(len(doc['entities']) for doc in train_data) == 0:
-            raise ValueError('No entity have been found in the training set')
+        #if sum(len(doc['entities']) for doc in train_data) == 0:
+        #    raise ValueError('No entity have been found in the training set')
 
         if train_data is not None:
             train_data = self.filter_entities(train_data, dropped_entity_label, kept_entity_label)
