@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import transformers
 
-from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans
+from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
 from pyner.models.common import register, Vocabulary, Contextualizer
 from pyner.torch_utils import list_factorize, batch_to_tensors, bce_with_logits, nll
 
@@ -27,6 +27,9 @@ def slice_tokenization_output(tokens, begin, end, insert_before=None, insert_aft
         "end": ends,
         "text": ([insert_before] if insert_before is not None else []) + list(tokens["text"][begin_indice:end_indice]) + ([insert_after] if insert_after is not None else []),
     }
+
+class LargeSentenceException(Exception):
+    pass
 
 
 @register("ner_preprocessor")
@@ -214,7 +217,8 @@ class NERPreprocessor(torch.nn.Module):
                 if empty_fragment_idx is not None:
                     if self.empty_entities == "raise":
                         raise Exception(
-                            f"Entity {sample['doc_id']}/{fragments_id[empty_fragment_idx]} could not be matched with any word (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
+                            f"Entity {sample['doc_id']}/{fragments_id[empty_fragment_idx]} could not be matched with any word"
+                            f" (is it empty or outside the text ?). Use empty_entities='drop' to ignore these cases")
                     else:
                         warnings.warn("Empty fragments (start = end or outside the text) have been skipped")
                         fragments_label = [label for label, begin in zip(fragments_label, fragments_begin) if begin != -1]
@@ -381,7 +385,7 @@ class NERPreprocessor(torch.nn.Module):
                 elif self.large_sentences == "max-split":
                     stop_bert_token = self.max_tokens
                 else:
-                    raise LargeSentenceException(repr(sentence["text"][begin:end]))
+                    raise LargeSentenceException(repr(sentence_text))
                 last_word = next(i for i in range(len(words_bert_end) - 1) if words_bert_end[i + 1] >= stop_bert_token)
                 sentences_bounds[:0] = [(begin, words["end"][last_word]), (words["begin"][last_word + 1], end)]
                 begin = None
