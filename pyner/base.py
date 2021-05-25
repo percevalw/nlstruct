@@ -345,16 +345,18 @@ class InformationExtractor(PytorchLightningBase):
 
     def validation_epoch_end(self, outputs):
         self.log_dict({
-            "val_{}_f1".format(name): metric.compute()["f1"]
+            "val_{}_{}".format(name, field): value
             for name, metric in self.metrics.items()
+            for field, value in metric.compute().items()
         })
 
     test_step = validation_step
 
     def test_epoch_end(self, outputs):
         self.log_dict({
-            "test_{}_f1".format(name): metric.compute()["f1"]
+            "test_{}_{}".format(name, field): value
             for name, metric in self.metrics.items()
+            for field, value in metric.compute().items()
         })
 
     def configure_optimizers(self):
