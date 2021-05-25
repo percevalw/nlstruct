@@ -113,12 +113,12 @@ class Gate(torch.nn.Module):
 
 @register("residual_gate")
 class ResidualGate(Gate):
-    def __init__(self, init_value=1e-3, size=None, ln_mode="post"):
+    def __init__(self, init_value=1e-3, input_size=None, ln_mode="post"):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.ones(1) * init_value)
         self.ln_mode = ln_mode
         if ln_mode is not False:
-            self.norm = torch.nn.LayerNorm(size)
+            self.norm = torch.nn.LayerNorm(input_size)
 
     def forward(self, before, after):
         if self.ln_mode == "post":
@@ -131,16 +131,16 @@ class ResidualGate(Gate):
 
 @register("sigmoid_gate")
 class SigmoidGate(Gate):
-    def __init__(self, init_value=1e-3, size=None, ln_mode="post", proj=False):
+    def __init__(self, init_value=1e-3, input_size=None, ln_mode="post", proj=False):
         super().__init__()
         if proj:
-            self.linear = torch.nn.Linear(size, 1)
+            self.linear = torch.nn.Linear(input_size, 1)
         else:
             self.weight = torch.nn.Parameter(torch.ones(1) * init_value)
 
         self.ln_mode = ln_mode
         if ln_mode is not False:
-            self.norm = torch.nn.LayerNorm(size)
+            self.norm = torch.nn.LayerNorm(input_size)
 
     def forward(self, before, after):
         gate = torch.sigmoid(self.weight if hasattr(self, 'weight') else self.linear(after))
@@ -349,7 +349,7 @@ class LSTMContextualizer(Contextualizer):
             self.gate_modules = [None] * num_layers
         else:
             self.gate_modules = torch.nn.ModuleList([
-                Gate(**{**gate, "dim": hidden_size})
+                Gate(**{**gate, "size": hidden_size})
                 for _ in range(num_layers)])
         self.lstm_layers = torch.nn.ModuleList([
             torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
