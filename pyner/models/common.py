@@ -583,3 +583,22 @@ class PositionalEncoding(torch.nn.Module):
         if hasattr(self, 'proj'):
             res = res + self.proj(res)
         return res
+
+
+class FeedForwardNetwork(torch.nn.Sequential):
+    def __init__(self, input_size, sizes, dropout_p=0.1, activation='gelu'):
+        super().__init__()
+        layers = []
+        self.dropout = torch.nn.Dropout(dropout_p)
+        for i, (s_in, s_out) in enumerate(zip((input_size, *sizes[:-1]), sizes)):
+            layers.append(torch.nn.Linear(s_in, s_out))
+        self.layers = torch.nn.ModuleList(layers)
+        self.activation_fn = get_activation_fn(activation)
+
+    def forward(self, input):
+        for i, layer in self.layers:
+            if i > 0:
+                input = self.activation_fn(input)
+            input = self.dropout(input)
+            input = layer(input)
+        return input
