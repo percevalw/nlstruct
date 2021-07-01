@@ -5,23 +5,30 @@ Named entity recognition (nested or not) in Python
 ### How to train
 
 ```python
-from pyner import ExhaustiveBiaffineNER, Vocabulary
+from pyner import InformationExtractor
 from pyner.datasets import BRATDataset
 import string
-import torch
 import pytorch_lightning as pl
 from rich_logger import RichTableLogger
 
 bert_name = "camembert/camembert-base"
-model = ExhaustiveBiaffineNER(
+dataset = BRATDataset(
+    train="path/to/brat/train",
+    test="path/to/brat/test",    # None for training only, test directory otherwise
+    val=0.2,  # first 20% doc will be for validation
+    seed=False,  # don't shuffle before splitting
+)
+model = InformationExtractor(
     seed=42,
     preprocessor=dict(
-        module="preprocessor",
+        module="ner_preprocessor",
         bert_name=bert_name, # transformer name
-        sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z-])", # regex to use to split sentences (must not contain consuming patterns)
+        bert_lower=False,
+        split_into_multiple_samples=True,
+        sentence_split_regex=r"\n", # regex to use to split sentences (must not contain consuming patterns)
         sentence_balance_chars=('()',), # try to avoid splitting between parentheses
         sentence_entity_overlap="raise", # raise when an entity spans more than one sentence, or use "split" to split entities in 2 when this happens
-        word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
+        word_regex=r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
         substitutions=( # Apply these regex substitutions on sentences before tokenizing
             (r"(?<=[{}\\])(?![ ])".format(string.punctuation), r" "), # insert a space before punctuations
             (r"(?<![ ])(?=[{}\\])".format(string.punctuation), r" "), # insert a space after punctuations
@@ -30,109 +37,123 @@ model = ExhaustiveBiaffineNER(
         ),
         max_tokens=512,         # Maximum number of tokens in a sentence (will split if more than this number)
                                 # Must be equal to or lower than the max number of tokens in the Bert model
+        min_tokens=50,  # Minimum number of tokens in a sentence
+        join_small_sentence_rate=0.9,  # How frequently do we join two sentences that are shorter than the max number of tokens
         large_sentences="equal-split", # for these large sentences, split them in equal sub sentences < max_tokens tokens 
         empty_entities="raise", # when an entity cannot be mapped to any word, "raise" or "drop"
-        vocabularies=torch.nn.ModuleDict({ # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
-            "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
-            "label": Vocabulary(with_unk=False, with_pad=False),
-        }).train(),
+        multi_label=False,
+        filter_entities=None,
+        vocabularies={ # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
+            "entity_label": dict(module="vocabulary", values=sorted(dataset.labels()), with_unk=False, with_pad=False),
+            #"char": dict(module="vocabulary", values=string.ascii_letters+string.digits+string.punctuation, with_unk=True, with_pad=False),
+        },
     ),
-    dynamic_preprocessing=False,
+    dynamic_preprocessing=True,
 
-    # Word encore parameters
-    word_encoders=[
-        dict(
-            module="char_cnn",
-            n_chars=None, # automatically inferred from data
-            in_channels=8,
-            out_channels=50,
-            kernel_sizes=(3, 4, 5),
-        ),
-        dict(
-            module="bert",
-            path=bert_name,
-            n_layers=4,
-            freeze_n_layers=0, # unfreeze all
-            dropout_p=0.1,
-        )
-    ],
-    
-    # Decoder parameters
+    # Text encoders
+    encoder=dict(
+        module="concat",
+        encoders=[
+            dict(
+                module="bert",
+                path=bert_name,
+                n_layers=4,
+                freeze_n_layers=0, # freeze 0 layer (including the first embedding layer)
+                dropout_p=0.1,
+                token_dropout_p=0.,
+                output_lm_embeds=False,
+                combine_mode="softmax",
+                word_pooler=dict(module="pooler", mode="mean"),
+            ),
+            #dict(
+            #    module="char_cnn",
+            #    in_channels=8,
+            #    out_channels=50,
+            #    kernel_sizes=(3, 4, 5),
+            #),
+        ]
+    ),
     decoder=dict(
-        module="exhaustive_biaffine_ner_decoder",
-        dim=192,
-        label_dim=64,
-        n_labels=None, # automatically inferred from data
-        dropout_p=0.,
+        module="contiguous_entity_decoder",
         contextualizer=dict(
             module="lstm",
-            # use gate = False for better performance but slower convergence (needs ~50 epochs)
-            gate=dict(
-                module="sigmoid_gate",
-                ln_mode="pre",
-                dim=192,
-                init_value=0,
-                proj=False,
-            ),
-            input_size=768 + 150,
-            hidden_size=192,
-            num_layers=4,
-            dropout_p=0.,
-        )
+            num_layers=3,
+            hidden_size=256,
+            gate=dict(module="residual_gate", init_value=1., ln_mode="post"),
+            bidirectional=True,
+            dropout_p=0.4,
+            keep_cell_state=False,
+            gate_reference="input",
+        ),
+        span_scorer=dict(
+            module="bitag",
+            keep_fragments_threshold=False,
+            max_fragments_count=200,
+            max_length=40,
+            hidden_size=64,
+            do_biaffine=True,
+            do_viterbi_filtering=True,
+            threshold=0.5,
+            do_tagging=True,
+            do_length=False,
+            do_norm=False,
+            do_density=False,
+            allow_overlap=True,
+            learn_bounds=True,
+            do_tag_bounds=True,
+            share_bounds=False,
+            learnable_transitions=False,
+            positive_tag_only_loss=False,
+            tag_loss_weight=0.2,
+            eps=1e-10,
+        ),
+        intermediate_loss_slice=slice(-1, None),
     ),
 
-    # Initialize last classifying layer bias with log frequencies from labels in data
-    init_labels_bias=True,
+    batch_size=32,
 
-    batch_size=24,
-    
     # Use learning rate schedules (linearly decay with warmup)
     use_lr_schedules=True,
     warmup_rate=0.1,
 
-    gradient_clip_val=5.,
-    
+    gradient_clip_val=50.,
+
     # Learning rates
-    main_lr=1.5e-3,
-    top_lr=1.5e-3,
-    bert_lr=4e-5,
-    
+    main_lr=8e-5,
+    fast_lr=1e-3,
+    bert_lr=5e-5,
+
     # Optimizer, can be class or str
     optimizer_cls="transformers.AdamW",
+    metrics={
+        "exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1.),
+        # Example of two metrics with a subset of all the entities
+        "3_1": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=['anatomie', 'date', 'dose', 'examen', 'mode', 'moment', 'substance', 'traitement', 'valeur']),
+        "3_2": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=['pathologie', 'sosy']),
+        "span": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=0.),
+        "label": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1.),
+    },
 )
 
-flt_format = (5, "{:.4f}".format)
 trainer = pl.Trainer(
     gpus=1,
     progress_bar_refresh_rate=False,
-    move_metrics_to_cpu=True,
     logger=[
         #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
         RichTableLogger(key="epoch", fields={
             "epoch": {},
             "step": {},
-            "train_loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-            "train_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_f1"},
-            "train_precision": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_p"},
-            "train_recall": {"goal": "higher_is_better", "format": "{:.4f}", "name": "train_r"},
-
-            "val_loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-            "val_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_f1"},
-            "val_precision": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_p"},
-            "val_recall": {"goal": "higher_is_better", "format": "{:.4f}", "name": "val_r"},
-
-            "main_lr": {"format": "{:.2e}"},
-            "top_lr": {"format": "{:.2e}"},
-            "bert_lr": {"format": "{:.2e}"},
+            
+            "(.*)_?loss": {"goal": "lower_is_better", "format": "{:.4f}"},
+            "(.*)_precision": False,#{"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_p"},
+            "(.*)_recall": False,#{"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_r"},
+            "(.*)_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_f1"},
+        
+            ".*_lr": {"format": "{:.2e}"},
+            "duration": {"format": "{:.0f}", "name": "dur(s)"},
         }),
     ],
     max_epochs=10)
-dataset = BRATDataset(
-    train="path/to/brat/train",
-    test="path/to/brat/test",    # None for training only, test directory otherwise
-    val=0.2,  # first 20% doc will be for validation
-    seed=False,  # don't shuffle before splitting
-)
 trainer.fit(model, dataset)
 model.save_pretrained("ner.pt")
 ```
@@ -150,7 +171,7 @@ export_to_brat(ner.predict(load_from_brat("path/to/brat/test")), filename_prefix
 ### How to search hyperparameters
 
 ```python
-from pyner import NER, Vocabulary
+from pyner import InformationExtractor
 from pyner.datasets import BRATDataset
 import string
 import torch
@@ -167,85 +188,119 @@ dataset = BRATDataset(
 
 def objective(trial):
     bert_name = "camembert/camembert-base"
-    model = NER(
+    
+    model = InformationExtractor(
         seed=42,
         preprocessor=dict(
-            module="preprocessor",
+            module="ner_preprocessor",
             bert_name=bert_name, # transformer name
-            sentence_split_regex=r"((?:\s*\n)+\s*|(?:(?<=[a-z0-9)]\.)\s+))(?=[A-Z-])", # regex to use to split sentences (must not contain consuming patterns)
+            bert_lower=False,
+            split_into_multiple_samples=True,
+            sentence_split_regex=r"\n", # regex to use to split sentences (must not contain consuming patterns)
             sentence_balance_chars=('()',), # try to avoid splitting between parentheses
-            sentence_entity_overlap="raise", # raise when an entity spans more than one sentence
-            word_regex='[\\w\']+|[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
+            sentence_entity_overlap="raise", # raise when an entity spans more than one sentence, or use "split" to split entities in 2 when this happens
+            word_regex=r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
             substitutions=( # Apply these regex substitutions on sentences before tokenizing
-                (r"(?<=[{}\\])(?![ ])".format(string.punctuation), r" "),
-                (r"(?<![ ])(?=[{}\\])".format(string.punctuation), r" "),
-                #("(?<=[a-zA-Z])(?=[0-9])", r" "),
-                #("(?<=[0-9])(?=[A-Za-z])", r" "),
+                (r"(?<=[{}\\])(?![ ])".format(string.punctuation), r" "), # insert a space before punctuations
+                (r"(?<![ ])(?=[{}\\])".format(string.punctuation), r" "), # insert a space after punctuations
+                #("(?<=[a-zA-Z])(?=[0-9])", r" "), # insert a space between letters and numbers
+                #("(?<=[0-9])(?=[A-Za-z])", r" "), # insert a space between numbers and letters
             ),
-            max_tokens=512, # split when sentences contain more than 512 tokens
-            large_sentences="equal-split", # for these large sentences, split them in equal sub sentences < 512 tokens 
-            empty_entities="raise", # when an entity cannot be mapped to any word, raise
-            vocabularies=torch.nn.ModuleDict({ # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
-                "char": Vocabulary(string.punctuation + string.ascii_letters + string.digits, with_unk=True, with_pad=True),
-                "label": Vocabulary(with_unk=False, with_pad=False),
-            }).train(),
+            max_tokens=512,         # Maximum number of tokens in a sentence (will split if more than this number)
+                                    # Must be equal to or lower than the max number of tokens in the Bert model
+            min_tokens=50,  # Minimum number of tokens in a sentence
+            join_small_sentence_rate=0.9,  # How frequently do we join two sentences that are shorter than the max number of tokens
+            large_sentences="equal-split", # for these large sentences, split them in equal sub sentences < max_tokens tokens 
+            empty_entities="raise", # when an entity cannot be mapped to any word, "raise" or "drop"
+            multi_label=False,
+            filter_entities=None,
+            vocabularies={ # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
+                "entity_label": dict(module="vocabulary", values=sorted(dataset.labels()), with_unk=False, with_pad=False),
+                #"char": dict(module="vocabulary", values=string.ascii_letters+string.digits+string.punctuation, with_unk=True, with_pad=False),
+            },
         ),
-        dynamic_preprocessing=False,
+        dynamic_preprocessing=True,
     
-        # Word encore parameters
-        word_encoders=[
-            dict(
-                module="char_cnn",
-                n_chars=None, # automatically inferred from data
-                in_channels=8,
-                out_channels=50,
-                kernel_sizes=(3, 4, 5),
-            ),
-            dict(
-                module="bert",
-                path=bert_name,
-                n_layers=4,
-                freeze_n_layers=0, # unfreeze all
-                dropout_p=0.1,
-            )
-        ],
-        
-        # Decoder parameters
+        # Text encoders
+        encoder=dict(
+            module="concat",
+            encoders=[
+                dict(
+                    module="bert",
+                    path=bert_name,
+                    n_layers=4,
+                    freeze_n_layers=0, # freeze 0 layer (including the first embedding layer)
+                    dropout_p=0.1,
+                    token_dropout_p=0.,
+                    output_lm_embeds=False,
+                    combine_mode="softmax",
+                    word_pooler=dict(module="pooler", mode="mean"),
+                ),
+                #dict(
+                #    module="char_cnn",
+                #    in_channels=8,
+                #    out_channels=50,
+                #    kernel_sizes=(3, 4, 5),
+                #),
+            ]
+        ),
         decoder=dict(
-            module="exhaustive_biaffine_ner_decoder",
-            dim=trial.suggest_int("decoder/dim", 128, 256, 32),
-            label_dim=trial.suggest_int("decoder/label_dim", 32, 128, 16),
-            n_labels=None, # automatically inferred from data
-            dropout_p=trial.suggest_int("decoder/dropout_p", 0, 0.4, step=0.05),
+            module="contiguous_entity_decoder",
             contextualizer=dict(
                 module="lstm",
-                gate=False,
-                input_size=768 + 150,
-                hidden_size=trial.params["decoder/dim"],
+                #  v ------------- Try a range of hyperparameters ------------- v 
                 num_layers=trial.suggest_int("decoder/contextualizer/num_layers", 1, 6),
-                dropout_p=trial.suggest_float("decoder/contextualizer/dropout_p", 0, 0.4, step=0.05),
-            )
+                hidden_size=256,
+                gate=dict(module="residual_gate", init_value=1., ln_mode="post"),
+                bidirectional=True,
+                dropout_p=0.4,
+                keep_cell_state=False,
+                gate_reference="input",
+            ),
+            span_scorer=dict(
+                module="bitag",
+                keep_fragments_threshold=False,
+                max_fragments_count=200,
+                max_length=40,
+                hidden_size=64,
+                do_biaffine=True,
+                do_viterbi_filtering=True,
+                threshold=0.5,
+                do_tagging=True,
+                do_length=False,
+                do_norm=False,
+                do_density=False,
+                allow_overlap=True,
+                learn_bounds=True,
+                do_tag_bounds=True,
+                share_bounds=False,
+                learnable_transitions=False,
+                positive_tag_only_loss=False,
+                tag_loss_weight=0.2,
+                eps=1e-10,
+            ),
+            intermediate_loss_slice=slice(-1, None),
         ),
     
-        # Initialize last classifying layer bias with log frequencies from labels in data
-        init_labels_bias=True,
+        batch_size=32,
     
-        batch_size=24,
-        
         # Use learning rate schedules (linearly decay with warmup)
         use_lr_schedules=True,
         warmup_rate=0.1,
     
-        gradient_clip_val=5.,
-        
+        gradient_clip_val=50.,
+    
         # Learning rates
-        main_lr=trial.suggest_float("main_lr", 1e-4, 1e-1, log=True),
-        top_lr=trial.suggest_float("top_lr", 1e-4, 1e-1, log=True),
-        bert_lr=4e-5,
-        
+        main_lr=8e-5,
+        fast_lr=1e-3,
+        bert_lr=5e-5,
+    
         # Optimizer, can be class or str
         optimizer_cls="transformers.AdamW",
-    ).train()
+        metrics={
+            "exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1.),
+        },
+    )
 
     trainer = pl.Trainer(
         gpus=1,
