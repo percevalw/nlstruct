@@ -27,7 +27,7 @@ model = InformationExtractor(
         split_into_multiple_samples=True,
         sentence_split_regex=r"\n", # regex to use to split sentences (must not contain consuming patterns)
         sentence_balance_chars=('()',), # try to avoid splitting between parentheses
-        sentence_entity_overlap="raise", # raise when an entity spans more than one sentence, or use "split" to split entities in 2 when this happens
+        sentence_entity_overlap="split", # raise when an entity spans more than one sentence, or use "split" to split entities in 2 when this happens
         word_regex=r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|}~]', # regex to use to extract words (will be aligned with bert tokens), leave to None to use wordpieces as is
         substitutions=( # Apply these regex substitutions on sentences before tokenizing
             (r"(?<=[{}\\])(?![ ])".format(string.punctuation), r" "), # insert a space before punctuations
@@ -87,7 +87,6 @@ model = InformationExtractor(
         ),
         span_scorer=dict(
             module="bitag",
-            keep_fragments_threshold=False,
             max_fragments_count=200,
             max_length=40,
             hidden_size=64,
@@ -133,7 +132,7 @@ model = InformationExtractor(
         "span": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=0.),
         "label": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1.),
     },
-)
+).train()
 
 trainer = pl.Trainer(
     gpus=1,
