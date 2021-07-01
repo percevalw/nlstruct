@@ -61,13 +61,8 @@ def get_nested_properties(nested, dtype=None):
 
 
 def pad_to_tensor(y, dtype=None, device=None, pad=0):
-    n_depth, dtype = get_nested_properties(y, dtype=dtype)
-
-    if n_depth == 0:
-        return torch.as_tensor(y, device=device, dtype=dtype)
-
     def find_max_len(obj, depth=0):
-        if depth >= n_depth:
+        if len(obj) == 0 or not hasattr(obj[0], '__len__'):
             return ((len(obj), True),)
         # print(list(zip(*[find_max_len(item, depth+1) for item in obj])))
         return ((len(obj), True), *((max(all_lengths), len(set(all_lengths)) == 1 and all(all_is_unique))
@@ -75,6 +70,9 @@ def pad_to_tensor(y, dtype=None, device=None, pad=0):
                                     for all_lengths, all_is_unique in (zip(*zipped_by_depth),)))
 
     max_len, is_unique = zip(*find_max_len(y))
+    n_depth = len(max_len) - 1
+    if n_depth == 0:
+        return torch.as_tensor(y, device=device, dtype=dtype)
 
     block_sizes = [1]
     for l in max_len[::-1]:
@@ -82,18 +80,24 @@ def pad_to_tensor(y, dtype=None, device=None, pad=0):
     [total, *block_sizes] = block_sizes
     n_depth = n_depth - (is_unique[::-1].index(False) if False in is_unique else n_depth)
 
-    array = torch.full((total,), fill_value=pad, dtype=dtype)
+    array = None
 
     def flat_rec(sequence, parent_idx, depth=0):
+        nonlocal array
         for i, obj in enumerate(sequence):
             current_idx = parent_idx + i * block_sizes[depth]
             if depth + 1 >= n_depth:
-                obj = torch.as_tensor(obj, dtype=dtype, device=device).view(-1)
-                array[current_idx:current_idx + obj.numel()] = obj
+                if len(obj):
+                    obj = torch.as_tensor(obj, dtype=dtype, device=device).view(-1)
+                    if array is None:
+                        array = torch.full((total,), fill_value=pad, dtype=obj.dtype)
+                    array[current_idx:current_idx + obj.numel()] = obj
             else:
                 flat_rec(obj, current_idx, depth + 1)
 
     flat_rec(y, 0)
+    if array is None:
+        array = torch.full((total,), fill_value=pad, dtype=dtype)
     array = array.reshape(max_len)
     if device is not None:
         array = array.to(device)
@@ -160,7 +164,7 @@ def einsum(*tensors):
         new_names = tuple(after[:after.index('...')]) + ellipsis_names + tuple(after[after.index('...') + 1:])
     else:
         new_names = after
-    return res #.refine_names(*new_names)
+    return res  # .refine_names(*new_names)
 
 
 def complete_expr(*tensors, dims=()):
@@ -197,12 +201,12 @@ def complete_expr(*tensors, dims=()):
 
 def rearrange(tensor, expr, *args, **kwargs):
     expr, new_names, _ = complete_expr(tensor, expr)
-    return ops.rearrange(tensor, expr, *args, **kwargs) #.refine_names(*new_names)
+    return ops.rearrange(tensor, expr, *args, **kwargs)  # .refine_names(*new_names)
 
 
 def reduce(tensor, expr, *args, **kwargs):
     expr, new_names, _ = complete_expr(tensor, expr)
-    return ops.reduce(tensor, expr, *args, **kwargs) #.refine_names(*new_names)
+    return ops.reduce(tensor, expr, *args, **kwargs)  # .refine_names(*new_names)
 
 
 def wrap_repeat():
@@ -216,7 +220,7 @@ def wrap_repeat():
         elif isinstance(expr, int):
             return fn(self, expr, *args, **kwargs)
         expr, new_names, _ = complete_expr(self, expr)
-        return ops.repeat(self, expr, *args, **kwargs) #.refine_names(*new_names)
+        return ops.repeat(self, expr, *args, **kwargs)  # .refine_names(*new_names)
 
     repeat.back = fn
     torch.Tensor.repeat = repeat
@@ -234,7 +238,7 @@ def einsum(*tensors, **kwargs):
         "".join(ascii_letters[i - 1] if i > 0 else '...' for i in after_indices)
     )
     res = torch.einsum(expr, *(t for t in tensors))
-    return res #.refine_names(*new_names)
+    return res  # .refine_names(*new_names)
 
 
 def bce_with_logits(input, target, **kwargs):
@@ -302,7 +306,7 @@ def pad(tensor, expr='...', value=0, **kwargs):
             for before, size in zip(padding[::2], tensor.shape)
         )] = tensor
         return new_tensor
-    return F.pad(tensor, padding, value=value) #.refine_names(*tensor.names)
+    return F.pad(tensor, padding, value=value)  # .refine_names(*tensor.names)
 
 
 def wrap_unary_op(op_name):
@@ -526,18 +530,38 @@ def multi_dim_triu(x, diagonal=0):
     return x.masked_fill(~torch.ones(x.shape[-2], x.shape[-1], dtype=torch.bool, device=x.device).triu(diagonal=diagonal), 0)
 
 
-def multi_dim_topk(x, topk, mask=None):
-    flat = x.masked_fill(~mask, -1000000).reshape(x.shape[0], -1)
-    actual_top_k = min(topk, mask.reshape(mask.shape[0], -1).sum(1).max().item())
+def unsqueeze_around(n, dim):
+    shape = [1] * n
+    shape[dim] = -1
+    return shape
+
+
+def multi_dim_topk(x, topk, mask=None, dim=0):
+    if x.dtype == torch.bool:
+        mask = x
+        x = x.long()
+    if mask is None:
+        mask = torch.ones_like(x, dtype=torch.bool)
+    flat = x.masked_fill(~mask, -1000000).reshape(*x.shape[:dim], -1)
+    flat_mask = mask.reshape(*x.shape[:dim], -1)
+    actual_top_k = min(topk, flat_mask.sum(-1).max().item())
     top_values, flat_top_indices = flat.topk(actual_top_k, dim=-1)
     top_indices = []
-    for dim_size in reversed(x.shape[1:]):
+    for dim_size in reversed(x.shape[dim:]):
         top_indices.insert(0, flat_top_indices % dim_size)
         flat_top_indices = flat_top_indices // dim_size
     if mask is not None:
-        top_mask = mask[(torch.arange(len(mask)).unsqueeze(1), *top_indices)][:, :actual_top_k]
+        top_mask = mask[(*(
+            torch.arange(n).view(*unsqueeze_around(top_indices[0].ndim, i))
+            for i, n in enumerate(top_indices[0].shape[:-1])),
+                         *top_indices,
+                         )][..., :actual_top_k]
         return top_indices, top_mask
     return top_indices
+
+
+def multi_dim_nonzero(x, mask=None, dim=-1):
+    return multi_dim_topk(x, topk=x.numel() // x.shape[0], mask=x, dim=dim)
 
 
 def log1mexp(a):
@@ -545,13 +569,13 @@ def log1mexp(a):
     return torch.where(a < math.log(.5), torch.log1p(-a.exp()), (-torch.expm1(a)).log())
 
 
-def shift(x, dim, n):
+def shift(x, dim, n, pad=0):
     shape = list(x.shape)
     shape[dim] = abs(n)
 
     slices = [slice(None)] * x.ndim
     slices[dim] = slice(n, None) if n >= 0 else slice(None, n)
-    pad = torch.zeros(*shape, dtype=x.dtype, device=x.device)
+    pad = torch.full(shape, fill_value=pad, dtype=x.dtype, device=x.device)
     x = torch.cat(([pad] if n > 0 else []) + [x] + ([pad] if n < 0 else []), dim=dim).roll(dims=dim, shifts=n)
     return x[tuple(slices)]
 
