@@ -35,7 +35,7 @@ model = InformationExtractor(
             #("(?<=[a-zA-Z])(?=[0-9])", r" "), # insert a space between letters and numbers
             #("(?<=[0-9])(?=[A-Za-z])", r" "), # insert a space between numbers and letters
         ),
-        max_tokens=512,         # Maximum number of tokens in a sentence (will split if more than this number)
+        max_tokens=200,         # Maximum number of bert tokens in a sentence (will split if more than this number)
                                 # Must be equal to or lower than the max number of tokens in the Bert model
         min_tokens=50,  # Minimum number of tokens in a sentence
         join_small_sentence_rate=0.9,  # How frequently do we join two sentences that are shorter than the max number of tokens
