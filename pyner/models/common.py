@@ -5,6 +5,8 @@ import torch
 import torch.nn.functional as F
 import transformers
 from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
+from transformers.models.bert.modeling_bert import BertLMPredictionHead
+
 
 from pyner.registry import register
 from pyner.torch_utils import fork_rng
@@ -164,8 +166,16 @@ class RobertaLMHeadWithLastHidden(RobertaLMHead):
         return logits, x
 
 
+class BertLMPredictionHeadWithLastHidden(torch.nn.Module):
+    def forward(self, hidden_states):
+        hidden_states = self.transform(hidden_states)
+        logits = self.decoder(hidden_states)
+        return logits, hidden_states
+
+
 LM_HEAD_CLS_MAPPING = {
     RobertaLMHead: RobertaLMHeadWithLastHidden,
+    BertLMPredictionHead: BertLMPredictionHeadWithLastHidden,
 }
 
 
@@ -188,6 +198,7 @@ def rearrange_and_prune(tensors, mask):
             new_tensor = None
         new_tensors.append(new_tensor)
     return new_tensors, new_mask
+
 
 
 @register("text_encoder")
@@ -218,7 +229,10 @@ class BERTEncoder(TextEncoder):
         with fork_rng(True):
             if output_lm_embeds:
                 self.bert = _bert if _bert is not None else transformers.AutoModelForMaskedLM.from_pretrained(path, config=bert_config)
-                self.bert.lm_head.__class__ = LM_HEAD_CLS_MAPPING[self.bert.lm_head.__class__]
+                if hasattr(self.bert, 'lm_head'):
+                    self.bert.lm_head.__class__ = LM_HEAD_CLS_MAPPING[self.bert.lm_head.__class__]
+                else:
+                    self.bert.cls.predictions.__class__ = LM_HEAD_CLS_MAPPING[self.bert.cls.predictions.__class__]
             else:
                 self.bert = _bert if _bert is not None else transformers.AutoModel.from_pretrained(path, config=bert_config)
         self.output_lm_embeds = output_lm_embeds
@@ -229,7 +243,7 @@ class BERTEncoder(TextEncoder):
             self.word_pooler = Pooler(**word_pooler)
         self.combine_mode = combine_mode
 
-        bert_model = getattr(self.bert, 'roberta', self.bert)
+        bert_model = getattr(getattr(self.bert, 'roberta', self.bert), 'bert', self.bert)
         self._output_size = bert_model.embeddings.word_embeddings.weight.shape[1]
         if freeze_n_layers < 0:
             freeze_n_layers = len(bert_model.encoder.layer) + 2 + freeze_n_layers
@@ -243,7 +257,11 @@ class BERTEncoder(TextEncoder):
 
     @property
     def output_embeddings(self):
-        return self.bert.lm_head.decoder.weight
+        return self.bert.lm_head.decoder.weight if hasattr(self.bert, 'lm_head') else self.bert.cls.predictions.weight
+
+    @property
+    def output_bias(self):
+        return self.bert.lm_head.decoder.bias if hasattr(self.bert, 'lm_head') else self.bert.cls.predictions.bias
 
     @property
     def bert_config(self):
@@ -318,9 +336,19 @@ class Concat(torch.nn.Module):
         self.bert = next((encoder.bert for encoder in self.encoders if hasattr(encoder, 'bert')), None)
 
     def forward(self, *args, **kwargs):
-        return torch.cat([
-            encoder(*args, **kwargs) for encoder in self.encoders
-        ], dim=-1)
+        res = []
+        additional_res = []
+        has_tuple = False
+        for encoder in self.encoders:
+            encoder_res = encoder(*args, **kwargs)
+            if isinstance(encoder_res, tuple):
+                additional_res.extend(encoder_res[1:])
+                res.append(encoder_res[0])
+                has_tuple = True
+            else:
+                res.append(encoder_res)
+        res = torch.cat(res, dim=-1)
+        return (res, *additional_res) if has_tuple else res
 
 
 @register("contextualizer")
@@ -331,13 +359,14 @@ class Contextualizer(torch.nn.Module):
 
 @register("lstm")
 class LSTMContextualizer(Contextualizer):
-    def __init__(self, input_size, hidden_size, num_layers=1, keep_cell_state=False, gate=False, dropout_p=0.1, bidirectional=True, gate_reference='input'):
+    def __init__(self, input_size, hidden_size, num_layers=1, keep_cell_state=False, rand_init=False, gate=False, dropout_p=0.1, bidirectional=True, gate_reference='input'):
         super().__init__()
         if hidden_size is None:
             hidden_size = input_size
             self.initial_linear = None
         else:
             self.initial_linear = torch.nn.Linear(input_size, hidden_size)
+        self.rand_init = rand_init
         self.keep_cell_state = keep_cell_state
         if keep_cell_state:
             self.cell_state_proj = torch.nn.Linear(hidden_size, hidden_size)
@@ -376,12 +405,12 @@ class LSTMContextualizer(Contextualizer):
 
         num_directions = 2 if self.lstm_layers[0].bidirectional else 1
         real_hidden_size = self.lstm_layers[0].proj_size if getattr(self.lstm_layers[0], 'proj_size', 0) > 0 else self.lstm_layers[0].hidden_size
-        initial_h_n = torch.zeros(num_directions,
+        initial_h_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
                                   len(features), real_hidden_size,
-                                  dtype=features.dtype, device=features.device)
-        initial_c_n = torch.zeros(num_directions,
+                                  dtype=features.dtype, device=features.device) * 0.1
+        initial_c_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
                                   len(features), real_hidden_size,
-                                  dtype=features.dtype, device=features.device)
+                                  dtype=features.dtype, device=features.device) * 0.1
         for lstm, gate_module in zip(self.lstm_layers, self.gate_modules):
             out, (_, c_n) = lstm(
                 torch.nn.utils.rnn.pack_padded_sequence(features + updates, sentence_lengths.cpu(), batch_first=True),
@@ -432,8 +461,12 @@ class Pooler(torch.nn.Module):
             features = features.unsqueeze(-3)
         if isinstance(mask, tuple):
             begins, ends = mask
-            begins = begins.expand(*features.shape[:-2], begins.shape[-1])
-            ends = ends.expand(*features.shape[:-2], ends.shape[-1])
+            begins = begins.expand(*features.shape[:begins.ndim-1], begins.shape[-1]).clamp_min(0)
+            ends = ends.expand(*features.shape[:begins.ndim-1], ends.shape[-1]).clamp_min(0)
+            final_shape = (*begins.shape, *features.shape[begins.ndim:])
+            features = features.view(-1, features.shape[-2], features.shape[-1])
+            begins = begins.reshape(features.shape[0], begins.numel() // features.shape[0] if len(features) else 0)
+            ends = ends.reshape(features.shape[0], ends.numel() // features.shape[0] if len(features) else 0)
 
             max_window_size = max(0, int((ends - begins).max())) if 0 not in ends.shape else 0
             flat_indices = torch.arange(max_window_size, device=device)[None, None, :] + begins[..., None]
@@ -446,7 +479,7 @@ class Pooler(torch.nn.Module):
                 weight=self.dropout(features.reshape(-1, features.shape[-1])),
                 offsets=torch.cat([torch.tensor([0], device=device), flat_indices_mask.sum(-1).reshape(-1)]).cumsum(0)[:-1].clamp_max(flat_indices.shape[0]),
                 mode=self.mode,
-            ).reshape(*flat_indices_mask.shape[:-1], features.shape[-1])
+            ).reshape(final_shape)
         elif torch.is_tensor(mask):
             mask = mask
             features = features
