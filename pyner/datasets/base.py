@@ -231,6 +231,19 @@ class Terminology:
                            concept_semantic_types=concept_semantic_types,
                            build_synonym_concepts_mapping=self.synonym_concepts is not None and other.synonym_concepts is not None)
 
+    def filter_concepts(self, concepts=None, semantic_types=None):
+        if concepts is None:
+            concepts = self.concepts
+        if semantic_types is not None:
+            semantic_types = set(semantic_types)
+            concepts = [concept for concept, sty in self.concept_semantic_types.items() if sty in semantic_types]
+        concepts_set = set(concepts)
+        return Terminology({concept: self.concept_synonyms[concept] for concept in concepts if concept in self.concept_synonyms},
+                           concept_mapping={concept: dest for concept, dest in self.concept_mapping.items() if dest in concepts_set} if self.concept_mapping is not None else None,
+                           concept_semantic_types={concept: self.concept_semantic_types[concept] for concept in concepts
+                                                   if concept in self.concept_semantic_types} if self.concept_semantic_types is not None else None,
+                           build_synonym_concepts_mapping=self.synonym_concepts is not None)
+
 
 class NERDataset(BaseDataset):
     def describe(self, as_dataframe=True):
@@ -410,26 +423,27 @@ class NormalizationDataset(NERDataset):
 
     def to_terminology(self, splits=['train'], label_as_semantic_type=False, multi_concepts="drop", **kwargs):
         concept_synonyms = defaultdict(lambda: [])
+        if multi_concepts == "duplicate":
+            multi_concepts = lambda text, e: (text, [{**e, "concept": c} for c in e["concept"]])
         concept_type = dict()
         for docs, split in ((self.train_data, 'train'), (self.val_data, 'val'), (self.test_data, 'test')):
             if split in splits:
                 for doc in docs:
                     for entity in doc["entities"]:
-                        if isinstance(entity["concept"], (list, tuple)) and len(entity["concept"]) > 1:
-                            if multi_concepts == "drop":
-                                continue
-                            elif hasattr(multi_concepts, '__call__'):
+                        concept = entity["concept"] if not isinstance(entity["concept"], str) else entity["concept"].split("+")
+                        if len(concept) > 1 and multi_concepts != "drop":
+                            if hasattr(multi_concepts, '__call__'):
                                 text, split_entities = multi_concepts(doc["text"], entity)
                                 original_begin = entity["fragments"][0]["begin"]
-                                if len(split_entities) == len(entity["concept"]):
+                                if len(split_entities) == len(concept):
                                     for composite_entity in split_entities:
                                         entity_text = " ".join(text[fragment["begin"]-original_begin:fragment["end"]-original_begin] for fragment in composite_entity["fragments"])
                                         concept = composite_entity["concept"]
                                         concept_synonyms[concept].append(entity_text)
                                         if label_as_semantic_type:
                                             concept_type[concept] = composite_entity["label"]
-                        else:
-                            concept = entity["concept"] if isinstance(entity["concept"], str) else entity["concept"][0]
+                        elif len(concept) == 1:
+                            concept = concept[0]
                             entity_text = " ".join(doc["text"][fragment["begin"]:fragment["end"]] for fragment in entity["fragments"])
                             concept_synonyms[concept].append(entity_text)
                             if label_as_semantic_type:

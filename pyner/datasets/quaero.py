@@ -63,23 +63,29 @@ class QUAERO(NormalizationDataset):
         zip_ref.extractall(path)
         zip_ref.close()
         train_data = [
-            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                 for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/train/EMEA"))],
-            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                    for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/train/MEDLINE"))],
         ]
         train_data = [doc for doc in train_data if doc["source"] in sources]
         val_data = [
-            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                 for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/dev/EMEA"))],
-            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                    for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/dev/MEDLINE"))],
         ]
         val_data = [doc for doc in val_data if doc["source"] in sources]
         test_data = [
-            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "EMEA", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                 for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/test/EMEA"))],
-            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(part for comment in entity["comments"] for part in comment["comment"].split(" "))} for entity in doc["entities"]]}
+            *[{**doc, "source": "MEDLINE", "entities": [{**entity, "concept": tuple(sorted(part.strip() for comment in entity["comments"]
+                                                                                    for part in comment["comment"].strip().strip("+").split(" ")))} for entity in doc["entities"]]}
               for doc in load_from_brat(os.path.join(path, "QUAERO_FrenchMed/corpus/test/MEDLINE"))],
         ]
         test_data = [doc for doc in test_data if doc["source"] in sources]

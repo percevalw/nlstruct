@@ -4,9 +4,9 @@ import re
 
 from pyner.datasets.base import NERDataset
 
-REGEX_ENTITY = re.compile('^(T\d+)\t([^ ]+)([^\t]+)\t(.*)$')
+REGEX_ENTITY = re.compile('^(T\d+)\t([^\s]+)([^\t]+)\t(.*)$')
 REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')
-REGEX_RELATION = re.compile('^(R\d+)\t([^ ]+) Arg1:([^ ]+) Arg2:([^ ]+)')
+REGEX_RELATION = re.compile('^(R\d+)\t([^\s]+) Arg1:([^\s]+) Arg2:([^\s]+)')
 REGEX_ATTRIBUTE = re.compile('^(A\d+)\t(.+)$')
 
 
@@ -48,6 +48,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                     span = match.group(3)
                                     mention_text = match.group(4)
                                     entities[ann_id] = {
+                                        "text": mention_text,
                                         "entity_id": ann_id,
                                         "fragments": [],
                                         "attributes": [],
@@ -150,7 +151,7 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                     for entity in doc["entities"]:
                         idx = None
                         spans = []
-                        brat_entity_id = "T" + str(entity["entity_id"] + 1)
+                        brat_entity_id = ("T" + str(entity["entity_id"] + 1)) if isinstance(entity["entity_id"], int) else entity["entity_id"]
                         for fragment in sorted(entity["fragments"], key=lambda frag: frag["begin"]):
                             idx = fragment["begin"]
                             entity_text = doc["text"][fragment["begin"]:fragment["end"]]
@@ -160,30 +161,30 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                                 idx = end + 1
                                 if begin != end:
                                     spans.append((begin, end))
-                        print("T{}\t{} {}\t{}".format(
+                        print("{}\t{} {}\t{}".format(
                             brat_entity_id,
                             str(entity["label"]),
                             ";".join(" ".join(map(str, span)) for span in spans),
                             entity_text.replace("\n", " ")), file=f)
                         if "attributes" in entity:
-                            for attribute in entity["attributes"]:
+                            for i, attribute in enumerate(entity["attributes"]):
                                 if "value" in attribute and attribute["value"] is not None:
-                                    print("A{}\t{} T{} {}".format(
+                                    print("A{}\t{} {} {}".format(
                                         attribute_idx,
                                         str(attribute["label"]),
                                         brat_entity_id,
                                         attribute["value"]), file=f)
                                 else:
-                                    print("A{}\t{} T{}".format(
-                                        i + 1,
+                                    print("A{}\t{} {}".format(
+                                        attribute_idx,
                                         str(attribute["label"]),
                                         brat_entity_id), file=f)
                                 attribute_idx += 1
                 if "relations" in doc:
                     for i, relation in enumerate(doc["relations"]):
-                        entity_from = relation["from_entity_id"] + 1
-                        entity_to = relation["to_entity_id"] + 1
-                        print("R{}\t{} Arg1:T{} Arg2:T{}\t".format(
+                        entity_from = ("T" + str(relation["from_entity_id"] + 1)) if isinstance(relation["from_entity_id"], int) else relation["from_entity_id"]
+                        entity_to = ("T" + str(relation["to_entity_id"] + 1)) + 1 if isinstance(relation["to_entity_id"], int) else relation["to_entity_id"]
+                        print("R{}\t{} Arg1:{} Arg2:{}\t".format(
                             i + 1,
                             str(relation["label"]),
                             entity_from,
