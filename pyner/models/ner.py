@@ -531,7 +531,7 @@ class MarginalTagLoss(torch.nn.Module):
         super().__init__()
         self.positive_only = positive_only
 
-    def forward(self, tag_logprobs, batch):
+    def forward(self, tag_logprobs, label_logits, batch):
         if tag_logprobs is None:
             return 0
         if tag_logprobs.ndim == 5:
@@ -561,8 +561,13 @@ class MarginalTagLoss(torch.nn.Module):
             tag_logprobs,
             tags if tag_logprobs.ndim == 4 else tags.unsqueeze(0).repeat_interleave(tag_logprobs.shape[0], dim=0),
             reduction='none',
-        ).masked_fill(~mask.unsqueeze(1), 0)
-        loss = loss.mean(-2).sum()
+        ).masked_fill(~mask.unsqueeze(1), 0).mean(-2).sum()
+
+        loss = loss + bce_with_logits(
+            label_logits,
+            tags if label_logits.ndim == 3 else tags.unsqueeze(0).repeat_interleave(label_logits.shape[0], dim=0) > 0,
+            reduction='none',
+        ).masked_fill(~mask.unsqueeze(1), 0).mean(-2).sum()
         # loss = loss.mean(-1).sum()
         return loss
 
@@ -602,6 +607,9 @@ class ContiguousEntityDecoder(torch.nn.Module):
             **span_scorer,
         )
         self.intermediate_loss_slice = intermediate_loss_slice
+
+    def on_training_step(self, step_idx, total):
+        pass
 
     def fast_params(self):
         return self.span_scorer.fast_params()
