@@ -27,7 +27,7 @@ class DummyIterableDataset(torch.utils.data.IterableDataset):
     def __len__(self):
         if self.epoch_length is not None:
             return self.epoch_length
-        raise AttributeError()
+        raise TypeError()
 
 
 class PytorchLightningBase(pl.LightningModule):
@@ -159,6 +159,7 @@ class InformationExtractor(PytorchLightningBase):
           warmup_rate=0.1,
           use_lr_schedules=True,
           dynamic_preprocessing=False,
+          size_factor=20,
           optimizer_cls=torch.optim.AdamW,
     ):
         """
@@ -200,6 +201,7 @@ class InformationExtractor(PytorchLightningBase):
         self.seed = seed
         self.data_seed = data_seed
 
+        self.size_factor = size_factor
         self.gradient_clip_val = gradient_clip_val
         self.fast_lr = fast_lr
         self.main_lr = main_lr
@@ -232,9 +234,9 @@ class InformationExtractor(PytorchLightningBase):
         # Init modules that depend on the vocabulary
         with fork_rng(self.seed):
             with fork_rng(True):
-                self.encoder = get_instance({**self.encoder, "_preprocessor": self.preprocessor})
+                self.encoder = get_instance({**self.encoder, "_preprocessor": self.preprocessor}) if not isinstance(self.encoder, torch.nn.Module) else self.encoder
             with fork_rng(True):
-                self.decoder = get_instance({**self.decoder, "input_size": self.encoder.output_size, "_preprocessor": self.preprocessor})
+                self.decoder = get_instance({**self.decoder, "input_size": self.encoder.output_size, "_preprocessor": self.preprocessor, "_encoder": self.encoder}) if not isinstance(self.decoder, torch.nn.Module) else self.decoder
 
     def setup(self, stage='fit'):
         if stage == 'fit':
@@ -256,20 +258,24 @@ class InformationExtractor(PytorchLightningBase):
             random.shuffle(x)
             return x
 
-        data = self.preprocessor(data, chain=True)
         if split == "train" and self.dynamic_preprocessing:
+            data = self.preprocessor(data, chain=True)
             return chain.from_iterable(map(shuffle, batchify(data, 1000)))
         else:
-            return list(data)
+            training = self.preprocessor.training
+            self.preprocessor.eval()
+            data = list(self.preprocessor(data, chain=True))
+            self.preprocessor.training = training
+            return data
 
     def split_into_mini_batches_to_fit_memory(self, samples):
         device_index = next(self.parameters()).device.index
         if device_index is None:
             max_memory = 20000
         else:
-            max_memory = min(torch.cuda.get_device_properties(device_index).total_memory, 25000)
-        bert_size_factor = 50 if self.encoder.bert.config.num_hidden_layers > 12 or self.encoder.bert.config.hidden_size > 768 else 5
-        threshold = max_memory / bert_size_factor
+            max_memory = min(torch.cuda.get_device_properties(device_index).total_memory/1024**2, 25000)
+        #bert_size_factor = size_factor#50 if self.encoder.bert.config.num_hidden_layers > 12 or self.encoder.bert.config.hidden_size > 768 else 5
+        threshold = max_memory / self.size_factor
 
         samples_and_sizes = sorted([(sample, len(sample["tokens_mask"]), max((len(x) for x in sample["tokens_mask"])))
                                     for sample in samples], key=lambda x: x[1] * x[2])
@@ -280,7 +286,7 @@ class InformationExtractor(PytorchLightningBase):
         for sample, n_sequences, max_sequence_size in samples_and_sizes[1:]:
             max_sequence_size_so_far = max(max_sequence_size_so_far, max_sequence_size)
             n_sequences_so_far += n_sequences
-            if n_sequences_so_far * max_sequence_size_so_far > threshold or len(batch) >= 8:
+            if n_sequences_so_far * max_sequence_size_so_far > threshold:
                 max_sequence_size_so_far = max_sequence_size
                 n_sequences_so_far = n_sequences
                 yield batch
@@ -290,14 +296,14 @@ class InformationExtractor(PytorchLightningBase):
         if len(batch):
             yield batch
 
-    def forward(self, inputs, return_loss=False, return_predictions=True):
+    def forward(self, inputs, return_loss=False, return_predictions=True, group_by_document=False, **kwargs):
         self.last_inputs = inputs
         device = next(self.parameters()).device
         input_tensors = self.preprocessor.tensorize(inputs, device=device)
         embeds = self.encoder(input_tensors)
-        results = self.decoder(embeds, input_tensors, return_loss=return_loss, return_predictions=return_predictions)
+        results = self.decoder(embeds, input_tensors, return_loss=return_loss, return_predictions=return_predictions, **kwargs)
         if return_predictions:
-            results['predictions'] = self.preprocessor.decode(results['predictions'], inputs, group_by_document=False)
+            results['predictions'] = self.preprocessor.decode(results['predictions'], inputs, group_by_document=group_by_document)
         return results
 
     def transfer_batch_to_device(self, inputs, device):
@@ -307,17 +313,18 @@ class InformationExtractor(PytorchLightningBase):
         self.zero_grad()
         losses = defaultdict(lambda: 0)
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
-            outputs = self(mini_batch, return_loss=True)
+            outputs = self(mini_batch, return_loss=True, return_predictions=False)
             key = value = None
             for key, value in outputs.items():
                 if key.endswith("loss"):
                     losses[key] += float(value)
+            if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
+                raise Exception()
             outputs['loss'].backward()
             del outputs, key, value
 
-        if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
-            raise Exception()
         self.counter += 1
+        self.decoder.on_training_step(self.counter, self.max_steps)
         self.trainer.train_loop.track_and_norm_grad(self.optimizers())
         self.optimizers().step()
         return {**losses, "count": len(inputs)}
@@ -345,7 +352,7 @@ class InformationExtractor(PytorchLightningBase):
 
     def validation_epoch_end(self, outputs):
         self.log_dict({
-            "val_{}_{}".format(name, field): value
+            ("val_{}_{}".format(name, field) if field else "val_{}".format(name,)): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
@@ -354,7 +361,7 @@ class InformationExtractor(PytorchLightningBase):
 
     def test_epoch_end(self, outputs):
         self.log_dict({
-            "test_{}_{}".format(name, field): value
+            ("test_{}_{}".format(name, field) if field else "test_{}".format(name,)): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
@@ -386,7 +393,9 @@ class InformationExtractor(PytorchLightningBase):
         return optimizer
 
     @mappable
-    def predict(self, doc):
-        return self(self.preprocessor(doc, only_text=True))["predictions"]
+    def predict(self, doc, **kwargs):
+        self.eval()
+        with torch.no_grad():
+            return self(list(self.preprocessor(doc, only_text=False)), return_loss=False, return_predictions=True, group_by_document=True, **kwargs)["predictions"][0]
 
     save_pretrained = save_pretrained
