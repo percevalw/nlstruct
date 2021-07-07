@@ -48,7 +48,7 @@ model = InformationExtractor(
             #"char": dict(module="vocabulary", values=string.ascii_letters+string.digits+string.punctuation, with_unk=True, with_pad=False),
         },
     ),
-    dynamic_preprocessing=True,
+    dynamic_preprocessing=False,
 
     # Text encoders
     encoder=dict(
@@ -137,6 +137,7 @@ model = InformationExtractor(
 trainer = pl.Trainer(
     gpus=1,
     progress_bar_refresh_rate=False,
+    checkpoint_callback=False, # do not make checkpoints since it slows down the training a lot
     logger=[
         #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
         RichTableLogger(key="epoch", fields={
@@ -152,7 +153,8 @@ trainer = pl.Trainer(
             "duration": {"format": "{:.0f}", "name": "dur(s)"},
         }),
     ],
-    max_epochs=10)
+    val_check_interval=200,
+    max_steps=1000)
 trainer.fit(model, dataset)
 model.save_pretrained("ner.pt")
 ```

@@ -2,6 +2,7 @@ import random
 import time
 import warnings
 from collections import defaultdict
+from copy import deepcopy
 from importlib import import_module
 from itertools import chain
 
@@ -177,10 +178,11 @@ class PytorchLightningBase(pl.LightningModule):
                     )
                     return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=self.batch_size, collate_fn=identity)
                 elif non_default_epoch_length is not None and hasattr(self.train_data, '__len__'):
-                    prep = self.preprocess(
-                        loop(self.train_data, shuffle=True),
-                        split="train"
-                    )
+                    if self.dynamic_preprocessing:
+                        prep = self.preprocess(loop(self.train_data, shuffle=True), split="train")
+                    else:
+                        prep = loop(self.preprocess(self.train_data, split="train"), shuffle=True)
+
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
                         shuffle=False, batch_size=self.batch_size, collate_fn=identity)
@@ -382,12 +384,12 @@ class InformationExtractor(PytorchLightningBase):
             return x
 
         if split == "train" and self.dynamic_preprocessing:
-            data = self.preprocessor(data, chain=True)
+            data = self.preprocessor(data, only_text=False, chain=True)
             return chain.from_iterable(map(shuffle, batchify(data, 1000)))
         else:
             training = self.preprocessor.training
             self.preprocessor.eval()
-            data = list(self.preprocessor(data, only_text=True, chain=True))
+            data = list(self.preprocessor(data, only_text=False, chain=True))
             self.preprocessor.training = training
             return data
 

@@ -242,8 +242,8 @@ class BERTEncoder(TextEncoder):
             self.word_pooler = Pooler(**word_pooler) if word_pooler is not None else None
         self.combine_mode = combine_mode
 
-        bert_model = self.bert.bert if hasattr(self.bert, 'bert') else self.bert.roberta
-        self._output_size = self.output_embeddings.shape[1]
+        bert_model = self.bert.bert if hasattr(self.bert, 'bert') else self.bert.roberta if hasattr(self.bert, 'roberta') else self.bert
+        self._output_size = bert_model.embeddings.word_embeddings.weight.shape[1]
         if freeze_n_layers < 0:
             freeze_n_layers = len(bert_model.encoder.layer) + 2 + freeze_n_layers
         for module in (bert_model.embeddings, *bert_model.encoder.layer)[:freeze_n_layers]:
