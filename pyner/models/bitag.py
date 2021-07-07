@@ -8,6 +8,7 @@ from pyner.torch_utils import repeat, dclamp, multi_dim_triu, multi_dim_topk, lo
 
 from pyner.torch_utils import multi_dim_triu
 
+
 @register("bitag")
 class BiTagSpanScorer(SpanScorer):
     def __init__(self, input_size, hidden_size, n_labels,

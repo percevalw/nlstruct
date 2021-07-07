@@ -7,8 +7,7 @@ import transformers
 from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
 from transformers.models.bert.modeling_bert import BertLMPredictionHead
 
-
-from pyner.registry import register
+from pyner.base import register
 from pyner.torch_utils import fork_rng
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
@@ -200,7 +199,6 @@ def rearrange_and_prune(tensors, mask):
     return new_tensors, new_mask
 
 
-
 @register("text_encoder")
 class TextEncoder(torch.nn.Module):
     @property
@@ -237,14 +235,15 @@ class BERTEncoder(TextEncoder):
                 self.bert = _bert if _bert is not None else transformers.AutoModel.from_pretrained(path, config=bert_config)
         self.output_lm_embeds = output_lm_embeds
         self.n_layers = n_layers
+        if n_layers > 1:
+            with fork_rng(True):
+                self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers)
         with fork_rng(True):
-            self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers)
-        with fork_rng(True):
-            self.word_pooler = Pooler(**word_pooler)
+            self.word_pooler = Pooler(**word_pooler) if word_pooler is not None else None
         self.combine_mode = combine_mode
 
-        bert_model = getattr(getattr(self.bert, 'roberta', self.bert), 'bert', self.bert)
-        self._output_size = bert_model.embeddings.word_embeddings.weight.shape[1]
+        bert_model = self.bert.bert if hasattr(self.bert, 'bert') else self.bert.roberta
+        self._output_size = self.output_embeddings.shape[1]
         if freeze_n_layers < 0:
             freeze_n_layers = len(bert_model.encoder.layer) + 2 + freeze_n_layers
         for module in (bert_model.embeddings, *bert_model.encoder.layer)[:freeze_n_layers]:
@@ -257,11 +256,13 @@ class BERTEncoder(TextEncoder):
 
     @property
     def output_embeddings(self):
-        return self.bert.lm_head.decoder.weight if hasattr(self.bert, 'lm_head') else self.bert.cls.predictions.weight
+        bert = self.bert  # .bert if hasattr(self.bert, 'bert') else self.bert.roberta
+        return bert.lm_head.decoder.weight if hasattr(bert, 'lm_head') else bert.cls.predictions.weight
 
     @property
     def output_bias(self):
-        return self.bert.lm_head.decoder.bias if hasattr(self.bert, 'lm_head') else self.bert.cls.predictions.bias
+        bert = self.bert  # .bert if hasattr(self.bert, 'bert') else self.bert.roberta
+        return bert.lm_head.decoder.bias if hasattr(bert, 'lm_head') else bert.cls.predictions.bias
 
     @property
     def bert_config(self):
@@ -281,20 +282,31 @@ class BERTEncoder(TextEncoder):
             flat_mask = mask
         if self.output_lm_embeds:
             token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)
-            lm_embeds = token_features.logits[1]
+            lm_embeds = list(token_features.logits)
             token_features = token_features.hidden_states
         else:
             lm_embeds = None
             token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)[2]
-        token_features = torch.einsum("stld,l->std", torch.stack(token_features[-self.n_layers:], dim=2), self.weight.softmax(-1) if self.combine_mode == "softmax" else self.weight)
-        if needs_concat:
-            token_features, lm_embeds = rearrange_and_prune([token_features, lm_embeds], mask)[0]
+        if self.n_layers == 1:
+            token_features = token_features[0]
+        else:
+            token_features = torch.einsum("stld,l->std", torch.stack(token_features[-self.n_layers:], dim=2), self.weight.softmax(-1) if self.combine_mode == "softmax" else self.weight)
+        if lm_embeds is not None:
+            token_features = lm_embeds[1]
+        if needs_concat and lm_embeds is not None:
+            token_features, lm_embeds[0], lm_embeds[1] = rearrange_and_prune([token_features, lm_embeds[0], lm_embeds[1]], mask)[0]
+        elif needs_concat and lm_embeds is None:
+            token_features, = rearrange_and_prune([token_features], mask)[0]
         # assert (self.word_pooler(token_features, (batch["words_bert_begin"], batch["words_bert_end"]))[mask.any(1)] == token_features[mask.any(1)]).all()
         # assert (self.word_pooler(lm_embeds, (batch["words_bert_begin"], batch["words_bert_end"]))[mask.any(1)] == lm_embeds[mask.any(1)]).all()
-        if token_features is not None:
-            token_features = self.word_pooler(token_features, (batch["words_bert_begin"], batch["words_bert_end"]))
-        if lm_embeds is not None:
-            lm_embeds = self.word_pooler(lm_embeds, (batch["words_bert_begin"], batch["words_bert_end"]))
+        if self.word_pooler is not None:
+            if token_features is not None:
+                token_features = self.word_pooler(token_features, (batch["words_bert_begin"], batch["words_bert_end"]))
+            if lm_embeds is not None:
+                lm_embeds = (
+                    self.word_pooler(lm_embeds[0], (batch["words_bert_begin"], batch["words_bert_end"])),
+                    self.word_pooler(lm_embeds[1], (batch["words_bert_begin"], batch["words_bert_end"]))
+                )
 
         if self.output_lm_embeds:
             return token_features, lm_embeds

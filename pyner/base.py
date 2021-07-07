@@ -10,8 +10,131 @@ import transformers
 
 from pyner.data_utils import loop, mappable, batchify
 from pyner.optimization import *
-from pyner.registry import register, get_instance, get_config
+from pyner.registry import registry
 from pyner.torch_utils import fork_rng, identity
+import functools
+import inspect
+from collections import Mapping
+
+import torch
+
+
+def register(name, do_not_serialize=()):
+    def fn(base_cls_):
+        def scope_trick(base_cls):
+            class new_cls(base_cls, Mapping):
+                registry_name = name
+                _do_not_serialize_ = do_not_serialize
+                __doc__ = None
+
+                def __init__(self, *args, **kwargs):
+                    kwargs.pop("module", None)
+
+                    super().__init__(*args, **kwargs)
+
+                    base_init = base_cls.__init__
+                    args = inspect.getcallargs(base_init, self, *args, **kwargs)
+                    for arg, value in args.items():
+                        if arg != "self" and not arg.startswith('_') and not hasattr(self, arg):
+                            self.__dict__[arg] = value
+
+                functools.update_wrapper(__init__, base_cls.__init__)
+                if hasattr(base_cls.__init__, '__doc__'):
+                    __init__.__doc__ = base_cls.__init__.__doc__
+                functools.update_wrapper(base_cls.__call__, base_cls.forward)
+                __init__.fn = base_cls.__init__
+
+                def __new__(cls, *args, **kwargs):
+                    module = kwargs.pop("module", None)
+                    if module is not None:
+                        arg_cls = get_module(module)
+                        assert issubclass(arg_cls, cls), f"{arg_cls.__name__} is not a subclass of {cls.__name__}"
+                        cls = arg_cls
+                        return cls(*args, **kwargs)
+                    self = super().__new__(cls)
+                    return self
+
+                functools.update_wrapper(__new__, base_cls.__init__)
+
+                def __len__(self):
+                    return len(get_config(self))
+
+                def __iter__(self):
+                    return iter(get_config(self))
+
+                def __hash__(self):
+                    return torch.nn.Module.__hash__(self)
+
+                def __getitem__(self, item):
+                    return get_config(self)[item]
+
+            new_cls.__name__ = base_cls.__name__
+            registry[name] = new_cls
+            return new_cls
+
+        return scope_trick(base_cls_)
+
+    return fn
+
+
+def get_module(name):
+    return registry[name]
+
+
+def get_instance(kwargs):
+    if isinstance(kwargs, torch.nn.Module):
+        return deepcopy(kwargs)
+    if not isinstance(kwargs, dict):
+        return kwargs
+    kwargs = dict(kwargs)
+    module = kwargs["module"]
+    return get_module(module)(**kwargs)
+
+
+def get_config(self, path=(), drop_unserialized_keys=False):
+    config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
+    for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
+        if key.startswith('_') or (drop_unserialized_keys and key in self.__class__._do_not_serialize_):
+            continue
+        value = getattr(self, key)
+        if hasattr(value, 'to_diff_dict'):
+            config[key] = value.to_diff_dict()
+        elif hasattr(value, 'to_dict'):
+            config[key] = value.to_dict()
+        elif isinstance(value, torch.nn.ModuleList):
+            config[key] = {i: get_config(item, drop_unserialized_keys=drop_unserialized_keys) for i, item in enumerate(value)}
+        elif isinstance(value, torch.nn.ModuleDict):
+            config[key] = {name: get_config(item, path=(*path, key), drop_unserialized_keys=drop_unserialized_keys) for name, item in value.items()}
+        elif isinstance(value, torch.nn.Module):
+            config[key] = get_config(value, drop_unserialized_keys=drop_unserialized_keys)
+        elif isinstance(value, torch.Tensor):
+            pass
+        elif isinstance(value, (int, float, str, tuple, list, dict, slice, range)):
+            config[key] = value
+        elif value is None:
+            config[key] = None
+        elif isinstance(value, type):
+            config[key] = f"{value.__module__}.{value.__name__}" if value.__module__ != "builtins" else value.__name__
+        else:
+            raise ValueError("Cannot get config from {}".format(str(value)[:40]))
+    return config
+
+
+def merge_configs(*configs):
+    if len(configs) == 1:
+        return configs[0]
+    a, b, rest = configs[-2], configs[-1], configs[:-2]
+    if len(rest) > 0:
+        return merge_configs(*rest, merge_configs(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        a = dict(a)
+        for key in b.keys():
+            if key in a:
+                a[key] = merge_configs(a[key], b[key])
+            else:
+                a[key] = b[key]
+        return a
+    return b
 
 
 class DummyIterableDataset(torch.utils.data.IterableDataset):
@@ -236,7 +359,7 @@ class InformationExtractor(PytorchLightningBase):
             with fork_rng(True):
                 self.encoder = get_instance({**self.encoder, "_preprocessor": self.preprocessor}) if not isinstance(self.encoder, torch.nn.Module) else self.encoder
             with fork_rng(True):
-                self.decoder = get_instance({**self.decoder, "input_size": self.encoder.output_size, "_preprocessor": self.preprocessor, "_encoder": self.encoder}) if not isinstance(self.decoder, torch.nn.Module) else self.decoder
+                self.decoder = get_instance({**self.decoder, "_preprocessor": self.preprocessor, "_encoder": self.encoder}) if not isinstance(self.decoder, torch.nn.Module) else self.decoder
 
     def setup(self, stage='fit'):
         if stage == 'fit':
@@ -264,7 +387,7 @@ class InformationExtractor(PytorchLightningBase):
         else:
             training = self.preprocessor.training
             self.preprocessor.eval()
-            data = list(self.preprocessor(data, chain=True))
+            data = list(self.preprocessor(data, only_text=True, chain=True))
             self.preprocessor.training = training
             return data
 
@@ -273,8 +396,8 @@ class InformationExtractor(PytorchLightningBase):
         if device_index is None:
             max_memory = 20000
         else:
-            max_memory = min(torch.cuda.get_device_properties(device_index).total_memory/1024**2, 25000)
-        #bert_size_factor = size_factor#50 if self.encoder.bert.config.num_hidden_layers > 12 or self.encoder.bert.config.hidden_size > 768 else 5
+            max_memory = min(torch.cuda.get_device_properties(device_index).total_memory / 1024 ** 2, 25000)
+        # bert_size_factor = size_factor#50 if self.encoder.bert.config.num_hidden_layers > 12 or self.encoder.bert.config.hidden_size > 768 else 5
         threshold = max_memory / self.size_factor
 
         samples_and_sizes = sorted([(sample, len(sample["tokens_mask"]), max((len(x) for x in sample["tokens_mask"])))
@@ -352,7 +475,7 @@ class InformationExtractor(PytorchLightningBase):
 
     def validation_epoch_end(self, outputs):
         self.log_dict({
-            ("val_{}_{}".format(name, field) if field else "val_{}".format(name,)): value
+            ("val_{}_{}".format(name, field) if field else "val_{}".format(name, )): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
@@ -361,7 +484,7 @@ class InformationExtractor(PytorchLightningBase):
 
     def test_epoch_end(self, outputs):
         self.log_dict({
-            ("test_{}_{}".format(name, field) if field else "test_{}".format(name,)): value
+            ("test_{}_{}".format(name, field) if field else "test_{}".format(name, )): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
@@ -396,6 +519,6 @@ class InformationExtractor(PytorchLightningBase):
     def predict(self, doc, **kwargs):
         self.eval()
         with torch.no_grad():
-            return self(list(self.preprocessor(doc, only_text=False)), return_loss=False, return_predictions=True, group_by_document=True, **kwargs)["predictions"][0]
+            return self(list(self.preprocessor(doc, only_text=False)), **{"return_loss": False, "return_predictions": True, "group_by_document": True, **kwargs})["predictions"][0]
 
     save_pretrained = save_pretrained

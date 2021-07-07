@@ -28,6 +28,7 @@ def slice_tokenization_output(tokens, begin, end, insert_before=None, insert_aft
         "text": ([insert_before] if insert_before is not None else []) + list(tokens["text"][begin_indice:end_indice]) + ([insert_after] if insert_after is not None else []),
     }
 
+
 class LargeSentenceException(Exception):
     pass
 
@@ -241,7 +242,7 @@ class NERPreprocessor(torch.nn.Module):
                             tags[entity_idx][i][fragment_label] = True
 
             if len(entities_label) == 0:
-                entities_label = [[False] * len(self.vocabularies["entity_label"].values)]
+                entities_label = [[False] * len(self.vocabularies["entity_label"].values)] if self.multi_label else [0]
                 entities_fragments = [[]]
                 entities_mask = [False]
             else:
@@ -584,15 +585,16 @@ class SpanScorer(torch.nn.Module):
 @register("contiguous_entity_decoder")
 class ContiguousEntityDecoder(torch.nn.Module):
     def __init__(self,
-                 input_size=768,
                  contextualizer=None,
                  span_scorer=dict(),
                  intermediate_loss_slice=slice(None),
                  _classifier=None,
                  _preprocessor=None,
+                 _encoder=None,
                  ):
         super().__init__()
 
+        input_size = _encoder.output_size
         labels = _preprocessor.vocabularies["entity_label"].values
         # Pre decoder module
         if contextualizer is not None:
