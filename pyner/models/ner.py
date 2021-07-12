@@ -604,11 +604,11 @@ class ContiguousEntityDecoder(torch.nn.Module):
             self.contextualizer = None
 
         self.n_labels = n_labels = len(labels)
-        self.span_scorer = SpanScorer(
-            input_size=input_size if contextualizer is None else self.contextualizer.output_size,
-            n_labels=n_labels,
+        self.span_scorer = SpanScorer(**{
+            "input_size": input_size if contextualizer is None else self.contextualizer.output_size,
+            "n_labels": n_labels,
             **span_scorer,
-        )
+        })
         self.intermediate_loss_slice = intermediate_loss_slice
 
     def on_training_step(self, step_idx, total):
