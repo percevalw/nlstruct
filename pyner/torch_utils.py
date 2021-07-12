@@ -13,6 +13,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+try:
+    import networkx as nx
+except ImportError:
+    pass
+
 # Parts of this file was adapted from "https://github.com/PetrochukM/PyTorch-NLP/blob/master/torchnlp/random.py"
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
@@ -753,6 +758,46 @@ def set_seed(seed, cuda=torch.cuda.is_available()):
     if cuda:  # pragma: no cover
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+
+
+def get_cliques(adj, mask, indices=None, must_contain=None):
+    """
+    Extract cliques from a torch adjacency matrix
+    :param adj: torch.FloatTensor
+        Adjacency matrix: n_samples * n_items * n_items of floats
+    :param mask: torch.BoolTensor
+        Mask of the items: n_samples * n_items
+    :param indices: torch.LongTensor
+        Mapping to apply to the extracted indices
+    :param must_contain: torch.BoolTensor
+        If not None, at least one of these items must be contained in a clique to extract it: n_samples * n_items
+
+    :return: torch.LongTensor
+        Cliques, with -1 as pad value n_samples * n_cliques * n_items
+    """
+    device = adj.device
+    cliques_items_indices = []
+    for sample_idx, (sample_relations_scores, sample_items_mask) in enumerate(zip(adj.cpu().numpy(), mask.cpu())):
+        sample_items_indices = sample_items_mask.nonzero(as_tuple=True)[0].numpy()
+        sample_items_mask = sample_items_mask.numpy()
+        graph = nx.from_numpy_matrix(sample_relations_scores[sample_items_indices][:, sample_items_indices])
+        cliques_items_indices.append([])
+        for (entity_idx, clique), _ in zip(enumerate(nx.find_cliques(graph)), range(100)):
+            clique_items_indices = sample_items_indices[clique]
+            if indices is None:
+                cliques_items_indices[-1].append(clique_items_indices[sample_items_mask[clique_items_indices]].tolist())
+            else:
+                cliques_items_indices[-1].append([
+                    idx
+                    for i in clique_items_indices[sample_items_mask[clique_items_indices]].tolist()
+                    for idx in indices[sample_idx][i][indices[sample_idx][i] != -1].tolist()
+                ])
+            if must_contain is not None and not must_contain[sample_idx, cliques_items_indices[-1][-1]].any():
+                cliques_items_indices[-1].pop(-1)
+    cliques_items_indices = pad_to_tensor(cliques_items_indices, pad=-1, dtype=torch.long, device=device)
+    if cliques_items_indices.ndim == 2:
+        cliques_items_indices = cliques_items_indices.unsqueeze(-1)[..., :0]
+    return cliques_items_indices
 
 
 seed_all = set_seed
