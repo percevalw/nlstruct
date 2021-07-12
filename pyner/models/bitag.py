@@ -1,12 +1,13 @@
 import math
+
 import torch
 import torch.nn.functional as F
-from pyner.models.common import register, Identity
-from pyner.models.ner import SpanScorer, MarginalTagLoss, SpanLoss
-from pyner.models.crf import BIOULDecoder
-from pyner.torch_utils import repeat, dclamp, multi_dim_triu, multi_dim_topk, log1mexp, gather
 
-from pyner.torch_utils import multi_dim_triu
+from pyner.models.common import Identity
+from pyner.models.crf import BIOULDecoder
+from pyner.models.ner import SpanScorer, MarginalTagLoss, SpanLoss
+from pyner.registry import register
+from pyner.torch_utils import multi_dim_triu, repeat, dclamp, multi_dim_topk, log1mexp, gather
 
 
 @register("bitag")

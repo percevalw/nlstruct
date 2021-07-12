@@ -8,7 +8,8 @@ import torch
 import transformers
 
 from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
-from pyner.models.common import register, Vocabulary, Contextualizer
+from pyner.models.common import Vocabulary, Contextualizer
+from pyner.registry import register, get_instance
 from pyner.torch_utils import list_factorize, batch_to_tensors, bce_with_logits, nll
 
 

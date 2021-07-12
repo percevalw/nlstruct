@@ -7,7 +7,7 @@ import transformers
 from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
 from transformers.models.bert.modeling_bert import BertLMPredictionHead
 
-from pyner.base import register
+from pyner.registry import register
 from pyner.torch_utils import fork_rng
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',

@@ -2,7 +2,7 @@ import torch
 from pytorch_lightning.metrics import Metric
 
 from pyner.data_utils import regex_tokenize, split_spans
-from pyner.base import register
+from pyner.registry import register
 from pyner.torch_utils import pad_to_tensor
 
 
