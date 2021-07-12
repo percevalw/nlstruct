@@ -307,6 +307,19 @@ class NERDataset(BaseDataset):
                         labels.add(entity["label"])
         return sorted(labels)
 
+    def __or__(self, other):
+        def merge(x, y):
+            if x is None:
+                return y
+            if y is None:
+                return x
+            return x + y
+        return NERDataset(
+            merge(self.train_data, other.train_data),
+            merge(self.val_data, other.val_data),
+            merge(self.test_data, other.test_data),
+        )
+
 
 class NormalizationDataset(NERDataset):
     def __init__(self,
