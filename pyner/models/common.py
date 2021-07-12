@@ -433,12 +433,14 @@ class LSTMContextualizer(Contextualizer):
 
         num_directions = 2 if self.lstm_layers[0].bidirectional else 1
         real_hidden_size = self.lstm_layers[0].proj_size if getattr(self.lstm_layers[0], 'proj_size', 0) > 0 else self.lstm_layers[0].hidden_size
-        initial_h_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
-                                  len(features), real_hidden_size,
-                                  dtype=features.dtype, device=features.device) * 0.1
-        initial_c_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
-                                  len(features), real_hidden_size,
-                                  dtype=features.dtype, device=features.device) * 0.1
+        initial_h_n = (torch.randn if self.rand_init and self.training else torch.zeros)(
+            num_directions,
+            len(features), real_hidden_size,
+            dtype=features.dtype, device=features.device) * 0.1
+        initial_c_n = (torch.randn if self.rand_init and self.training else torch.zeros)(
+            num_directions,
+            len(features), real_hidden_size,
+            dtype=features.dtype, device=features.device) * 0.1
         for lstm, gate_module in zip(self.lstm_layers, self.gate_modules):
             out, (_, c_n) = lstm(
                 torch.nn.utils.rnn.pack_padded_sequence(features + updates, sentence_lengths.cpu(), batch_first=True),
@@ -489,8 +491,8 @@ class Pooler(torch.nn.Module):
             features = features.unsqueeze(-3)
         if isinstance(mask, tuple):
             begins, ends = mask
-            begins = begins.expand(*features.shape[:begins.ndim-1], begins.shape[-1]).clamp_min(0)
-            ends = ends.expand(*features.shape[:begins.ndim-1], ends.shape[-1]).clamp_min(0)
+            begins = begins.expand(*features.shape[:begins.ndim - 1], begins.shape[-1]).clamp_min(0)
+            ends = ends.expand(*features.shape[:begins.ndim - 1], ends.shape[-1]).clamp_min(0)
             final_shape = (*begins.shape, *features.shape[begins.ndim:])
             features = features.view(-1, features.shape[-2], features.shape[-1])
             begins = begins.reshape(features.shape[0], begins.numel() // features.shape[0] if len(features) else 0)

@@ -124,9 +124,9 @@ class GENIA(NERDataset):
 
         genia_sentences = list(sentencize(genia_docs, reg_split="(\n+)", balance_chars=(), chain=True))
         subset = slice(None) if not debug else slice(0, 50)
-        train_sentences = genia_sentences[:int(len(genia_sentences) * (1-test_split))]
-        val_data = sorted(train_sentences[int(len(train_sentences) * (1-val_split)):], key=lambda x: len(x["text"]))[subset]
-        train_data = sorted(train_sentences[:int(len(train_sentences) * (1-val_split))], key=lambda x: len(x["text"]))[subset]
-        test_data = sorted(genia_sentences[int(len(genia_sentences) * (1-test_split)):], key=lambda x: len(x["text"]))
+        train_sentences = genia_sentences[:int(len(genia_sentences) * (1 - test_split))]
+        val_data = sorted(train_sentences[int(len(train_sentences) * (1 - val_split)):], key=lambda x: len(x["text"]))[subset]
+        train_data = sorted(train_sentences[:int(len(train_sentences) * (1 - val_split))], key=lambda x: len(x["text"]))[subset]
+        test_data = sorted(genia_sentences[int(len(genia_sentences) * (1 - test_split)):], key=lambda x: len(x["text"]))
 
         return train_data, val_data, test_data

@@ -275,6 +275,7 @@ class loop:
 class OverlappingEntityException(Exception):
     pass
 
+
 def slice_document(doc, begin, end, only_text=False, entity_overlap='raise', main_fragment_label=None, offset_spans=True):
     assert entity_overlap in ("raise", "split")
     absolute_begin = doc.get("begin", 0)
@@ -417,7 +418,7 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
     ends = []
     try:
         res = tokenizer.encode_plus(text, return_offsets_mapping=return_offsets_mapping, **kwargs)
-        if 'offset_mapping' in res:# and kwargs.get("add_special_tokens", True):
+        if 'offset_mapping' in res:  # and kwargs.get("add_special_tokens", True):
             if kwargs.get("add_special_tokens", True):
                 begins, ends = zip(*res['offset_mapping'][:-1], (len(text), len(text)))
             else:
