@@ -396,8 +396,9 @@ class InformationExtractor(PytorchLightningBase):
         return optimizer
 
     @mappable
-    def predict(self, doc, **kwargs):
-        self.eval()
+    def predict(self, doc, force_eval=True, **kwargs):
+        if force_eval:
+            self.eval()
         with torch.no_grad():
             return self(list(self.preprocessor(doc, only_text=False)), **{"return_loss": False, "return_predictions": True, "group_by_document": True, **kwargs})["predictions"][0]
 
