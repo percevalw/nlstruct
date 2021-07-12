@@ -24,9 +24,9 @@ class GENIA(NERDataset):
         ),
     }
 
-    def __init__(self, path, test_split=0.1, val_split=0.1, version="3.02p", debug=False):
+    def __init__(self, path, test_split=0.1, val_split=0.1, version="3.02p", debug=False, preprocess_fn=None):
         train_data, val_data, test_data = self.download_and_extract(path, version, debug, test_split=test_split, val_split=val_split)
-        super().__init__(train_data, val_data, test_data)
+        super().__init__(train_data, val_data, test_data, preprocess_fn=preprocess_fn)
 
     def process_xml(self, root_node, idx=0):
         text = ""

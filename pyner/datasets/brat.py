@@ -192,9 +192,9 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
 
 
 class BRATDataset(NERDataset):
-    def __init__(self, train, test=None, val=None, kept_entity_label=None, dropped_entity_label=(), seed=False):
+    def __init__(self, train, test=None, val=None, kept_entity_label=None, dropped_entity_label=(), seed=False, preprocess_fn=None):
         train_data, val_data, test_data = self.extract(train, val, test, dropped_entity_label, kept_entity_label, seed)
-        super().__init__(train_data, val_data, test_data)
+        super().__init__(train_data, val_data, test_data, preprocess_fn=preprocess_fn)
 
     def extract(self, train_source, val_source, test_source, dropped_entity_label=None, kept_entity_label=None, seed=False):
         if isinstance(train_source, (str, list, tuple)):

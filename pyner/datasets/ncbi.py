@@ -21,7 +21,7 @@ class NCBI(NormalizationDataset):
             filename="NCBIdevelopset_corpus.zip"),
     ]
 
-    def __init__(self, path, terminology=None, map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False, debug=False):
+    def __init__(self, path, terminology=None, map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False, debug=False, preprocess_fn=None):
         train_data, val_data, test_data = self.download_and_extract(path, debug)
         super().__init__(
             train_data=train_data,
@@ -31,6 +31,7 @@ class NCBI(NormalizationDataset):
             map_concepts=map_concepts,
             unmappable_concepts=unmappable_concepts,
             relabel_with_semantic_type=relabel_with_semantic_type,
+            preprocess_fn=preprocess_fn,
         )
 
     def download_and_extract(self, path, debug):

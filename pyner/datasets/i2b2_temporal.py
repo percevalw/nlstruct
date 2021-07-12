@@ -10,9 +10,9 @@ from pyner.datasets.base import NERDataset
 
 
 class I2B2Temporal(NERDataset):
-    def __init__(self, path, val_split=False, seed=False, debug=False):
+    def __init__(self, path, val_split=False, seed=False, debug=False, preprocess_fn=None):
         train_data, val_data, test_data = self.extract(path, val_split, seed, debug)
-        super().__init__(train_data, val_data, test_data)
+        super().__init__(train_data, val_data, test_data, preprocess_fn=preprocess_fn)
 
     @staticmethod
     def extract(path, val_split=False, seed=False, debug=False):

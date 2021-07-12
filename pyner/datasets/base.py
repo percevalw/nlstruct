@@ -66,11 +66,11 @@ def ensure_files(path, remotes, mode):
 
 
 class BaseDataset(pl.LightningDataModule):
-    def __init__(self, train_data, val_data, test_data):
+    def __init__(self, train_data, val_data, test_data, preprocess_fn=None):
         super().__init__()
-        self.train_data = train_data
-        self.val_data = val_data
-        self.test_data = test_data
+        self.train_data = train_data if preprocess_fn is None or train_data is None else preprocess_fn(train_data)
+        self.val_data = val_data if preprocess_fn is None or val_data is None else preprocess_fn(val_data)
+        self.test_data = test_data if preprocess_fn is None or test_data is None else preprocess_fn(test_data)
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.train_data)
@@ -314,8 +314,9 @@ class NormalizationDataset(NERDataset):
                  terminology=None,
                  map_concepts=False,
                  unmappable_concepts="raise",
-                 relabel_with_semantic_type=False):
-        super().__init__(train_data, val_data, test_data)
+                 relabel_with_semantic_type=False,
+                 preprocess_fn=None):
+        super().__init__(train_data, val_data, test_data, preprocess_fn=preprocess_fn)
 
         if relabel_with_semantic_type:
             assert terminology is not None, "You need a terminology to relabel entities with coarse labels"
@@ -449,6 +450,19 @@ class NormalizationDataset(NERDataset):
                             if label_as_semantic_type:
                                 concept_type[concept] = entity["label"]
         return Terminology(concept_synonym_pairs=concept_synonyms, concept_semantic_types=concept_type, **kwargs)
+
+    def __or__(self, other):
+        def merge(x, y):
+            if x is None:
+                return y
+            if y is None:
+                return x
+            return x + y
+        return NormalizationDataset(
+            merge(self.train_data, other.train_data),
+            merge(self.val_data, other.val_data),
+            merge(self.test_data, other.test_data),
+        )
 
 
 class MixDataset(BaseDataset):

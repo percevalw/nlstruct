@@ -4,7 +4,7 @@ from pyner.datasets.base import NormalizationDataset
 
 
 class BC5CDR(NormalizationDataset):
-    def __init__(self, path, terminology=None, map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False, debug=False):
+    def __init__(self, path, terminology=None, map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False, debug=False, preprocess_fn=None):
         train_data, val_data, test_data = self.extract(path, debug)
         super().__init__(
             train_data=train_data,
@@ -14,6 +14,7 @@ class BC5CDR(NormalizationDataset):
             map_concepts=map_concepts,
             unmappable_concepts=unmappable_concepts,
             relabel_with_semantic_type=relabel_with_semantic_type,
+            preprocess_fn=preprocess_fn,
         )
 
     def extract(self, path, debug):

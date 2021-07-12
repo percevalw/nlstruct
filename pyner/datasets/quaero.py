@@ -17,7 +17,7 @@ class QUAERO(NormalizationDataset):
     ]
 
     def __init__(self, path, terminology=None, sources=("EMEA", "MEDLINE"), version="2016", val_split=None, seed=False, debug=False,
-                 map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False):
+                 map_concepts=False, unmappable_concepts="raise", relabel_with_semantic_type=False, preprocess_fn=None):
         assert version in ("2015", "2016")
         if val_split is not None or seed is not False:
             assert version == "2015", "As validation split already exist for Quaero 2016, leave val_split=None and seed=False"
@@ -35,6 +35,7 @@ class QUAERO(NormalizationDataset):
             map_concepts=map_concepts,
             unmappable_concepts=unmappable_concepts,
             relabel_with_semantic_type=relabel_with_semantic_type,
+            preprocess_fn=preprocess_fn,
         )
 
     def download_and_extract(self, path, version, sources=("EMEA", "MEDLINE"), val_split=False, seed=False, debug=False):
