@@ -4,6 +4,17 @@ from pytorch_lightning.metrics import Metric
 from pyner.data_utils import regex_tokenize, split_spans
 from pyner.registry import register
 from pyner.torch_utils import pad_to_tensor
+from collections import defaultdict
+
+
+class MetricsCollection(torch.nn.ModuleDict):
+    def forward(self, pred_docs, gold_docs):
+        results = {}
+        for key, module in self.items():
+            module.reset()
+            module(pred_docs, gold_docs)
+            results[key] = {k: float(v) for k, v in module.compute().items()}
+        return results
 
 
 @register("precision_recall_f1")

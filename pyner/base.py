@@ -12,6 +12,7 @@ from pyner.data_utils import loop, mappable, batchify
 from pyner.optimization import *
 from pyner.registry import register, get_instance, get_config
 from pyner.torch_utils import fork_rng, identity
+from pyner.metrics import MetricsCollection
 
 import torch
 
@@ -222,7 +223,7 @@ class InformationExtractor(PytorchLightningBase):
                 "exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1.),
                 "approx": dict(module="dem", binarize_tag_threshold=False, binarize_label_threshold=1.),
             }
-        self.metrics = torch.nn.ModuleDict({k: get_instance(m) for k, m in metrics.items()})
+        self.metrics = MetricsCollection({k: get_instance(m) for k, m in metrics.items()})
 
         # Init postponed to setup
         self.encoder = encoder
