@@ -221,6 +221,7 @@ class BERTEncoder(TextEncoder):
                  output_lm_embeds=False,
                  token_dropout_p=0.1,
                  word_pooler={"module": "pooler", "mode": "mean"},
+                 proj_size=None,
                  freeze_n_layers=-1,
                  _preprocessor=None, ):
         super().__init__()
@@ -237,13 +238,21 @@ class BERTEncoder(TextEncoder):
         self.n_layers = n_layers
         if n_layers > 1:
             with fork_rng(True):
-                self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers)
+                self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers) if combine_mode == "mean" else None
         with fork_rng(True):
             self.word_pooler = Pooler(**word_pooler) if word_pooler is not None else None
         self.combine_mode = combine_mode
 
         bert_model = self.bert.bert if hasattr(self.bert, 'bert') else self.bert.roberta if hasattr(self.bert, 'roberta') else self.bert
-        self._output_size = bert_model.embeddings.word_embeddings.weight.shape[1]
+        bert_output_size = bert_model.embeddings.word_embeddings.weight.shape[1] * (1 if combine_mode != "concat" else n_layers)
+        if proj_size is not None:
+            self.proj = torch.nn.Linear(bert_output_size, proj_size)
+            self._output_size = proj_size
+        else:
+            self.proj = None
+            self._output_size = bert_output_size
+        self.norm = torch.nn.LayerNorm(self._output_size)
+
         if freeze_n_layers < 0:
             freeze_n_layers = len(bert_model.encoder.layer) + 2 + freeze_n_layers
         for module in (bert_model.embeddings, *bert_model.encoder.layer)[:freeze_n_layers]:
@@ -286,13 +295,20 @@ class BERTEncoder(TextEncoder):
             token_features = token_features.hidden_states
         else:
             lm_embeds = None
-            token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)[2]
+            token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)
+            token_features = token_features[2]
         if self.n_layers == 1:
-            token_features = token_features[0]
-        else:
+            token_features = token_features[-1]
+        elif self.combine_mode != "concat":
             token_features = torch.einsum("stld,l->std", torch.stack(token_features[-self.n_layers:], dim=2), self.weight.softmax(-1) if self.combine_mode == "softmax" else self.weight)
-        if lm_embeds is not None:
-            token_features = lm_embeds[1]
+        else:
+            token_features = torch.cat(token_features[-self.n_layers:], dim=-1)
+
+        if self.proj is not None:
+            token_features = F.gelu(self.proj(token_features))
+
+        token_features = self.norm(token_features)
+
         if needs_concat and lm_embeds is not None:
             token_features, lm_embeds[0], lm_embeds[1] = rearrange_and_prune([token_features, lm_embeds[0], lm_embeds[1]], mask)[0]
         elif needs_concat and lm_embeds is None:
@@ -371,7 +387,7 @@ class Contextualizer(torch.nn.Module):
 
 @register("lstm")
 class LSTMContextualizer(Contextualizer):
-    def __init__(self, input_size, hidden_size, num_layers=1, keep_cell_state=False, rand_init=False, gate=False, dropout_p=0.1, bidirectional=True, gate_reference='input'):
+    def __init__(self, input_size, hidden_size=None, num_layers=1, keep_cell_state=False, rand_init=False, gate=False, dropout_p=0.1, bidirectional=True, gate_reference='input'):
         super().__init__()
         if hidden_size is None:
             hidden_size = input_size
@@ -640,8 +656,12 @@ class FeedForwardNetwork(torch.nn.Sequential):
         self.layers = torch.nn.ModuleList(layers)
         self.activation_fn = get_activation_fn(activation)
 
+    @property
+    def output_size(self):
+        return self.layers[-1].weight.shape[0]
+
     def forward(self, input):
-        for i, layer in self.layers:
+        for i, layer in enumerate(self.layers):
             if i > 0:
                 input = self.activation_fn(input)
             input = self.dropout(input)
