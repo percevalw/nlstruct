@@ -112,10 +112,10 @@ class BiTagSpanScorer(SpanScorer):
                   torch.einsum('nlw,t->nlwt', label_logits, self.label_to_tag_proj) +
                   torch.einsum('nwlb,bt->nlwt', bound_logits.view(*bound_logits.shape[:-1], -1, 2), self.bound_to_tag_proj)
             )
-            tag_logprobs = dclamp(self.crf.marginal(
+            tag_logprobs = self.crf.marginal(
                 tag_logits.reshape(-1, *tag_logits.shape[2:]),
                 words_mask.repeat_interleave(self.n_labels, dim=0)
-            ).reshape(tag_logits.shape).double(), max=-self.eps)
+            ).reshape(tag_logits.shape).double()
 
             is_not_empty_logprobs = tag_logprobs[..., 1:].logsumexp(-1)
             is_not_empty_cs_logprobs = torch.cat([
@@ -129,9 +129,9 @@ class BiTagSpanScorer(SpanScorer):
                 dclamp((has_no_hole_inside / (1 + self.densities.unsqueeze(-1).unsqueeze(-1).abs() * repeat(spans_lengths, n_repeat, dim=0).unsqueeze(1).float().clamp_min(1))), max=-self.eps)
             )
             if self.do_tag_bounds:
-                span_logprobs = span_logprobs + dclamp(tag_logprobs[..., :, None, [2, 4]].logsumexp(-1), max=-self.eps)
-                span_logprobs = span_logprobs + dclamp(tag_logprobs[..., None, :, [3, 4]].logsumexp(-1), max=-self.eps)
-            spans_labels_score = span_logprobs - log1mexp(span_logprobs)
+                span_logprobs = span_logprobs + tag_logprobs[..., :, None, [2, 4]].logsumexp(-1)
+                span_logprobs = span_logprobs + tag_logprobs[..., None, :, [3, 4]].logsumexp(-1)
+            spans_labels_score = span_logprobs - log1mexp(dclamp(span_logprobs, max=-self.eps))
 
             prediction = self.crf.tags_to_spans(self.crf.decode(
                 tag_logits[:n_samples].reshape(-1, *tag_logits.shape[2:]),

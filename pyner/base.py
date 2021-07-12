@@ -323,7 +323,7 @@ class InformationExtractor(PytorchLightningBase):
                     losses[key] += float(value)
             if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
                 raise Exception()
-            outputs['loss'].backward()
+            (outputs['loss']/len(inputs)).backward()
             del outputs, key, value
 
         self.counter += 1
