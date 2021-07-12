@@ -29,7 +29,7 @@ def download_file(url, path, checksum=None):
     def reporthook(_, chunk, total):
         nonlocal bar
         if bar is None:
-            bar = tqdm.tqdm(desc=os.path.basename(url), total=total, unit="B", unit_scale=True)
+            bar = tqdm(desc=os.path.basename(url), total=total, unit="B", unit_scale=True)
         bar.update(min(chunk, bar.total - bar.n))
 
     urllib.request.urlretrieve(url, filename=path, reporthook=reporthook)
