@@ -44,8 +44,9 @@ class PytorchLightningBase(pl.LightningModule):
             if getattr(self, 'train_data', None) is None:
                 return None
             with fork_rng(self.data_seed):
+                batch_size = self.batch_size if self.batch_size != "doc" else 1
                 non_default_epoch_length = (
-                    self.trainer.val_check_interval * self.batch_size
+                    self.trainer.val_check_interval * batch_size
                     if (getattr(self, 'trainer', None) is not None
                         and self.trainer.val_check_interval is not None
                         and self.trainer.max_steps is not None) else None
@@ -55,16 +56,16 @@ class PytorchLightningBase(pl.LightningModule):
                         self.train_data,
                         split="train"
                     )
-                    return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=self.batch_size, collate_fn=identity)
+                    return torch.utils.data.DataLoader(prep, shuffle=True, batch_size=batch_size, collate_fn=identity)
                 elif non_default_epoch_length is not None and hasattr(self.train_data, '__len__'):
-                    if self.dynamic_preprocessing:
+                    if self.dynamic_preprocessing is True:
                         prep = self.preprocess(loop(self.train_data, shuffle=True), split="train")
                     else:
                         prep = loop(self.preprocess(self.train_data, split="train"), shuffle=True)
 
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
-                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
                 else:
                     prep = self.preprocess(
                         self.train_data,
@@ -72,7 +73,7 @@ class PytorchLightningBase(pl.LightningModule):
                     )
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, epoch_length=non_default_epoch_length),
-                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
 
         return fn
 
@@ -86,12 +87,13 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.val_data, split="val")
+                batch_size = self.batch_size if self.batch_size != "doc" else 1
                 if hasattr(prep, '__getitem__'):
-                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=self.batch_size, collate_fn=identity)
+                    return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
                 else:
                     return torch.utils.data.DataLoader(
                         DummyIterableDataset(prep, None),
-                        shuffle=False, batch_size=self.batch_size, collate_fn=identity)
+                        shuffle=False, batch_size=batch_size, collate_fn=identity)
 
         return fn
 
@@ -102,7 +104,7 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.test_data, split="test")
-                batch_size = self.batch_size
+                batch_size = self.batch_size if self.batch_size != "doc" else 1
                 if hasattr(prep, '__getitem__'):
                     return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
                 else:
@@ -262,17 +264,19 @@ class InformationExtractor(PytorchLightningBase):
             random.shuffle(x)
             return x
 
-        if split == "train" and self.dynamic_preprocessing:
-            data = self.preprocessor(data, only_text=False, chain=True)
+        if split == "train" and self.dynamic_preprocessing is True:
+            data = self.preprocessor(data, only_text=False, chain=self.batch_size != "doc")
             return chain.from_iterable(map(shuffle, batchify(data, 1000)))
         else:
-            training = self.preprocessor.training
-            self.preprocessor.eval()
-            data = list(self.preprocessor(data, only_text=False, chain=True))
-            self.preprocessor.training = training
+            n_repeat = 1 if self.dynamic_preprocessing is False else int(self.dynamic_preprocessing)
+            data = list(chain.from_iterable((item,)*n_repeat for item in data))
+            data = list(self.preprocessor(data, only_text=False, chain=self.batch_size != "doc"))
             return data
 
     def split_into_mini_batches_to_fit_memory(self, samples):
+        if self.batch_size == "doc" or "tokens" not in samples[0]:
+            yield samples
+            return
         device_index = next(self.parameters()).device.index
         if device_index is None:
             max_memory = 20000
@@ -281,7 +285,7 @@ class InformationExtractor(PytorchLightningBase):
         # bert_size_factor = size_factor#50 if self.encoder.bert.config.num_hidden_layers > 12 or self.encoder.bert.config.hidden_size > 768 else 5
         threshold = max_memory / self.size_factor
 
-        samples_and_sizes = sorted([(sample, len(sample["tokens_mask"]), max((len(x) for x in sample["tokens_mask"])))
+        samples_and_sizes = sorted([(sample, len(sample["tokens"]), max((len(x) for x in sample["tokens"])))
                                     for sample in samples], key=lambda x: x[1] * x[2])
 
         max_sequence_size_so_far = 0
@@ -314,39 +318,45 @@ class InformationExtractor(PytorchLightningBase):
         return inputs
 
     def training_step(self, inputs, batch_idx):
+        if self.batch_size == "doc":
+            inputs = inputs[0]
         self.zero_grad()
         losses = defaultdict(lambda: 0)
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
             outputs = self(mini_batch, return_loss=True, return_predictions=False)
-            key = value = None
             for key, value in outputs.items():
                 if key.endswith("loss"):
                     losses[key] += float(value)
+            (outputs['loss']/len(inputs)).backward()
             if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
                 raise Exception()
-            (outputs['loss']/len(inputs)).backward()
             del outputs, key, value
 
         self.counter += 1
         self.decoder.on_training_step(self.counter, self.max_steps)
+        max_grad = float(max(p.grad.abs().max() for p in self.parameters() if p.grad is not None))
         self.trainer.train_loop.track_and_norm_grad(self.optimizers())
         self.optimizers().step()
-        return {**losses, "count": len(inputs)}
+        return {**losses, "max_grad": max_grad, "count": len(inputs)}
 
     def on_train_epoch_start(self):
         self._time = time.time()
 
     def training_epoch_end(self, outputs):
         total = sum(output["count"] for output in outputs)
+        max_grad = max(output["max_grad"] for output in outputs)
         for key in outputs[0].keys():
             if key.endswith("loss"):
                 self.log(key, sum(output[key] * output["count"] for output in outputs) / total)
         self.log("main_lr", self.optimizers().param_groups[0]["lr"])
         self.log("fast_lr", self.optimizers().param_groups[1]["lr"])
         self.log("bert_lr", self.optimizers().param_groups[2]["lr"])
+        self.log("max_grad", max_grad)
         self.log("duration", time.time() - self._time)
 
     def validation_step(self, inputs, batch_idx):
+        if self.batch_size == "doc":
+            inputs = inputs[0]
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
             outputs = self(mini_batch, return_loss=False, return_predictions=True)
             predictions = outputs['predictions']
