@@ -9,8 +9,8 @@ import transformers
 
 from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
 from pyner.models.common import Vocabulary, Contextualizer
-from pyner.registry import register, get_instance
-from pyner.torch_utils import list_factorize, batch_to_tensors, bce_with_logits, nll
+from pyner.registry import register
+from pyner.torch_utils import list_factorize, batch_to_tensors
 
 
 def slice_tokenization_output(tokens, begin, end, insert_before=None, insert_after=None):
@@ -511,67 +511,6 @@ class NERPreprocessor(torch.nn.Module):
                 }
                 docs[-1]["entities"].append(res_entity)
         return docs
-
-
-class SpanLoss(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, scores, mask, target):
-        if target.ndim == scores.ndim - 1:
-            target = target.unsqueeze(0).repeat_interleave(scores.shape[0], dim=0)
-        loss = (bce_with_logits(
-            scores,
-            target, reduction='none').masked_fill(~mask, 0))
-        loss = loss.mean(-1).sum()
-        # loss = loss.sum()#(loss / mask.rename(None).sum(-1, keepdim=True).sum(-2, keepdim=True).sum(-3, keepdim=True)).sum() * 10
-        return loss
-
-
-class MarginalTagLoss(torch.nn.Module):
-    def __init__(self, positive_only=False):
-        super().__init__()
-        self.positive_only = positive_only
-
-    def forward(self, tag_logprobs, label_logits, batch):
-        if tag_logprobs is None:
-            return 0
-        if tag_logprobs.ndim == 5:
-            shape = tag_logprobs.shape[1:-1]
-        else:
-            shape = tag_logprobs.shape[:-1]
-        O, I, B, L, U = 0, 1, 2, 3, 4
-        begins = batch["fragments_begin"]  # n_samples * n_fragments
-        ends = batch["fragments_end"]  # n_samples * n_fragments
-        labels = batch["fragments_label"]  # n_samples * n_fragments
-        fragment_mask = batch["fragments_mask"]  # n_samples * n_fragments
-        i_tags = torch.zeros(shape, dtype=torch.long)
-        bl_tags = torch.zeros(shape, dtype=torch.long)
-        u_tags = torch.zeros(shape, dtype=torch.long)
-        mask = batch['words_mask']
-        for sample_idx, b, e, l in zip(fragment_mask.nonzero(as_tuple=True)[0].tolist(), begins[fragment_mask].tolist(), ends[fragment_mask].tolist(), labels[fragment_mask].tolist()):
-            if b < e:
-                i_tags[sample_idx, l, b:e + 1] = I
-                bl_tags[sample_idx, l, b] = B
-                bl_tags[sample_idx, l, e] = L
-            else:
-                u_tags[sample_idx, l, b] = U
-        tags = torch.maximum(torch.maximum(i_tags, bl_tags), u_tags).to(tag_logprobs.device)
-        if self.positive_only:
-            mask = mask & (tags > 0).any(1)  # & shift(tags_target.any(-1), dim=1, n=1) & shift(tags_target.any(-1), dim=1, n=-1)
-        loss = nll(
-            tag_logprobs,
-            tags if tag_logprobs.ndim == 4 else tags.unsqueeze(0).repeat_interleave(tag_logprobs.shape[0], dim=0),
-            reduction='none',
-        ).masked_fill(~mask.unsqueeze(1), 0).mean(-2).sum()
-
-        loss = loss + bce_with_logits(
-            label_logits,
-            tags if label_logits.ndim == 3 else tags.unsqueeze(0).repeat_interleave(label_logits.shape[0], dim=0) > 0,
-            reduction='none',
-        ).masked_fill(~mask.unsqueeze(1), 0).mean(-2).sum()
-        # loss = loss.mean(-1).sum()
-        return loss
 
 
 @register("span_scorer")
