@@ -477,11 +477,14 @@ class Contextualizer(torch.nn.Module):
 class LSTMContextualizer(Contextualizer):
     def __init__(self, input_size, hidden_size=None, num_layers=1, keep_cell_state=False, rand_init=False, gate=False, dropout_p=0.1, bidirectional=True, gate_reference='input'):
         super().__init__()
+
         if hidden_size is None:
             hidden_size = input_size
-            self.initial_linear = None
+            same_size = True
         else:
-            self.initial_linear = torch.nn.Linear(input_size, hidden_size)
+            same_size = False
+
+        self.same_size = same_size
         self.rand_init = rand_init
         self.keep_cell_state = keep_cell_state
         if keep_cell_state:
@@ -490,48 +493,53 @@ class LSTMContextualizer(Contextualizer):
         self.gate_reference = gate_reference
 
         self.dropout = torch.nn.Dropout(dropout_p)
-        if gate is False:
-            self.gate_modules = [None] * num_layers
-        else:
-            self.gate_modules = torch.nn.ModuleList([
-                Gate(**{**gate, "input_size": hidden_size})
-                for _ in range(num_layers)])
-        self.lstm_layers = torch.nn.ModuleList([
-            torch.nn.LSTM(input_size=hidden_size, hidden_size=hidden_size // 2, num_layers=1, bidirectional=bidirectional, batch_first=True)
-            for _ in range(num_layers)
+        self.layers = torch.nn.ModuleList([
+            torch.nn.ModuleDict({
+                "lstm": torch.nn.LSTM(
+                    input_size=input_size if i == 0 else hidden_size,
+                    hidden_size=hidden_size // 2,
+                    num_layers=1,
+                    bidirectional=bidirectional,
+                    batch_first=True),
+                "gate": Gate(**{**gate, "input_size": hidden_size}) if gate and i > 0 or not same_size else None,
+            })
+            for i in range(num_layers)
         ])
         self.output_size = hidden_size
 
     @property
     def gate(self):
-        return self.gate_modules[0] if len(self.gate_modules) else False
+        return self.layers[-1]["gate"] if len(self.layers) else False
 
     def forward(self, features, mask, return_all_layers=False, return_global_state=False):
         sentence_lengths = mask.long().sum(1)
         sorter = (-sentence_lengths).argsort()
         inv_sorter = sorter.argsort()
         sentence_lengths = sentence_lengths[sorter]
-        names = features.names
         features = features[sorter]
-        if self.initial_linear is not None:
-            features = self.initial_linear(features)  # sample * token * hidden_size
-        updates = torch.zeros_like(features)
+        # if self.initial_linear is not None:
+        #    features = self.initial_linear(features)  # sample * token * hidden_size
+        updates = torch.zeros(*features.shape[:-1], self.output_size, device=features.device)
         cell_states = []
         all_outputs = []
 
-        num_directions = 2 if self.lstm_layers[0].bidirectional else 1
-        real_hidden_size = self.lstm_layers[0].proj_size if getattr(self.lstm_layers[0], 'proj_size', 0) > 0 else self.lstm_layers[0].hidden_size
-        initial_h_n = (torch.randn if self.rand_init and self.training else torch.zeros)(
-            num_directions,
-            len(features), real_hidden_size,
-            dtype=features.dtype, device=features.device) * 0.1
-        initial_c_n = (torch.randn if self.rand_init and self.training else torch.zeros)(
-            num_directions,
-            len(features), real_hidden_size,
-            dtype=features.dtype, device=features.device) * 0.1
-        for lstm, gate_module in zip(self.lstm_layers, self.gate_modules):
+        first_lstm = self.layers[0]["lstm"]
+        num_directions = 2 if first_lstm.bidirectional else 1
+        real_hidden_size = first_lstm.proj_size if getattr(first_lstm, 'proj_size', 0) > 0 else first_lstm.hidden_size
+        initial_h_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
+                                                                                         len(features), real_hidden_size,
+                                                                                         dtype=features.dtype, device=features.device) * 0.1
+        initial_c_n = (torch.randn if self.rand_init and self.training else torch.zeros)(num_directions,
+                                                                                         len(features), real_hidden_size,
+                                                                                         dtype=features.dtype, device=features.device) * 0.1
+        for i, layer in enumerate(self.layers):
+            lstm, gate = layer["lstm"], layer["gate"]
             out, (_, c_n) = lstm(
-                torch.nn.utils.rnn.pack_padded_sequence(features + updates, sentence_lengths.cpu(), batch_first=True),
+                torch.nn.utils.rnn.pack_padded_sequence(
+                    features if i == 0
+                    else features + updates if self.gate_reference == "input"
+                    else features,
+                    sentence_lengths.cpu(), batch_first=True),
                 (initial_h_n, initial_c_n),
             )
             if self.keep_cell_state:
@@ -542,10 +550,12 @@ class LSTMContextualizer(Contextualizer):
             rnn_output = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)[0]
             rnn_output = self.dropout(rnn_output)
             if self.gate_reference == "input":
-                updates = rnn_output if gate_module is None else gate_module(updates, rnn_output)
-                all_outputs.append((features + updates)[inv_sorter])
+                updates = rnn_output if gate is None else gate(updates, rnn_output)
+                all_outputs.append(((features + updates) if i > 0 or self.same_size else updates)[inv_sorter])
+                if i == 0:
+                    features = rnn_output
             else:
-                features = rnn_output if gate_module is None else gate_module(updates, rnn_output)
+                features = rnn_output if gate is None else gate(updates, rnn_output)
                 all_outputs.append(features[inv_sorter])
         if return_all_layers:
             all_outputs = torch.stack(all_outputs, dim=0)
