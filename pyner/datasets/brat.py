@@ -183,7 +183,7 @@ def export_to_brat(samples, filename_prefix="", overwrite_txt=False, overwrite_a
                 if "relations" in doc:
                     for i, relation in enumerate(doc["relations"]):
                         entity_from = ("T" + str(relation["from_entity_id"] + 1)) if isinstance(relation["from_entity_id"], int) else relation["from_entity_id"]
-                        entity_to = ("T" + str(relation["to_entity_id"] + 1)) + 1 if isinstance(relation["to_entity_id"], int) else relation["to_entity_id"]
+                        entity_to = ("T" + str(relation["to_entity_id"] + 1)) if isinstance(relation["to_entity_id"], int) else relation["to_entity_id"]
                         print("R{}\t{} Arg1:{} Arg2:{}\t".format(
                             i + 1,
                             str(relation["label"]),
