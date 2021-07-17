@@ -1,9 +1,9 @@
 import random
-import re
 import string
 from copy import copy
 
 import numpy as np
+import regex
 from unidecode import unidecode
 
 import functools
@@ -337,11 +337,11 @@ def make_str_from_groups(replacement, groups):
 
 
 def regex_sub_with_spans(pattern, replacement, text):
-    needed_groups = [int(next(j for j in i if j)) for i in re.findall(r"\\([0-9]+)|\\g<([0-9]+)>", replacement)]
+    needed_groups = [int(next(j for j in i if j)) for i in regex.findall(r"\\([0-9]+)|\\g<([0-9]+)>", replacement)]
     begins = []
     ends = []
     deltas = []
-    for match in reversed(list(re.finditer(pattern, text, flags=re.DOTALL))):
+    for match in reversed(list(regex.finditer(pattern, text, flags=regex.DOTALL))):
         middle = make_str_from_groups(replacement, [match.group(i) for i in needed_groups])
         start = match.start()
         end = match.end()
@@ -363,7 +363,7 @@ def regex_multisub_with_spans(patterns, replacements, text, deltas=None, return_
             else:
                 deltas = new_deltas
         else:
-            return re.sub(pattern, replacement, text), None
+            return regex.sub(pattern, replacement, text), None
     return text, deltas
 
 
@@ -441,7 +441,7 @@ def huggingface_tokenize(text, tokenizer, subs=(), return_offsets_mapping=True, 
             for special in special_tokens:
                 striped_piece = striped_piece.replace(special, "")
             piece_size = len(striped_piece)
-            delta = len(re.search(r"^\s*", text[i:]).group(0))
+            delta = len(regex.search(r"^\s*", text[i:]).group(0))
             if striped_piece.lower() != text[i + delta:i + delta + piece_size].lower():
                 raise Exception(f"During tokenization, wordpiece tokenizer replaced {repr(text[i + delta:i + delta + piece_size])} (in {repr(text[i:i + delta + piece_size + 5])}) "
                                 f"with {repr(striped_piece)} (or multiple pieces). "
@@ -485,7 +485,7 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
 
     token_id = 0
 
-    for match in re.finditer(reg, text):
+    for match in regex.finditer(reg, text):
         tokens.append(match.group())
         if return_offsets_mapping:
             begins.append(match.start())
@@ -507,7 +507,7 @@ def regex_tokenize(text, reg=r"[\w']+|[{}]".format(string.punctuation), return_o
 
 def regex_sentencize(text, reg_split, balance_chars=('()', '[]')):
     begin = 0
-    for match in re.finditer(reg_split, text):
+    for match in regex.finditer(reg_split, text):
         end = match.start()
         if all(text[begin:end].count(chars[0]) <= text[begin:end].count(chars[1]) for chars in balance_chars):
             if begin != end:
