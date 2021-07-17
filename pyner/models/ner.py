@@ -52,6 +52,7 @@ class NERPreprocessor(torch.nn.Module):
           sentence_entity_overlap="raise",
           max_tokens=512,
           min_tokens=128,
+          doc_context=True,
           join_small_sentence_rate=0.5,
           large_sentences="equal-split",
           empty_entities="raise",
@@ -111,6 +112,7 @@ class NERPreprocessor(torch.nn.Module):
         self.sentence_entity_overlap = sentence_entity_overlap
         self.filter_entities = filter_entities
         self.large_sentences = large_sentences
+        self.doc_context = doc_context
         self.do_unidecode = do_unidecode
         self.bert_lower = bert_lower
         self.word_regex = word_regex
@@ -260,7 +262,10 @@ class NERPreprocessor(torch.nn.Module):
             # if len(tokens_indice) > self.max_tokens:
             results.append({
                 "tokens": tokenized_sentences["bert_tokens_indice"],
-                "tokens_mask": tokenized_sentences["bert_tokens_mask"],
+                **({
+                    "slice_begin": tokenized_sentences["slice_begin"],
+                    "slice_end": tokenized_sentences["slice_end"],
+                } if "slice_begin" in tokenized_sentences else {}),
                 "sentence_mask": [True] * len(tokenized_sentences["bert_tokens_indice"]),
                 "words_mask": [True] * len(tokenized_sample["words_text"]),
                 "words_text": tokenized_sample["words_text"],
@@ -345,6 +350,10 @@ class NERPreprocessor(torch.nn.Module):
                     "bert_tokens_end": [],
                     "bert_tokens_indice": [],
                     "bert_tokens_mask": [],
+                    **({
+                           "slice_begin": [],
+                           "slice_end": [],
+                       } if self.doc_context else {})
                 })]
         bert_offset = 0
         begin = None
@@ -358,12 +367,13 @@ class NERPreprocessor(torch.nn.Module):
                 continue
 
             bert_tokens = slice_tokenization_output(full_doc_bert_tokens, begin, end,
-                                                    getattr(self.tokenizer, '_bos_token', self.tokenizer.special_tokens_map.get('cls_token', None)) if self.tokenizer is not None else None,
-                                                    getattr(self.tokenizer, '_eos_token', self.tokenizer.special_tokens_map.get('sep_token', None)) if self.tokenizer is not None else None)
+                                                    (getattr(self.tokenizer, '_bos_token', None) or self.tokenizer.special_tokens_map.get('cls_token', None)) if self.tokenizer is not None else None,
+                                                    (getattr(self.tokenizer, '_eos_token', None) or self.tokenizer.special_tokens_map.get('sep_token', None)) if self.tokenizer is not None else None)
 
             if (
                   (self.min_tokens is not None and len(bert_tokens["text"]) < self.min_tokens) or
-                  (self.max_tokens is not None and len(bert_tokens["text"]) < self.max_tokens and (not self.training or random.random() < self.join_small_sentence_rate))
+                  (self.max_tokens is not None and len(bert_tokens["text"]) < self.max_tokens and (
+                        self.join_small_sentence_rate > 0 and (not self.training or random.random() < self.join_small_sentence_rate)))
             ) and len(sentences_bounds):
                 if len(bert_tokens["text"]) + len(slice_tokenization_output(full_doc_bert_tokens, *sentences_bounds[0])["text"]) + 2 < self.max_tokens:
                     continue
@@ -381,7 +391,7 @@ class NERPreprocessor(torch.nn.Module):
 
             # if the sentence has too many tokens, split it
             if len(bert_tokens['text']) > self.max_tokens:
-                warnings.warn(f'Sentences > {self.max_tokens} tokens will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
+                warnings.warn(f'A sentence of more than {self.max_tokens} wordpieces will be split. Consider using a more restrictive regex for sentence splitting if you want to avoid it.')
                 if self.large_sentences == "equal-split":
                     stop_bert_token = max(len(bert_tokens['text']) // ceil(len(bert_tokens['text']) / self.max_tokens), self.min_tokens)
                 elif self.large_sentences == "max-split":
@@ -426,7 +436,10 @@ class NERPreprocessor(torch.nn.Module):
                         "bert_tokens_begin": [bert_tokens["begin"]],
                         "bert_tokens_end": [bert_tokens["end"]],
                         "bert_tokens_indice": [tokens_indice],
-                        "bert_tokens_mask": [[True] * len(tokens_indice)],
+                        **({
+                               "slice_begin": [0],
+                               "slice_end": [len(tokens_indice)],
+                           } if self.doc_context else {})
                     }
                 ))
             else:
@@ -440,16 +453,62 @@ class NERPreprocessor(torch.nn.Module):
                 results[0][2]["bert_tokens_text"].append(bert_tokens["text"])
                 results[0][2]["bert_tokens_begin"].append(bert_tokens["begin"])
                 results[0][2]["bert_tokens_end"].append(bert_tokens["end"])
-                if tokens_indice is not None:
-                    results[0][2]["bert_tokens_indice"].append(tokens_indice)
-                results[0][2]["bert_tokens_mask"].append([True] * len(bert_tokens["text"]))
+                if self.doc_context:
+                    results[0][2]["slice_begin"].append(0)
+                    results[0][2]["slice_end"].append(len(tokens_indice))
+                results[0][2]["bert_tokens_indice"].append(tokens_indice)
+
             begin = None
+        sentences = [(sent, list(sent[1:-1]), rid, sid) for rid, result in enumerate(results) for sid, sent in enumerate(result[2]['bert_tokens_indice'])]
+        if self.doc_context:
+            for i, (sentence_i, _, rid, sid) in enumerate(sentences):
+                final_complete_mode = False
+                sentences_before = sentences[:i]
+                sentences_after = sentences[i + 1:]
+                added_before = 0
+                added_after = 0
+
+                while True:
+                    if len(sentences_before) and len(sentences_before[-1][1]) + len(sentence_i) > self.max_tokens:
+                        sentences_before = []
+                    if len(sentences_after) and len(sentences_after[0][1]) + len(sentence_i) > self.max_tokens:
+                        sentences_after = [sentences_after[0]]
+
+                    if len(sentences_before) + len(sentences_after) == 0:
+                        break
+
+                    if len(sentences_after) == 0:
+                        sent = sentences_before.pop(-1)[1]
+                        way = "before"
+                    elif len(sentences_before) == 0:
+                        sent = sentences_after.pop(0)[1]
+                        way = "after"
+                    else:
+                        if added_before <= added_after:
+                            way = "before"
+                            sent = sentences_before.pop(-1)[1]
+                        else:
+                            way = "after"
+                            sent = sentences_after.pop(0)[1]
+
+                    if way == "before":
+                        sentence_i[1:1] = sent
+                        added_before += len(sent)
+                    else:
+                        if len(sent) + len(sentence_i) > self.max_tokens:
+                            sent = sent[:self.max_tokens - len(sentence_i)]
+                        sentence_i[-1:-1] = sent
+                        added_after += len(sent)
+
+                results[rid][2]['slice_begin'][sid] += added_before
+                results[rid][2]['slice_end'][sid] += added_before
+
         return results
 
     def tensorize(self, batch, device=None):
-        return batch_to_tensors(
+        tensors = batch_to_tensors(
             batch,
-            pad={"entities_fragments": -1, "fragments_entities": -1, "entities_label": -100, "tokens": 0},
+            pad={"entities_fragments": -1, "fragments_entities": -1, "entities_label": -100, "tokens": -1},
             dtypes={
                 "words_mask": torch.bool,
                 "words_chars": torch.long,
@@ -465,6 +524,9 @@ class NERPreprocessor(torch.nn.Module):
                 "entities_fragments": torch.long,
                 "fragments_mask": torch.bool,
             }, device=device)
+        tensors["tokens_mask"] = tensors["tokens"] != -1
+        tensors["tokens"].clamp_min_(0)
+        return tensors
 
     def decode(self, predictions, prep, group_by_document=True):
         pad_tensor = None

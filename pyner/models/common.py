@@ -8,7 +8,7 @@ from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
 from transformers.models.bert.modeling_bert import BertLMPredictionHead
 
 from pyner.registry import register
-from pyner.torch_utils import fork_rng
+from pyner.torch_utils import fork_rng, shift
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
                                   ['random', 'torch', 'numpy', 'torch_cuda'])
@@ -209,6 +209,22 @@ class TextEncoder(torch.nn.Module):
         raise NotImplementedError()
 
 
+def multi_dim_slice(tensors, slices_begin, slices_end):
+    source_max_length = tensors[0].shape[slices_begin.ndim]
+    device = tensors[0].device
+    positions = torch.arange(source_max_length, device=device)
+    slice_source_mask = (positions >= slices_begin.unsqueeze(-1)) & (positions < slices_end.unsqueeze(-1))
+    dest_max_length = (slices_end.unsqueeze(-1) - slices_begin.unsqueeze(-1)).max()
+    slice_dest_mask = torch.arange(dest_max_length, device=device) < slices_end.unsqueeze(-1) - slices_begin.unsqueeze(-1)
+
+    results = []
+    for tensor in tensors:
+        sliced_output = torch.zeros(*slice_dest_mask.shape, *tensor.shape[slice_source_mask.ndim:], device=device, dtype=tensor.dtype)
+        sliced_output[slice_dest_mask] = tensor[slice_source_mask]
+        results.append(sliced_output)
+    return results
+
+
 @register("bert")
 class BERTEncoder(TextEncoder):
     def __init__(self,
@@ -217,14 +233,20 @@ class BERTEncoder(TextEncoder):
                  path=None,
                  n_layers=4,
                  combine_mode="softmax",
-                 dropout_p=0.1,
+                 bert_dropout_p=None,
                  output_lm_embeds=False,
-                 token_dropout_p=0.1,
+                 token_dropout_p=0.,
+                 dropout_p=0.5,
                  word_pooler={"module": "pooler", "mode": "mean"},
                  proj_size=None,
                  freeze_n_layers=-1,
+                 do_cache=False,
                  _preprocessor=None, ):
         super().__init__()
+
+        if do_cache:
+            assert freeze_n_layers == -1, "Must freeze bert to enable caching: set freeze_n_layers=-1"
+
         with fork_rng(True):
             if output_lm_embeds:
                 self.bert = _bert if _bert is not None else transformers.AutoModelForMaskedLM.from_pretrained(path, config=bert_config)
@@ -238,13 +260,14 @@ class BERTEncoder(TextEncoder):
         self.n_layers = n_layers
         if n_layers > 1:
             with fork_rng(True):
-                self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers) if combine_mode == "mean" else None
+                self.weight = torch.nn.Parameter(torch.zeros(n_layers)) if combine_mode == "softmax" else torch.nn.Parameter(torch.ones(n_layers) / n_layers) if combine_mode == "linear" else None
         with fork_rng(True):
             self.word_pooler = Pooler(**word_pooler) if word_pooler is not None else None
         self.combine_mode = combine_mode
 
         bert_model = self.bert.bert if hasattr(self.bert, 'bert') else self.bert.roberta if hasattr(self.bert, 'roberta') else self.bert
         bert_output_size = bert_model.embeddings.word_embeddings.weight.shape[1] * (1 if combine_mode != "concat" else n_layers)
+        self.bert_output_size = bert_output_size
         if proj_size is not None:
             self.proj = torch.nn.Linear(bert_output_size, proj_size)
             self._output_size = proj_size
@@ -258,10 +281,14 @@ class BERTEncoder(TextEncoder):
         for module in (bert_model.embeddings, *bert_model.encoder.layer)[:freeze_n_layers]:
             for param in module.parameters():
                 param.requires_grad = False
-        for module in bert_model.modules():
-            if isinstance(module, torch.nn.Dropout):
-                module.p = dropout_p
+        if bert_dropout_p is not None:
+            for module in bert_model.modules():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = bert_dropout_p
+        self.dropout = torch.nn.Dropout(dropout_p)
         self.token_dropout_p = token_dropout_p
+        self.cache = {}
+        self.do_cache = do_cache
 
     @property
     def output_embeddings(self):
@@ -277,56 +304,117 @@ class BERTEncoder(TextEncoder):
     def bert_config(self):
         return self.bert.config
 
+    def exec_bert(self, tokens, mask, slices_begin=None, slices_end=None):
+        res = self.bert.forward(tokens, mask, output_hidden_states=True)
+        if self.output_lm_embeds:
+            lm_embeds = list(res.logits)
+            token_features = res.hidden_states
+        else:
+            lm_embeds = ()
+            token_features = res[2]
+        if self.n_layers == 1:
+            token_features = token_features[-1].unsqueeze(-2)
+        else:
+            token_features = torch.stack(token_features[-self.n_layers:], dim=2)
+
+        results = (token_features, *lm_embeds)
+        if slices_begin is not None:
+            results = multi_dim_slice(results, slices_begin, slices_end)
+        return results
+
     def forward(self, batch):
         tokens, mask = batch["tokens"], batch["tokens_mask"]
+        device = mask.device
         if self.training & (self.token_dropout_p > 0):
             tokens[mask & (torch.rand_like(mask, dtype=torch.float) < self.token_dropout_p)] = 32004  # self.bert.config.mask_token_id
-        if tokens.ndim == 3:
+        if tokens.ndim == 3 and tokens.shape[1] == 1:
+            flat_tokens = tokens.squeeze(1)
+            flat_mask = mask.squeeze(1)
+            flat_slices_begin = batch['slice_begin'].squeeze(1) if 'slice_begin' in batch else None
+            flat_slices_end = batch['slice_end'].squeeze(1) if 'slice_end' in batch else None
+            needs_concat = False
+        elif tokens.ndim == 3:
             needs_concat = True
             flat_tokens = tokens[mask.any(-1)]
             flat_mask = mask[mask.any(-1)]
+            flat_slices_begin = batch['slice_begin'][mask.any(-1)] if 'slice_begin' in batch else None
+            flat_slices_end = batch['slice_end'][mask.any(-1)] if 'slice_end' in batch else None
         else:
             needs_concat = False
             flat_tokens = tokens
             flat_mask = mask
-        if self.output_lm_embeds:
-            token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)
-            lm_embeds = list(token_features.logits)
-            token_features = token_features.hidden_states
+            flat_slices_begin = batch['slice_begin'] if 'slice_begin' in batch else None
+            flat_slices_end = batch['slice_end'] if 'slice_end' in batch else None
+        if self.do_cache:
+            keys = [hash((tuple(row[:length]), begin, end)) for row, length, begin, end in zip(flat_tokens.tolist(), flat_mask.sum(1).tolist(), flat_slices_begin.tolist(), flat_slices_end.tolist())]
+
+            missing_keys = [key for key in keys if key not in self.cache]
+            missing_keys_mask = [key in missing_keys for key in keys]
+            if sum(missing_keys_mask) > 0:
+                missing_embeds = self.exec_bert(
+                    flat_tokens[missing_keys_mask],
+                    flat_mask[missing_keys_mask],
+                    slices_begin=flat_slices_begin[missing_keys_mask] if flat_slices_begin is not None else None,
+                    slices_end=flat_slices_end[missing_keys_mask] if flat_slices_end is not None else None)
+                cache_entries = [tuple(t[:length] for t in tensor_set)
+                                 for tensor_set, length in zip(zip(*(t.cpu().unbind(0) for t in missing_embeds)), flat_mask[missing_keys_mask].sum(-1).tolist())]
+                for key, cache_entry in zip(missing_keys, cache_entries):
+                    self.cache[key] = cache_entry
+                    if (len(self.cache) % 1000) == 0:
+                        print("cache size:", len(self.cache))
+
+            if sum(missing_keys_mask) == len(missing_keys_mask):
+                (token_features, *lm_embeds) = missing_embeds
+            else:
+                (token_features, *lm_embeds) = (pad_embeds(embeds_list).to(device) for embeds_list in zip(*[self.cache[key] for key in keys]))
         else:
-            lm_embeds = None
-            token_features = self.bert.forward(flat_tokens, flat_mask, output_hidden_states=True)
-            token_features = token_features[2]
+            (token_features, *lm_embeds) = self.exec_bert(
+                flat_tokens,
+                flat_mask,
+                slices_begin=flat_slices_begin,
+                slices_end=flat_slices_end)
+
         if self.n_layers == 1:
-            token_features = token_features[-1]
+            token_features = token_features.squeeze(-2)
         elif self.combine_mode != "concat":
-            token_features = torch.einsum("stld,l->std", torch.stack(token_features[-self.n_layers:], dim=2), self.weight.softmax(-1) if self.combine_mode == "softmax" else self.weight)
+            token_features = torch.einsum("stld,l->std", token_features, self.weight.softmax(-1) if self.combine_mode == "softmax" else self.weight)
         else:
-            token_features = torch.cat(token_features[-self.n_layers:], dim=-1)
+            token_features = token_features.view(*token_features.shape[:-2], -1)
+
+        token_features = self.dropout(token_features)
 
         if self.proj is not None:
             token_features = F.gelu(self.proj(token_features))
 
         token_features = self.norm(token_features)
 
-        if needs_concat and lm_embeds is not None:
+        if needs_concat and len(lm_embeds) > 0:
             token_features, lm_embeds[0], lm_embeds[1] = rearrange_and_prune([token_features, lm_embeds[0], lm_embeds[1]], mask)[0]
-        elif needs_concat and lm_embeds is None:
+        elif needs_concat and len(lm_embeds) == 0:
             token_features, = rearrange_and_prune([token_features], mask)[0]
         # assert (self.word_pooler(token_features, (batch["words_bert_begin"], batch["words_bert_end"]))[mask.any(1)] == token_features[mask.any(1)]).all()
         # assert (self.word_pooler(lm_embeds, (batch["words_bert_begin"], batch["words_bert_end"]))[mask.any(1)] == lm_embeds[mask.any(1)]).all()
         if self.word_pooler is not None:
             if token_features is not None:
                 token_features = self.word_pooler(token_features, (batch["words_bert_begin"], batch["words_bert_end"]))
-            if lm_embeds is not None:
-                lm_embeds = (
-                    self.word_pooler(lm_embeds[0], (batch["words_bert_begin"], batch["words_bert_end"])),
-                    self.word_pooler(lm_embeds[1], (batch["words_bert_begin"], batch["words_bert_end"]))
-                )
+            if len(lm_embeds) > 0:
+                lm_embeds = tuple((
+                    self.word_pooler(part, (batch["words_bert_begin"], batch["words_bert_end"]))
+                    for part in lm_embeds
+                ))
 
         if self.output_lm_embeds:
             return token_features, lm_embeds
         return token_features
+
+
+def pad_embeds(embeds_list):
+    lengths = [t.shape[0] for t in embeds_list]
+    max_length = max(lengths)
+    res = torch.zeros(len(embeds_list), max_length, *embeds_list[0].shape[1:])
+    for i, (embeds, length) in enumerate(zip(embeds_list, lengths)):
+        res[i, :length] = embeds
+    return res
 
 
 @register("char_cnn")
