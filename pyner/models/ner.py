@@ -557,7 +557,10 @@ class NERPreprocessor(torch.nn.Module):
                     label = [self.vocabularies['entity_label'].values[l] for l in entity["label"]]
                 else:
                     label = [self.vocabularies['entity_label'].values[entity["label"]]]
+                if not self.multi_label:
+                    label = label[0]
                 res_entity = {
+                    "entity_id": len(docs[-1]["entities"]),
                     "label": label,
                     "attributes": [
                         {"label": label.split(":")[0], "value": (label.split(":")[1] or None)}
