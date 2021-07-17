@@ -574,7 +574,7 @@ class Pooler(torch.nn.Module):
     def __init__(self, mode="mean", dropout_p=0., input_size=None, n_heads=None, do_value_proj=False):
         super().__init__()
         self.mode = mode
-        assert mode in ("max", "sum", "mean", "attention")
+        assert mode in ("max", "sum", "mean", "attention", "first", "last")
         self.dropout = torch.nn.Dropout(dropout_p)
         if mode == "attention":
             self.key_proj = torch.nn.Linear(input_size, n_heads)
@@ -588,7 +588,14 @@ class Pooler(torch.nn.Module):
             mask = (mask[0].unsqueeze(-1) <= position) & (position < mask[1].unsqueeze(-1))
             features = features.unsqueeze(-3)
         if isinstance(mask, tuple):
+            original_dtype = features.dtype
+            if features.dtype == torch.int or features.dtype == torch.long:
+                features = features.float()
             begins, ends = mask
+            if self.mode == "first":
+                ends = torch.minimum(begins + 1, ends)
+            if self.mode == "last":
+                begins = torch.maximum(ends - 1, begins)
             begins = begins.expand(*features.shape[:begins.ndim - 1], begins.shape[-1]).clamp_min(0)
             ends = ends.expand(*features.shape[:begins.ndim - 1], ends.shape[-1]).clamp_min(0)
             final_shape = (*begins.shape, *features.shape[begins.ndim:])
@@ -602,16 +609,24 @@ class Pooler(torch.nn.Module):
             flat_indices += torch.arange(len(flat_indices), device=device)[:, None, None] * features.shape[1]
 
             flat_indices = flat_indices[flat_indices_mask]
-            return F.embedding_bag(
+            res = F.embedding_bag(
                 input=flat_indices,
                 weight=self.dropout(features.reshape(-1, features.shape[-1])),
                 offsets=torch.cat([torch.tensor([0], device=device), flat_indices_mask.sum(-1).reshape(-1)]).cumsum(0)[:-1].clamp_max(flat_indices.shape[0]),
-                mode=self.mode,
+                mode=self.mode if self.mode not in ("first", "last") else "max",
             ).reshape(final_shape)
+            if res.dtype != original_dtype:
+                res = res.type(original_dtype)
+            return res
         elif torch.is_tensor(mask):
-            mask = mask
             features = features
             features = self.dropout(features)
+            if self.mode == "first":
+                mask = ~shift(mask.long(), n=1, dim=-1).cumsum(-1).bool() & mask
+            elif self.mode == "last":
+                mask = mask.flip(-1)
+                mask = (~shift(mask.long(), n=1, dim=-1).cumsum(-1).bool() & mask).flip(-1)
+
             if mask.ndim <= features.ndim - 1:
                 mask = mask.unsqueeze(-1)
             if 0 in mask.shape:
@@ -627,7 +642,7 @@ class Pooler(torch.nn.Module):
             elif self.mode == "abs-max":
                 values, indices = features.abs().masked_fill(~mask, -100000).max(-2)
                 features = features.gather(dim=-2, index=indices.unsqueeze(1)).squeeze(1)
-            elif self.mode in ("sum", "mean"):
+            elif self.mode in ("sum", "mean", "first", "last"):
                 features = features.masked_fill(~mask, 0).sum(-2)
                 if self.mode == "mean":
                     features = features / mask.float().sum(-2).clamp_min(1.)
