@@ -9,7 +9,7 @@ import transformers
 
 from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
 from pyner.models.common import Vocabulary, Contextualizer
-from pyner.registry import register
+from pyner.registry import register, get_instance
 from pyner.torch_utils import list_factorize, batch_to_tensors
 
 
@@ -598,6 +598,8 @@ class SpanScorer(torch.nn.Module):
 
 @register("contiguous_entity_decoder")
 class ContiguousEntityDecoder(torch.nn.Module):
+    ENSEMBLE = "ensemble_contiguous_entity_decoder"
+
     def __init__(self,
                  contextualizer=None,
                  span_scorer=dict(),
@@ -686,6 +688,70 @@ class ContiguousEntityDecoder(torch.nn.Module):
                             new_entities.append(e)
                     flat_predictions.append(new_entities)
                 predictions = flat_predictions
+
+        return {
+            "predictions": predictions,
+            **loss_dict,
+            **spans,
+        }
+
+
+@register("ensemble_contiguous_entity_decoder")
+class EnsembleContiguousEntityDecoder(torch.nn.Module):
+    def __init__(self, models, ensemble_span_scorer_module=None):
+        super().__init__()
+
+        self.contextualizers = torch.nn.ModuleList([get_instance(m.contextualizer) for m in models])
+        self.n_labels = models[0].n_labels
+        if ensemble_span_scorer_module is None:
+            ensemble_span_scorer_module = models[0].span_scorer.ENSEMBLE
+        self.span_scorer = get_instance({"module": ensemble_span_scorer_module, "models": [get_instance(m.span_scorer) for m in models]})
+
+    def on_training_step(self, step_idx, total):
+        pass
+
+    def fast_params(self):
+        raise NotImplementedError("This ensemble model is not optimizable")
+
+    def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False):
+        ############################
+        # Generate span candidates #
+        ############################
+        if isinstance(ensemble_words_embed[0], tuple):
+            ensemble_words_embed, ensemble_lm_embeds = zip(*ensemble_words_embed)
+        words_mask = batch['words_mask']
+        contextualized_words_embed = [
+            model(words_embed, words_mask, return_all_layers=True)[self.intermediate_loss_slice if return_loss else slice(-1, None)]
+            if model is not None else words_embed
+            for model, words_embed in zip(self.contextualizers, ensemble_words_embed)
+        ]
+        spans = self.span_scorer(contextualized_words_embed, words_mask, batch, force_gold=return_loss)
+
+        #########################
+        # Compute the span loss #
+        #########################
+        loss_dict = {}
+        if return_loss:
+            raise NotImplementedError("This ensemble model does not return a loss")
+
+        predictions = None
+        if return_predictions:
+            spans_mask = spans["flat_spans_mask"]
+            predictions = [[] for _ in batch["original_sample"]]
+            if 0 not in spans_mask.shape:
+                for sample_idx, fragment_idx in spans_mask.nonzero(as_tuple=False).tolist():
+                    predictions[sample_idx].append({
+                        "entity_id": len(predictions[sample_idx]),
+                        "confidence": 1.,  # entities_confidence[sample_idx, entity_idx].item(),
+                        "label": spans["flat_spans_label"][sample_idx, fragment_idx].item(),
+                        "fragments": [
+                            {
+                                "begin": spans["flat_spans_begin"][sample_idx, fragment_idx].item(),
+                                "end": spans["flat_spans_end"][sample_idx, fragment_idx].item(),
+                                "label": spans["flat_spans_label"][sample_idx, fragment_idx].item(),
+                            }
+                        ]
+                    })
 
         return {
             "predictions": predictions,

@@ -7,7 +7,7 @@ import transformers
 from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
 from transformers.models.bert.modeling_bert import BertLMPredictionHead
 
-from pyner.registry import register
+from pyner.registry import register, get_instance
 from pyner.torch_utils import fork_rng, shift
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
@@ -203,8 +203,46 @@ def multi_dim_slice(tensors, slices_begin, slices_end):
     return results
 
 
+def pad_embeds(embeds_list):
+    lengths = [t.shape[0] for t in embeds_list]
+    max_length = max(lengths)
+    res = torch.zeros(len(embeds_list), max_length, *embeds_list[0].shape[1:])
+    for i, (embeds, length) in enumerate(zip(embeds_list, lengths)):
+        res[i, :length] = embeds
+    return res
+
+
+@register("text_encoder")
+class TextEncoder(torch.nn.Module):
+    ENSEMBLE = "ensemble_text_encoder"
+
+    @property
+    def output_size(self):
+        return self._output_size
+
+    def forward(self, batch):
+        raise NotImplementedError()
+
+
+@register("ensemble_text_encoder")
+class EnsembleEncoder(TextEncoder):
+    def __init__(self, models):
+        super().__init__()
+
+        self.models = torch.nn.ModuleList([get_instance(e) for e in models])
+        self._output_size = models[0].output_size
+
+    def forward(self, batch):
+        results = []
+        for model in self.models:
+            results.append(model(batch))
+        return results
+
+
 @register("bert")
 class BERTEncoder(TextEncoder):
+    ENSEMBLE = "ensemble_text_encoder"
+
     def __init__(self,
                  _bert=None,
                  bert_config=None,
@@ -400,15 +438,6 @@ class BERTEncoder(TextEncoder):
         if self.output_lm_embeds:
             return token_features, lm_embeds
         return token_features
-
-
-def pad_embeds(embeds_list):
-    lengths = [t.shape[0] for t in embeds_list]
-    max_length = max(lengths)
-    res = torch.zeros(len(embeds_list), max_length, *embeds_list[0].shape[1:])
-    for i, (embeds, length) in enumerate(zip(embeds_list, lengths)):
-        res[i, :length] = embeds
-    return res
 
 
 @register("char_cnn")

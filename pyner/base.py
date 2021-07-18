@@ -438,3 +438,20 @@ class InformationExtractor(PytorchLightningBase):
             return self(list(self.preprocessor(doc, only_text=False)), **{"return_loss": False, "return_predictions": True, "group_by_document": True, **kwargs})["predictions"][0]
 
     save_pretrained = save_pretrained
+
+    def ensemble_with(self, others, ensemble_encoder_config=None, ensemble_decoder_config=None):
+        config = get_config(self)
+        if ensemble_decoder_config is None:
+            ensemble_decoder_config = {"module": self.decoder.ENSEMBLE}
+        elif isinstance(ensemble_decoder_config, str):
+            ensemble_decoder_config = {"module": ensemble_decoder_config}
+
+        if ensemble_encoder_config is None:
+            ensemble_encoder_config = {"module": self.encoder.ENSEMBLE}
+        elif isinstance(ensemble_encoder_config, str):
+            ensemble_encoder_config = {"module": ensemble_encoder_config}
+
+        config['preprocessor'] = self.preprocessor
+        config['encoder'] = get_instance({**ensemble_encoder_config, "models": ([self.encoder, *(other.encoder for other in others)])})
+        config['decoder'] = get_instance({**ensemble_decoder_config, "models": ([self.decoder, *(other.decoder for other in others)])})
+        return get_instance(config)
