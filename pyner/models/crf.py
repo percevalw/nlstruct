@@ -234,6 +234,25 @@ class LinearChainCRF(torch.nn.Module):
         z = backward[:, 0].logsumexp(-1)
         return forward + backward - emissions - z[:, None, None]  # [:, -1].logsumexp(-1)
 
+    def forward(self, emissions, mask, target):
+        transitions = self.transitions.masked_fill(self.forbidden_transitions, -10000)
+        start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, -10000)
+        end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, -10000)
+
+        bi_emissions = torch.cat([emissions.masked_fill(~target, -100000), emissions], 0).transpose(0, 1)
+        bi_emissions = bi_emissions + self.start_transitions
+
+        out = [bi_emissions[0]]
+        for k in range(1, len(bi_emissions)):
+            res = logdotexp(out[-1], transitions)
+            out.append(res + bi_emissions[k])
+        out = torch.stack(out, dim=0).transpose(0, 1)
+        z = masked_flip(out, mask.repeat(2, 1), dim_x=1)[:, 0]
+        supervised_z = z[:len(mask)].logsumexp(-1)
+        unsupervised_z = z[len(mask):].logsumexp(-1)
+
+        return supervised_z - unsupervised_z
+
 
 class BIOULDecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True, allow_overlap=False, allow_juxtaposition=True, learnable_transitions=True):
