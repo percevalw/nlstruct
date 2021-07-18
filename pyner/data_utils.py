@@ -515,3 +515,7 @@ def regex_sentencize(text, reg_split, balance_chars=('()', '[]')):
             begin = match.end()
     if begin != len(text):
         yield begin, len(text)
+
+
+def dedup(l, key=None):
+    return list({(key(item) if key is not None else item): item for item in l}.values())
