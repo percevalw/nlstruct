@@ -240,6 +240,7 @@ class BERTEncoder(TextEncoder):
                  word_pooler={"module": "pooler", "mode": "mean"},
                  proj_size=None,
                  freeze_n_layers=-1,
+                 do_norm=True,
                  do_cache=False,
                  _preprocessor=None, ):
         super().__init__()
@@ -274,7 +275,7 @@ class BERTEncoder(TextEncoder):
         else:
             self.proj = None
             self._output_size = bert_output_size
-        self.norm = torch.nn.LayerNorm(self._output_size)
+        self.norm = torch.nn.LayerNorm(self._output_size) if do_norm else Identity()
 
         if freeze_n_layers < 0:
             freeze_n_layers = len(bert_model.encoder.layer) + 2 + freeze_n_layers
