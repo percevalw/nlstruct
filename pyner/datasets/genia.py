@@ -7,7 +7,7 @@ from itertools import chain
 
 from sklearn.datasets._base import RemoteFileMetadata
 
-from pyner.data_utils import sentencize
+from pyner.data_utils import sentencize, regex_sentencize, slice_document
 from pyner.datasets.base import NetworkLoadMode, ensure_files, NERDataset
 
 
@@ -24,8 +24,9 @@ class GENIA(NERDataset):
         ),
     }
 
-    def __init__(self, path, test_split=0.1, val_split=0.1, version="3.02p", debug=False, preprocess_fn=None):
-        train_data, val_data, test_data = self.download_and_extract(path, version, debug, test_split=test_split, val_split=val_split)
+    def __init__(self, path, test_split=0.1, val_split=0.1, version="3.02p", debug=False, preprocess_fn=None, split_by_sentences=True, merge_composite_types=True):
+        train_data, val_data, test_data = self.download_and_extract(
+            path, version, debug, test_split=test_split, val_split=val_split, split_by_sentences=split_by_sentences, merge_composite_types=merge_composite_types)
         super().__init__(train_data, val_data, test_data, preprocess_fn=preprocess_fn)
 
     def process_xml(self, root_node, idx=0):
@@ -60,7 +61,8 @@ class GENIA(NERDataset):
             return "cell_line"
         return None
 
-    def download_and_extract(self, path, version, debug=False, raw=False, merge_composite_types=True, drop_duplicates=False, test_split=0.1, val_split=0.1):
+    def download_and_extract(self, path, version, debug=False, raw=False, merge_composite_types=True, drop_duplicates=False,
+                             test_split=0.1, val_split=0.1, split_by_sentences=True):
         remote = self.REMOTE_FILES[version]
         [file] = ensure_files(path, [remote], mode=NetworkLoadMode.AUTO)
         with tarfile.open(file, "r:gz") as tar:
@@ -122,11 +124,64 @@ class GENIA(NERDataset):
                 ))),
             })
 
-        genia_sentences = list(sentencize(genia_docs, reg_split="(\n+)", balance_chars=(), chain=True))
-        subset = slice(None) if not debug else slice(0, 50)
-        train_sentences = genia_sentences[:int(len(genia_sentences) * (1 - test_split))]
-        val_data = sorted(train_sentences[int(len(train_sentences) * (1 - val_split)):], key=lambda x: len(x["text"]))[subset]
-        train_data = sorted(train_sentences[:int(len(train_sentences) * (1 - val_split))], key=lambda x: len(x["text"]))[subset]
-        test_data = sorted(genia_sentences[int(len(genia_sentences) * (1 - test_split)):], key=lambda x: len(x["text"]))
+        if split_by_sentences:
+            n_sentences = len(list(sentencize(genia_docs, reg_split="\n+", balance_chars=(), chain=True)))
+            n_train_sentences = 0
+            n_val_sentences = 0
+            n_test_sentences = 0
+            train_data = []
+            val_data = []
+            test_data = []
+            target_n_test_sentences = int(n_sentences * test_split)
+            target_n_val_sentences = int((n_sentences - target_n_test_sentences) * val_split)
+            target_n_train_sentences = n_sentences - target_n_test_sentences - target_n_val_sentences
+            current_queue = None
+            current_count = 0
+            current_target = 0
+            total = 0
+            while len(genia_docs):
+                doc = genia_docs.pop(0)
+                if n_train_sentences != target_n_train_sentences:
+                    current_queue = train_data
+                    current_target = target_n_train_sentences
+                elif n_val_sentences != target_n_val_sentences:
+                    current_queue = val_data
+                    current_target = target_n_val_sentences
+                elif n_test_sentences != target_n_test_sentences:
+                    current_queue = test_data
+                    current_target = target_n_test_sentences
+
+                sents = list(regex_sentencize(doc["text"], "(\n+)", balance_chars=()))
+
+                if current_count + len(sents) <= current_target:
+                    current_queue.append(doc)
+                    current_count += len(sents)
+                    total += len(sents)
+                    continue
+                elif current_count + len(sents) > current_target:
+                    total += len(sents[:current_target - current_count])
+                    current_queue.append(slice_document(doc, 0, sents[current_target - current_count - 1][1]))
+                    genia_docs.insert(0, slice_document(doc, sents[current_target - current_count][0], len(doc["text"])))
+                    current_count = current_target
+                if current_queue is train_data:
+                    n_train_sentences = current_count
+                if current_queue is val_data:
+                    n_val_sentences = current_count
+                if current_queue is test_data:
+                    n_test_sentences = current_count
+                if current_count == current_target:
+                    current_count = 0
+        else:
+            target_n_test_docs = int(len(genia_docs) * test_split)
+            target_n_val_docs = int((len(genia_docs) - target_n_test_docs) * val_split)
+            target_n_train_docs = len(genia_docs) - target_n_test_docs - target_n_val_docs
+
+            train_data = genia_docs[:target_n_train_docs]
+            val_data = genia_docs[target_n_train_docs:target_n_train_docs + target_n_val_docs]
+            test_data = genia_docs[target_n_train_docs + target_n_val_docs:]
+
+        if debug:
+            train_data = train_data[:10]
+            val_data = val_data[:10]
 
         return train_data, val_data, test_data
