@@ -14,6 +14,7 @@ from sklearn.datasets._base import _sha256
 from tqdm import tqdm
 from unidecode import unidecode
 import warnings
+
 from ..data_utils import mix, loop
 
 
@@ -209,8 +210,6 @@ class Terminology:
         concept_semantic_types = {}
 
         for cui, synonyms in other.concept_synonyms.items():
-            if cui == "OMIM:153400":
-                print(cui, synonyms,concept_mapping.get(cui, cui))
             cui = concept_mapping.get(cui, cui)
             concept_synonym_pairs[cui].update(dict.fromkeys(synonyms))
             sty = other.concept_semantic_types.get(cui, None)
@@ -218,8 +217,6 @@ class Terminology:
                 concept_semantic_types[cui] = sty
 
         for cui, synonyms in self.concept_synonyms.items():
-            if cui == "OMIM:153400":
-                print(cui, synonyms,concept_mapping.get(cui, cui))
             cui = concept_mapping.get(cui, cui)
             concept_synonym_pairs[cui].update(dict.fromkeys(synonyms))
             sty = self.concept_semantic_types.get(cui, None)
@@ -248,7 +245,19 @@ class Terminology:
 class NERDataset(BaseDataset):
     def describe(self, as_dataframe=True):
         counts = {
-            split: {"documents": 0, "entities": 0, "unique_entities_label": set(), "unique_entities_concept": set(), "unique_entities_text": set(), "fragments": 0, "fragmented_entities": 0}
+            split: {"documents": 0,
+                    "entities": 0,
+                    "length": 0,
+                    "unique_labels": set(),
+                    "unique_concepts": set(),
+                    "unique_texts": set(),
+                    "fragments": 0,
+                    "nestings": 0,
+                    "same_label_nestings": 0,
+                    "overlaps": 0,
+                    "same_label_overlaps": 0,
+                    "superpositions": 0,
+                    "fragmentations": 0}
             for split in ["train", "val", "test"]
         }
         for split, split_docs in (("train", self.train_data), ("val", self.val_data), ("test", self.test_data)):
@@ -256,30 +265,46 @@ class NERDataset(BaseDataset):
                 continue
             for doc in split_docs:
                 counts[split]["documents"] += 1
-                for entity in doc["entities"]:
+                for i, entity in enumerate(doc["entities"]):
                     text = ""
                     for fragment in entity["fragments"]:
                         text = text + " " + doc["text"][fragment["begin"]:fragment["end"]]
                     text = " ".join(text.split()).strip(" ")
+                    counts[split]["length"] += len(text.split())
                     counts[split]["entities"] += 1
 
                     if "label" in entity:
                         if isinstance(entity["label"], (list, tuple)):
                             for label in entity["label"]:
-                                counts[split]["unique_entities_label"].add(label)
+                                counts[split]["unique_labels"].add(label)
                         else:
-                            counts[split]["unique_entities_label"].add(entity["label"])
+                            counts[split]["unique_labels"].add(entity["label"])
 
                     if "concept" in entity:
                         if isinstance(entity["concept"], (list, tuple)):
                             for concept in entity["concept"]:
-                                counts[split]["unique_entities_concept"].add(concept)
+                                counts[split]["unique_concepts"].add(concept)
                         else:
-                            counts[split]["unique_entities_concept"].add(entity["concept"])
+                            counts[split]["unique_concepts"].add(entity["concept"])
                     if len(entity["fragments"]) > 1:
-                        counts[split]["fragmented_entities"] += 1
-                    counts[split]["unique_entities_text"].add(text)
+                        counts[split]["fragmentations"] += 1
+                    counts[split]["unique_texts"].add(text)
                     counts[split]["fragments"] += len(entity["fragments"])
+                    for other in doc["entities"][i + 1:]:
+                        b1, e1, b2, e2 = entity['fragments'][0]['begin'], entity['fragments'][0]['end'], other['fragments'][-1]['begin'], other['fragments'][-1]['end']
+                        if b1 == b2 and e1 == e2:
+                            counts[split]["superpositions"] += 1
+                        if not (e1 <= b2 or e2 <= b1):
+                            if (b1 >= b2 and e1 <= e2) or (b2 >= b1 and e2 <= e1):
+                                counts[split]["nestings"] += 1
+                                if entity["label"] == other['label']:
+                                    counts[split]["same_label_nestings"] += 1
+                            else:
+                                counts[split]["overlaps"] += 1
+                                if entity["label"] == other['label']:
+                                    counts[split]["same_label_overlaps"] += 1
+
+            counts[split]["length"] /= (counts[split]["entities"] or 1)
         counts = {
             split: {key: len(value) if hasattr(value, '__len__') and not isinstance(value, str) else value for key, value in doc_counts.items()}
             for split, doc_counts in counts.items()
@@ -314,11 +339,22 @@ class NERDataset(BaseDataset):
             if y is None:
                 return x
             return x + y
+
         return NERDataset(
             merge(self.train_data, other.train_data),
             merge(self.val_data, other.val_data),
             merge(self.test_data, other.test_data),
         )
+
+    def export_to_brat(self, path, overwrite_ann=False, overwrite_txt=False):
+        for data, split in [(self.train_data, "train"), (self.val_data, "val"), (self.test_data, "test")]:
+            try:
+                os.mkdir(path)
+            except FileExistsError:
+                pass
+            if data is not None:
+                from .brat import export_to_brat
+                export_to_brat(data, os.path.join(path, split), overwrite_txt=overwrite_txt, overwrite_ann=overwrite_ann)
 
 
 class NormalizationDataset(NERDataset):
@@ -451,7 +487,7 @@ class NormalizationDataset(NERDataset):
                                 original_begin = entity["fragments"][0]["begin"]
                                 if len(split_entities) == len(concept):
                                     for composite_entity in split_entities:
-                                        entity_text = " ".join(text[fragment["begin"]-original_begin:fragment["end"]-original_begin] for fragment in composite_entity["fragments"])
+                                        entity_text = " ".join(text[fragment["begin"] - original_begin:fragment["end"] - original_begin] for fragment in composite_entity["fragments"])
                                         concept = composite_entity["concept"]
                                         concept_synonyms[concept].append(entity_text)
                                         if label_as_semantic_type:
@@ -471,6 +507,7 @@ class NormalizationDataset(NERDataset):
             if y is None:
                 return x
             return x + y
+
         return NormalizationDataset(
             merge(self.train_data, other.train_data),
             merge(self.val_data, other.val_data),
