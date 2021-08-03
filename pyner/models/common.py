@@ -203,27 +203,6 @@ def multi_dim_slice(tensors, slices_begin, slices_end):
     return results
 
 
-def pad_embeds(embeds_list):
-    lengths = [t.shape[0] for t in embeds_list]
-    max_length = max(lengths)
-    res = torch.zeros(len(embeds_list), max_length, *embeds_list[0].shape[1:])
-    for i, (embeds, length) in enumerate(zip(embeds_list, lengths)):
-        res[i, :length] = embeds
-    return res
-
-
-@register("text_encoder")
-class TextEncoder(torch.nn.Module):
-    ENSEMBLE = "ensemble_text_encoder"
-
-    @property
-    def output_size(self):
-        return self._output_size
-
-    def forward(self, batch):
-        raise NotImplementedError()
-
-
 @register("ensemble_text_encoder")
 class EnsembleEncoder(TextEncoder):
     def __init__(self, models):
@@ -438,6 +417,15 @@ class BERTEncoder(TextEncoder):
         if self.output_lm_embeds:
             return token_features, lm_embeds
         return token_features
+
+
+def pad_embeds(embeds_list):
+    lengths = [t.shape[0] for t in embeds_list]
+    max_length = max(lengths)
+    res = torch.zeros(len(embeds_list), max_length, *embeds_list[0].shape[1:])
+    for i, (embeds, length) in enumerate(zip(embeds_list, lengths)):
+        res[i, :length] = embeds
+    return res
 
 
 @register("char_cnn")

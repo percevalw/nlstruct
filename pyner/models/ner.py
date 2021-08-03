@@ -703,6 +703,7 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
 
         self.contextualizers = torch.nn.ModuleList([get_instance(m.contextualizer) for m in models])
         self.n_labels = models[0].n_labels
+        self.do_flat_predictions = models[0].do_flat_predictions
         if ensemble_span_scorer_module is None:
             ensemble_span_scorer_module = models[0].span_scorer.ENSEMBLE
         self.span_scorer = get_instance({"module": ensemble_span_scorer_module, "models": [get_instance(m.span_scorer) for m in models]})
@@ -713,7 +714,7 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
     def fast_params(self):
         raise NotImplementedError("This ensemble model is not optimizable")
 
-    def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False):
+    def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False, do_flat_predictions=None):
         ############################
         # Generate span candidates #
         ############################
@@ -752,6 +753,18 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
                             }
                         ]
                     })
+
+
+            if (do_flat_predictions is None and self.do_flat_predictions or do_flat_predictions):
+                flat_predictions = []
+                for pred in predictions:
+                    pred_entities = [(e['fragments'][0]["begin"], e['fragments'][0]["end"], e['label'], e["confidence"], e) for e in pred]
+                    new_entities = []
+                    for i, (b1, e1, l1, c, e) in enumerate(pred_entities):
+                        if not any(i != j and (e1 >= b2 and e2 >= b1) and (c, e2 - b2) < (c2, e1 - b1) for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)):
+                            new_entities.append(e)
+                    flat_predictions.append(new_entities)
+                predictions = flat_predictions
 
         return {
             "predictions": predictions,

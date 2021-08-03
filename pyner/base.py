@@ -452,6 +452,6 @@ class InformationExtractor(PytorchLightningBase):
             ensemble_encoder_config = {"module": ensemble_encoder_config}
 
         config['preprocessor'] = self.preprocessor
-        config['encoder'] = get_instance({**ensemble_encoder_config, "models": ([self.encoder, *(other.encoder for other in others)])})
+        config['encoder'] = get_instance({**ensemble_encoder_config, "models": ([self.encoder, *(other.encoder for other in others)])}) if ensemble_encoder_config is not False else self.encoder
         config['decoder'] = get_instance({**ensemble_decoder_config, "models": ([self.decoder, *(other.decoder for other in others)])})
         return get_instance(config)

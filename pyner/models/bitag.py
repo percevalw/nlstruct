@@ -1,17 +1,7 @@
-import math
-
-import torch
-import torch.nn.functional as F
-
-from pyner.models.common import Identity
-from pyner.models.crf import BIOULDecoder
-from pyner.models.ner import SpanScorer
-from pyner.registry import register, get_instance
-from pyner.torch_utils import multi_dim_triu, repeat, dclamp, multi_dim_topk, log1mexp, gather, nll, bce_with_logits, cross_entropy_with_logits, inv_logsigmoid
-
-from pyner.models.bitag import *
 from pyner.models.common import *
+from pyner.models.crf import BIOULDecoder
 from pyner.models.ner import *
+from pyner.torch_utils import multi_dim_triu, repeat, dclamp, multi_dim_topk, gather, nll, bce_with_logits, cross_entropy_with_logits, inv_logsigmoid
 
 
 @register("bitag")
@@ -112,7 +102,7 @@ class BiTagSpanScorer(SpanScorer):
         self.biaffine_bias = torch.nn.Parameter(torch.zeros(()))
 
         self.biaffine_loss = BiaffineLoss(multi_label=self.multi_label)
-        self.tagger_loss = TaggerLoss(marginal=False, _crf=self.crf)
+        self.tagger_loss = TaggerLoss(marginal=marginal_tagger_loss, _crf=self.crf)
         self.mode = mode
 
     def fast_params(self):
@@ -179,12 +169,9 @@ class BiTagSpanScorer(SpanScorer):
                     crf_tag_logits[-n_samples:].reshape(-1, *crf_tag_logits.shape[2:]),
                     words_mask[-n_samples:].repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)
                 )
-                viterbi_mask = self.crf.tags_to_spans(crf_decoded_tags, words_mask[-n_samples:].repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)).reshape(n_samples, -1,
-                                                                                                                                                                                    n_words,
-                                                                                                                                                                                    n_words).permute(0,
-                                                                                                                                                                                                     2,
-                                                                                                                                                                                                     3,
-                                                                                                                                                                                                     1)
+                viterbi_mask = self.crf.tags_to_spans(
+                    crf_decoded_tags, words_mask[-n_samples:].repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)) \
+                    .reshape(n_samples, -1, n_words, n_words).permute(0, 2, 3, 1)
 
         if self.do_biaffine:
             begins_embed = self.begin_proj(words_embed).view(words_embed.shape[0], words_embed.shape[1], -1, self.hidden_size).transpose(1, 2)
@@ -283,6 +270,8 @@ class BiTagSpanScorer(SpanScorer):
                     mask=spans_mask & (biaffine_logits.sigmoid() > self.threshold),
                     dim=1,
                 )
+            else:
+                raise NotImplementedError()
 
             fragments_sorter = torch.argsort(fragments_begin.masked_fill(~fragments_mask, 100000), dim=-1)
             fragments_begin = gather(fragments_begin, dim=-1, index=fragments_sorter)
@@ -324,10 +313,10 @@ class BiTagSpanScorer(SpanScorer):
     def loss(self, spans, batch):
         tag_loss = 0.
         span_loss = 0.
-        if "spans_scores" in spans and getattr(self, "span_loss", None):
-            span_loss = self.span_loss(spans["spans_scores"], spans["spans_mask"], spans["spans_target"])
-        if "tag_logprobs" in spans and getattr(self, "marginal_tag_loss", None):
-            tag_loss = self.marginal_tag_loss(spans["tag_logprobs"], spans["label_logits"], batch) * self.tag_loss_weight
+        if getattr(self, "biaffine_loss", None) and spans.get("biaffine_logits", None) is not None:
+            span_loss = self.biaffine_loss(spans["biaffine_logits"], spans, batch) * self.biaffine_loss_weight
+        if "crf_tag_logprobs" in spans or "crf_tag_logprobs" in spans:
+            tag_loss = self.tagger_loss(spans, batch) * self.tag_loss_weight
 
         return {
             "loss": tag_loss + span_loss,
@@ -345,42 +334,34 @@ class EnsembleBiTagSpanScorer(SpanScorer):
         main = models[0]
 
         self.input_size = main.input_size
+        self.hidden_size = main.hidden_size
         self.n_labels = main.n_labels
         self.do_biaffine = main.do_biaffine
-        self.do_length = main.do_length
         self.do_tagging = main.do_tagging
-        self.do_tag_bounds = main.do_tag_bounds
-        self.tag_loss_weight = main.tag_loss_weight
-        self.do_viterbi_filtering = main.do_viterbi_filtering
+        self.do_length = main.do_length
+        self.multi_label = main.multi_label
+        self.biaffine_loss_weight = main.biaffine_loss_weight
+        self.detach_span_tag_logits = main.detach_span_tag_logits
         self.threshold = main.threshold
-        self.keep_fragments_threshold = main.keep_fragments_threshold
-        self.max_fragments_count = main.max_fragments_count
-        self.hidden_size = main.hidden_size
         self.max_length = main.max_length
+        self.max_fragments_count = main.max_fragments_count
         self.eps = main.eps
+        self.mode = main.mode
 
         self.crf = main.crf
-        self.ensemble_label_proj = torch.nn.ModuleList([getattr(m, 'label_proj', None) for m in models])
-        self.ensemble_bound_proj = torch.nn.ModuleList([getattr(m, 'bound_proj', None) for m in models])
+        self.ensemble_tag_combinator = torch.nn.ModuleList([getattr(m, 'tag_combinator', None) for m in models])
+        self.ensemble_tag_proj = torch.nn.ModuleList([getattr(m, 'tag_proj', None) for m in models])
+        self.ensemble_label_proj = torch.nn.ModuleList([getattr(m, 'length_proj', None) for m in models])
         self.ensemble_begin_proj = torch.nn.ModuleList([getattr(m, 'begin_proj', None) for m in models])
         self.ensemble_end_proj = torch.nn.ModuleList([getattr(m, 'end_proj', None) for m in models])
-        self.ensemble_norm = torch.nn.ModuleList([getattr(m, 'norm', None) for m in models])
-        self.ensemble_length_proj = torch.nn.ModuleList([getattr(m, 'length_proj', None) for m in models])
-        self.register_buffer('compat_bias', torch.stack([m.compat_bias for m in models], dim=0).mean(0))
-
-        # O, I, B, L, U
-        self.register_buffer('bound_to_tag_proj', main.bound_to_tag_proj.data)
-        self.register_buffer('label_to_tag_proj', main.label_to_tag_proj.data)
-
-        self.span_loss = main.span_loss
-        self.marginal_tag_loss = main.marginal_tag_loss
+        self.register_buffer('biaffine_bias', torch.stack([m.biaffine_bias for m in models], dim=0).mean(0))
 
     def fast_params(self):
         raise NotImplementedError()
 
     def forward(self, ensemble_words_embed, words_mask, batch, force_gold=False):
         n_samples, n_words = words_mask.shape
-        device = words_mask.device
+        device = ensemble_words_embed[0].device
         n_repeat = 1
 
         start_positions = torch.arange(n_words, device=device)[None, :, None]
@@ -399,84 +380,87 @@ class EnsembleBiTagSpanScorer(SpanScorer):
             ensemble_words_embed = [words_embed.view(words_embed.shape[0] * words_embed.shape[1], words_embed.shape[2], words_embed.shape[3]) for words_embed in ensemble_words_embed]
             words_mask = repeat(words_mask, n_repeat, 0)
 
-        span_logprobs = 0
-        compat_scores = 0
-        ensemble_label_logits = ensemble_bound_logits = tag_logprobs = has_no_hole_inside = compat_logprobs = None
-        prediction = torch.zeros_like(spans_mask)
+        crf_tag_logits = crf_tag_logprobs = biaffine_logits = tagger_logits = None
+        viterbi_mask = None
 
         if self.do_tagging:
-            ensemble_label_logits = [label_proj(words_embed).transpose(-1, -2) for label_proj, words_embed in zip(self.ensemble_label_proj, ensemble_words_embed)]  # n_samples * n_words * n_labels
-            ensemble_bound_logits = [bound_proj(words_embed) for bound_proj, words_embed in zip(self.ensemble_bound_proj, ensemble_words_embed)]  # n_samples * n_words * begin/end
-            tag_logits = torch.stack([(
-                  torch.einsum('nlw,t->nlwt', label_logits, self.label_to_tag_proj) +
-                  torch.einsum('nwlb,bt->nlwt', bound_logits.view(*bound_logits.shape[:-1], -1, 2), self.bound_to_tag_proj)
-            ) for label_logits, bound_logits in zip(ensemble_label_logits, ensemble_bound_logits)], dim=0).mean(0)
+            crf_tag_logits = torch.stack([(
+                                              self.tag_proj(words_embed)  # n_samples * n_words * (n_labels * ...)
+                                                  .view(n_samples, n_words, (self.n_labels + (0 if self.multi_label else 1)), self.tag_combinator.shape[0])
+                                                  .permute(0, 2, 1, 3)  # n_samples * n_labels * n_words * (...)
+                                          ) @ self.tag_combinator for words_embed in ensemble_words_embed], dim=0).mean(0)
+            crf_tag_logprobs = self.crf.marginal(
+                crf_tag_logits.reshape(-1, *crf_tag_logits.shape[2:]),
+                words_mask.repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)
+            ).reshape(crf_tag_logits.shape).double()
 
-            tag_logprobs = dclamp(self.crf.marginal(
-                tag_logits.reshape(-1, *tag_logits.shape[2:]),
-                words_mask.repeat_interleave(self.n_labels, dim=0)
-            ).reshape(tag_logits.shape).double(), max=-self.eps)
-
-            is_not_empty_logprobs = tag_logprobs[..., 1:].logsumexp(-1)
+            is_not_empty_logprobs = crf_tag_logprobs[..., 1:].logsumexp(-1)
             is_not_empty_cs_logprobs = torch.cat([
                 torch.zeros_like(is_not_empty_logprobs[..., :1]),
                 is_not_empty_logprobs,
             ], dim=-1).cumsum(-1)
-
             has_no_hole_inside = (multi_dim_triu(is_not_empty_cs_logprobs[..., None, :-1] - is_not_empty_cs_logprobs[..., 1:, None], diagonal=1))  # .clamp_max(-1e-14)
 
-            span_logprobs = span_logprobs + dclamp(has_no_hole_inside, max=-self.eps)
-            if self.do_tag_bounds:
-                span_logprobs = span_logprobs + dclamp(tag_logprobs[..., :, None, [2, 4]].logsumexp(-1), max=-self.eps)
-                span_logprobs = span_logprobs + dclamp(tag_logprobs[..., None, :, [3, 4]].logsumexp(-1), max=-self.eps)
-            spans_labels_score = span_logprobs - log1mexp(span_logprobs)
+            tagger_logprobs = torch.minimum(torch.minimum(
+                dclamp(has_no_hole_inside, max=-self.eps),
+                crf_tag_logprobs[..., :, None, [2, 4]].logsumexp(-1),
+            ), crf_tag_logprobs[..., None, :, [3, 4]].logsumexp(-1))
+            tagger_logits = inv_logsigmoid(tagger_logprobs, eps=self.eps)
+            if self.detach_span_tag_logits:
+                tagger_logits = tagger_logits.detach()
+
+            if not force_gold:
+                crf_decoded_tags = self.crf.decode(
+                    crf_tag_logits[-n_samples:].reshape(-1, *crf_tag_logits.shape[2:]),
+                    words_mask[-n_samples:].repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)
+                )
+                viterbi_mask = self.crf.tags_to_spans(
+                    crf_decoded_tags, words_mask[-n_samples:].repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)
+                ).reshape(n_samples, -1, n_words, n_words).permute(0, 2, 3, 1)
 
         if self.do_biaffine:
-            ensemble_compat_scores = []
+            ensemble_biaffine_logits = []
             for words_embed, norm, begin_proj, end_proj, length_proj in zip(
                   ensemble_words_embed,
-                  self.ensemble_norm,
                   self.ensemble_begin_proj,
                   self.ensemble_end_proj,
                   self.ensemble_length_proj,
             ):
-                begins_embed = norm(begin_proj(words_embed).view(words_embed.shape[0], words_embed.shape[1], -1, self.hidden_size)).transpose(1, 2)
-                ends_embed = norm(end_proj(words_embed).view(words_embed.shape[0], words_embed.shape[1], -1, self.hidden_size)).transpose(1, 2)
-                compat_begin_end_logits = torch.einsum('nlad,nlbd->nlab', begins_embed, ends_embed) / math.sqrt(begins_embed.shape[-1])  # sample * begin * end
-                begin_length_logits = length_proj(begins_embed)  # sample * label * begin * length
-                end_length_logits = length_proj(ends_embed)  # sample * label * end * length
-
-                compat_scores = compat_begin_end_logits + self.compat_bias
-
+                begins_embed = begin_proj(words_embed).view(words_embed.shape[0], words_embed.shape[1], -1, self.hidden_size).transpose(1, 2)
+                ends_embed = end_proj(words_embed).view(words_embed.shape[0], words_embed.shape[1], -1, self.hidden_size).transpose(1, 2)
+                biaffine_logits = torch.einsum('nlad,nlbd->nlab', begins_embed, ends_embed) / math.sqrt(begins_embed.shape[-1])
                 if self.do_length:
-                    compat_scores = compat_scores + (
+                    begin_length_logits = self.length_proj(begins_embed)  # sample * label * begin * length
+                    end_length_logits = self.length_proj(ends_embed)  # sample * label * end * length
+
+                    biaffine_logits = biaffine_logits + (
                           gather(begin_length_logits, dim=-1, index=spans_lengths.unsqueeze(1)) +
                           gather(end_length_logits, dim=-1, index=spans_lengths.transpose(1, 2).unsqueeze(1))
                     )
 
-                ensemble_compat_scores.append(compat_scores)
-            ensemble_compat_scores = torch.stack(ensemble_compat_scores, dim=0).mean(0) + self.compat_bias
+                ensemble_biaffine_logits.append(biaffine_logits)
+            biaffine_logits = torch.stack(ensemble_biaffine_logits, dim=0).mean(0) + self.compat_bias
 
-            if self.do_tagging:
-                compat_logprobs = F.logsigmoid(compat_scores.double())
-                span_logprobs = span_logprobs + dclamp(compat_logprobs, max=-self.eps)
-            else:
-                spans_labels_score = compat_logprobs
+        if not self.do_biaffine:
+            spans_logits = tagger_logits
+        elif not self.do_tagging:
+            spans_logits = biaffine_logits
+        else:
+            spans_logits = tagger_logits + biaffine_logits
 
-        spans_labels_score = spans_labels_score.permute(0, 2, 3, 1)
         spans_mask = spans_mask.unsqueeze(1).permute(0, 2, 3, 1)
-
-        last_spans_labels_score = spans_labels_score[-n_samples:]
-
-        if self.do_tagging:
-            prediction = self.crf.tags_to_spans(self.crf.decode(
-                tag_logits[:n_samples].reshape(-1, *tag_logits.shape[2:]),
-                words_mask[:n_samples].repeat_interleave(self.n_labels, dim=0)
-            ), words_mask[:n_samples].repeat_interleave(self.n_labels, dim=0)).reshape(n_samples, -1, n_words, n_words).permute(0, 2, 3, 1)
+        spans_logits = spans_logits.permute(0, 2, 3, 1)
+        spans_logits = spans_logits[-n_samples:]
+        if biaffine_logits is not None:
+            biaffine_logits = biaffine_logits.permute(0, 2, 3, 1)
+            biaffine_logits = biaffine_logits[-n_samples:]
+        if tagger_logits is not None:
+            tagger_logits = tagger_logits.permute(0, 2, 3, 1)
+            tagger_logits = tagger_logits[-n_samples:]
 
         spans_target = None
         if force_gold:
-            spans_target = torch.zeros(n_samples, n_words, n_words, self.n_labels, device=device).bool()
+            spans_target = torch.zeros(n_samples, n_words, n_words, (self.n_labels + (0 if self.multi_label else 1)), device=device).bool()
             if torch.is_tensor(batch["fragments_mask"]) and batch["fragments_mask"].any():
                 spans_target[
                     (torch.arange(n_samples, device=device).unsqueeze(1) * batch["fragments_mask"].long())[batch["fragments_mask"]],
@@ -490,58 +474,92 @@ class EnsembleBiTagSpanScorer(SpanScorer):
         ###############################################################
 
         # Top k sampling
-        fragments_entities = None
-        entities_fragments = None
+        fragments_logit = None
 
         if force_gold:
             fragments_label = batch["fragments_label"]
             fragments_begin = batch["fragments_begin"]
             fragments_end = batch["fragments_end"]
             fragments_mask = batch["fragments_mask"]
-        else:
-            (fragments_begin, fragments_end, fragments_label), fragments_mask = multi_dim_topk(
-                last_spans_labels_score,
-                topk=self.max_fragments_count,
-                mask=(last_spans_labels_score.sigmoid() > self.threshold) & spans_mask & (prediction if self.do_viterbi_filtering else True),
-                dim=1,
-            )
+        elif self.multi_label:
+            if self.do_tagging and self.do_biaffine:
+                if self.mode == "seq":
+                    bounds_match_logits = biaffine_logits.masked_fill(~viterbi_mask, -100000)
+                    (fragments_begin, fragments_end, fragments_label), fragments_mask = multi_dim_topk(
+                        spans_logits,
+                        topk=self.max_fragments_count,
+                        mask=(
+                              spans_mask & viterbi_mask & (
+                              (
+                                    (bounds_match_logits >= bounds_match_logits.max(-2, keepdim=True).values - 1e-14) &
+                                    (bounds_match_logits >= bounds_match_logits.max(-3, keepdim=True).values - 1e-14)
+                              ) | (bounds_match_logits.sigmoid() > self.threshold))),
+                        dim=1,
+                    )
+                elif self.mode == "sum":
+                    (fragments_begin, fragments_end, fragments_label), fragments_mask = multi_dim_topk(
+                        spans_logits,
+                        topk=self.max_fragments_count,
+                        mask=(
+                              spans_mask & (
+                            ((viterbi_mask | (tagger_logits > 0.)) & (biaffine_logits > 0))
+                        )
+                        ),
+                        dim=1,
+                    )
+
+            elif self.do_tagging:
+                (fragments_begin, fragments_end, fragments_label), fragments_mask = multi_dim_topk(
+                    spans_logits,
+                    topk=self.max_fragments_count,
+                    mask=spans_mask & viterbi_mask,
+                    dim=1,
+                )
+            elif self.do_biaffine:
+                (fragments_begin, fragments_end, fragments_label), fragments_mask = multi_dim_topk(
+                    spans_logits,
+                    topk=self.max_fragments_count,
+                    mask=spans_mask & (biaffine_logits.sigmoid() > self.threshold),
+                    dim=1,
+                )
+            else:
+                raise NotImplementedError()
+
             fragments_sorter = torch.argsort(fragments_begin.masked_fill(~fragments_mask, 100000), dim=-1)
             fragments_begin = gather(fragments_begin, dim=-1, index=fragments_sorter)
             fragments_end = gather(fragments_end, dim=-1, index=fragments_sorter)
             fragments_label = gather(fragments_label, dim=-1, index=fragments_sorter)
+            fragments_logit = spans_logits[torch.arange(n_samples, device=device).unsqueeze(1), fragments_begin, fragments_end, fragments_label]
+        else:
+            if self.do_biaffine and not self.do_tagging:
+                best_begin_end_scores, best_begin_end_labels = spans_logits.log_softmax(-1).max(-1)
+                (fragments_begin, fragments_end), fragments_mask = multi_dim_topk(
+                    best_begin_end_scores,
+                    topk=self.max_fragments_count,
+                    mask=spans_mask.any(-1) & (best_begin_end_labels > 0),
+                    dim=1,
+                )
+                fragments_label = best_begin_end_labels[torch.arange(n_samples, device=device)[:, None], fragments_begin, fragments_end] - 1
+
+                fragments_sorter = torch.argsort(fragments_begin.masked_fill(~fragments_mask, 100000), dim=-1)
+                fragments_begin = gather(fragments_begin, dim=-1, index=fragments_sorter)
+                fragments_end = gather(fragments_end, dim=-1, index=fragments_sorter)
+                fragments_label = gather(fragments_label, dim=-1, index=fragments_sorter)
+                fragments_logit = best_begin_end_scores[torch.arange(n_samples, device=device).unsqueeze(1), fragments_begin, fragments_end]
 
         return {
             "flat_spans_label": fragments_label,
             "flat_spans_begin": fragments_begin,
             "flat_spans_end": fragments_end,
             "flat_spans_mask": fragments_mask,
-            "spans_scores": spans_labels_score.view(n_repeat, n_samples, *spans_labels_score.shape[1:]),
+            "flat_spans_logit": fragments_logit,
+
+            "spans_logits": spans_logits.view(n_repeat, n_samples, *spans_logits.shape[1:]),
+            "biaffine_logits": biaffine_logits.view(n_repeat, n_samples, *spans_logits.shape[1:]) if biaffine_logits is not None else None,
             "spans_target": spans_target,
             "spans_mask": spans_mask,
-            "tag_logprobs": tag_logprobs.view(n_repeat, n_samples, *tag_logprobs.shape[1:]) if tag_logprobs is not None else None,
-            "has_no_hole_inside": has_no_hole_inside.view(n_repeat, n_samples, *has_no_hole_inside.shape[1:]) if has_no_hole_inside is not None else None,
-            "begin_bounds": tag_logprobs.view(n_repeat, n_samples, *tag_logprobs.shape[1:])[..., :, None, [2, 4]].logsumexp(-1) if tag_logprobs is not None else None,
-            "end_bounds": tag_logprobs.view(n_repeat, n_samples, *tag_logprobs.shape[1:])[..., None, :, [3, 4]].logsumexp(-1) if tag_logprobs is not None else None,
-            "compat_logprobs": compat_logprobs.view(n_repeat, n_samples, *compat_logprobs.shape[1:]) if compat_logprobs is not None else None,
-            "label_logits": [label_logits.view(n_repeat, n_samples, *label_logits.shape[1:]) if label_logits is not None else None for label_logits in ensemble_label_logits],
-            "tag_logits": tag_logits,
-            "bound_logits": [bound_logits.view(n_repeat, n_samples, *bound_logits.shape[1:]) if bound_logits is not None else None for bound_logits in ensemble_bound_logits],
-            "flat_spans_scores": last_spans_labels_score[
-                torch.arange(n_samples, device=device).unsqueeze(1), fragments_begin, fragments_end, fragments_label] if last_spans_labels_score is not None else None,
-        }
-
-    def loss(self, spans, batch):
-        tag_loss = 0.
-        span_loss = 0.
-        if getattr(self, "biaffine_loss", None) and spans.get("biaffine_logits", None) is not None:
-            span_loss = self.biaffine_loss(spans["biaffine_logits"], spans, batch) * self.biaffine_loss_weight
-        if "crf_tag_logprobs" in spans or "crf_tag_logprobs" in spans:
-            tag_loss = self.tagger_loss(spans, batch) * self.tag_loss_weight
-
-        return {
-            "loss": tag_loss + span_loss,
-            "tag_loss": tag_loss,
-            "span_loss": span_loss,
+            "crf_tag_logprobs": crf_tag_logprobs.view(n_repeat, n_samples, *crf_tag_logprobs.shape[1:]) if crf_tag_logprobs is not None else None,
+            "crf_tag_logits": crf_tag_logits,
         }
 
 
