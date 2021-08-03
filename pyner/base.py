@@ -287,7 +287,7 @@ class InformationExtractor(PytorchLightningBase):
             return chain.from_iterable(map(shuffle, batchify(data, 1000)))
         else:
             n_repeat = 1 if self.dynamic_preprocessing is False else int(self.dynamic_preprocessing)
-            data = list(chain.from_iterable((item,)*n_repeat for item in data))
+            data = list(chain.from_iterable((item,) * n_repeat for item in data))
             data = list(self.preprocessor(data, only_text=False, chain=self.batch_size != "doc"))
             return data
 
