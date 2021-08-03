@@ -231,7 +231,7 @@ class DocumentEntityMetric(Metric):
               gold_tags.float().sum(-1).sum(-1).unsqueeze(0)
         )
         tag_match_scores = 2 * torch.einsum("pkt,gkt->pg", pred_tags.float(), gold_tags.float()) / tag_denom_match_scores.clamp_min(1)
-        tag_match_scores[tag_denom_match_scores == 0.] = 1.
+        #tag_match_scores[(tag_denom_match_scores == 0.) & (tag_match_scores == 0.)] = 1.
 
         score = 0.
 
@@ -251,32 +251,30 @@ class DocumentEntityMetric(Metric):
         label_match_recall = torch.einsum("pk,gk->pg", pred_entities_labels.float(), gold_entities_labels.float()) / gold_entities_labels.float().sum(-1).unsqueeze(0).clamp_min(1.)
         label_match_scores = 2 / (1. / label_match_precision + 1. / label_match_recall)
         match_scores = label_match_scores * tag_match_scores
+        if self.binarize_tag_threshold is not False:
+            tag_match_scores = (tag_match_scores >= self.binarize_tag_threshold).float()
+        if self.binarize_label_threshold is not False:
+            label_match_scores = (label_match_scores >= self.binarize_tag_threshold).float()
+        effective_scores = tag_match_scores * label_match_scores
 
         pred_count, gold_count = len(pred_doc_entities), len(gold_doc_entities)
-        validated_scores = torch.zeros_like(match_scores) - 1.
+        matched_scores = torch.zeros_like(match_scores) - 1.
         for pred_idx in range(match_scores.shape[0]):
             if self.joint_matching:
                 pred_idx = match_scores.max(-1).values.argmax()
-            # pred_idx = gold_scores.argmax()
             gold_idx = match_scores[pred_idx].argmax()
 
-            match_score = max(0, match_scores[pred_idx, gold_idx].float())
-            tag_match_score = max(0, tag_match_scores[pred_idx, gold_idx].float())
-            label_match_score = max(0, label_match_scores[pred_idx, gold_idx].float())
-            if self.binarize_tag_threshold is not False:
-                tag_match_score = float(tag_match_score >= self.binarize_tag_threshold)
-            if self.binarize_label_threshold is not False:
-                label_match_score = float(label_match_score >= self.binarize_label_threshold)
-            effective_score = label_match_score * tag_match_score
-            validated_scores[pred_idx, gold_idx] = effective_score
-            if match_score > 0:
+            #match_score = match_scores[pred_idx, gold_idx].float()
+            effective_score = effective_scores[pred_idx, gold_idx].float()
+            matched_scores[pred_idx, gold_idx] = max(matched_scores[pred_idx, gold_idx], effective_score)
+            if effective_score > 0:
                 score += effective_score
-                match_scores[:, gold_idx] = 0.
-                match_scores[pred_idx, :] = 0.
+                match_scores[:, gold_idx] = -1
+                match_scores[pred_idx, :] = -1
 
         if return_match_scores:
             print(float(score), pred_count, gold_count)
-            return validated_scores
+            return matched_scores
 
         return float(score), pred_count, gold_count
 
