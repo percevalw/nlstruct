@@ -1,15 +1,16 @@
 import random
 import time
+import math
 import warnings
 from collections import defaultdict
-from itertools import chain
+from itertools import chain, repeat
 
 import pytorch_lightning as pl
 import transformers
 from importlib import import_module
 
 from pyner.data_utils import loop, mappable, batchify
-from pyner.optimization import *
+from pyner.optimization import ScheduledOptimizer, LinearSchedule
 from pyner.registry import register, get_instance, get_config
 from pyner.torch_utils import fork_rng, identity
 from pyner.metrics import MetricsCollection
@@ -24,8 +25,18 @@ class DummyIterableDataset(torch.utils.data.IterableDataset):
         self.epoch_length = epoch_length
         warnings.filterwarnings('ignore', "Your `IterableDataset` has `__len__` defined")
 
+    def state_dict(self):
+        if hasattr(self.data, 'state_dict'):
+            return self.data.state_dict()
+
+    def load_state_dict(self, state):
+        if hasattr(self.data, 'load_state_dict'):
+            self.data.load_state_dict(state)
+
     def __iter__(self):
-        return self.data
+        for _ in (range(self.epoch_length) if self.epoch_length is not None else repeat(None)):
+            yield next(self.data)
+        yield None
 
     def __len__(self):
         if self.epoch_length is not None:
@@ -36,13 +47,14 @@ class DummyIterableDataset(torch.utils.data.IterableDataset):
 class PytorchLightningBase(pl.LightningModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._is_resuming_finished_model = False
         warnings.filterwarnings("ignore", ".*does not have many workers which may be a bottleneck.*")
 
     @property
     def train_dataloader(self):
         def fn():
-            if getattr(self, 'train_data', None) is None:
-                return None
+            if getattr(self, 'train_data', None) is None or self._is_resuming_finished_model:
+                return [None]
             with fork_rng(self.data_seed):
                 batch_size = self.batch_size if self.batch_size != "doc" else 1
                 non_default_epoch_length = (
@@ -83,7 +95,7 @@ class PytorchLightningBase(pl.LightningModule):
     @property
     def val_dataloader(self):
         def fn():
-            if getattr(self, 'val_data', None) is None or len(self.val_data) == 0:
+            if getattr(self, 'val_data', None) is None or len(self.val_data) == 0 or self._is_resuming_finished_model:
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.val_data, split="val")
@@ -165,8 +177,9 @@ class InformationExtractor(PytorchLightningBase):
           warmup_rate=0.1,
           use_lr_schedules=True,
           dynamic_preprocessing=False,
-          size_factor=20,
           optimizer_cls=torch.optim.AdamW,
+
+          _size_factor=20,
     ):
         """
 
@@ -207,7 +220,7 @@ class InformationExtractor(PytorchLightningBase):
         self.seed = seed
         self.data_seed = data_seed
 
-        self.size_factor = size_factor
+        self.size_factor = _size_factor
         self.gradient_clip_val = gradient_clip_val
         self.fast_lr = fast_lr
         self.main_lr = main_lr
@@ -233,7 +246,6 @@ class InformationExtractor(PytorchLightningBase):
 
         if not any(voc.training for voc in self.preprocessor.vocabularies.values()):
             self.init_modules()
-        self.counter = 0
         self._time = time.time()
 
     def init_modules(self):
@@ -253,9 +265,15 @@ class InformationExtractor(PytorchLightningBase):
                 self.preprocessor.vocabularies.eval()
                 self.init_modules()
 
-            config = get_config(self, drop_unserialized_keys=True)
-            self.hparams = config
+            if self.trainer.max_steps is not None and self.trainer.val_check_interval is not None:
+                self.trainer.max_epochs = math.ceil(self.trainer.max_steps / self.trainer.val_check_interval)
             self.trainer.gradient_clip_val = self.gradient_clip_val
+
+            config = get_config(self, drop_unserialized_keys=True)
+            config['max_steps'] = self.trainer.max_steps
+            config['max_epochs'] = self.trainer.max_epochs
+            self._set_hparams(config)
+            self._hparams_initial = self.hparams
             self.logger.log_hyperparams(self.hparams)
 
     def preprocess(self, data, split='train'):
@@ -327,13 +345,12 @@ class InformationExtractor(PytorchLightningBase):
             for key, value in outputs.items():
                 if key.endswith("loss"):
                     losses[key] += float(value)
-            (outputs['loss']/len(inputs)).backward()
+            (outputs['loss'] / len(inputs)).backward()
             if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
                 raise Exception()
             del outputs, key, value
 
-        self.counter += 1
-        self.decoder.on_training_step(self.counter, self.max_steps)
+        self.decoder.on_training_step(self.global_step, self.max_steps)
         max_grad = float(max(p.grad.abs().max() for p in self.parameters() if p.grad is not None))
         self.trainer.train_loop.track_and_norm_grad(self.optimizers())
         self.optimizers().step()
@@ -352,6 +369,8 @@ class InformationExtractor(PytorchLightningBase):
         self.log("fast_lr", self.optimizers().param_groups[1]["lr"])
         self.log("bert_lr", self.optimizers().param_groups[2]["lr"])
         self.log("max_grad", max_grad)
+
+    def on_epoch_end(self):
         self.log("duration", time.time() - self._time)
 
     def validation_step(self, inputs, batch_idx):
@@ -364,6 +383,10 @@ class InformationExtractor(PytorchLightningBase):
                 metric(predictions, [s["original_sample"] for s in mini_batch])
         return {"count": len(inputs)}
 
+    def on_validation_epoch_start(self):
+        for metric in self.metrics.values():
+            metric.reset()
+
     def validation_epoch_end(self, outputs):
         self.log_dict({
             ("val_{}_{}".format(name, field) if field else "val_{}".format(name, )): value
@@ -372,6 +395,7 @@ class InformationExtractor(PytorchLightningBase):
         })
 
     test_step = validation_step
+    on_test_epoch_start = on_validation_epoch_start
 
     def test_epoch_end(self, outputs):
         self.log_dict({

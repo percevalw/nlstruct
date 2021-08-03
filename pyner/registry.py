@@ -3,13 +3,26 @@ import functools
 import torch
 from collections import Mapping
 from copy import deepcopy
+import abc
 
 registry = {}
 
 
+class RegistryMetaclass(abc.ABCMeta):
+    def __call__(cls, *args, **kwargs):
+        module = kwargs.pop("module", None)
+        if module is not None:
+            arg_cls = get_module(module)
+            if arg_cls is not cls:
+                assert issubclass(arg_cls, cls), f"{arg_cls.__name__} is not a subclass of {cls.__name__}"
+                cls = arg_cls
+                return cls(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
+
+
 def register(name, do_not_serialize=()):
     def fn(base_cls):
-        class new_cls(base_cls, Mapping):
+        class new_cls(base_cls, Mapping, metaclass=RegistryMetaclass):
             registry_name = name
             _do_not_serialize_ = do_not_serialize
             __doc__ = None
@@ -30,18 +43,6 @@ def register(name, do_not_serialize=()):
                 __init__.__doc__ = base_cls.__init__.__doc__
             functools.update_wrapper(base_cls.__call__, base_cls.forward)
             __init__.fn = base_cls.__init__
-
-            def __new__(cls, *args, **kwargs):
-                module = kwargs.pop("module", None)
-                if module is not None:
-                    arg_cls = get_module(module)
-                    assert issubclass(arg_cls, cls), f"{arg_cls.__name__} is not a subclass of {cls.__name__}"
-                    cls = arg_cls
-                    return cls(*args, **kwargs)
-                self = super().__new__(cls)
-                return self
-
-            functools.update_wrapper(__new__, base_cls.__init__)
 
             def __len__(self):
                 return len(get_config(self))

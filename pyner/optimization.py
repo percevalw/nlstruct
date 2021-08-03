@@ -29,20 +29,41 @@ class ScheduledOptimizer(torch.optim.Optimizer):
     def param_groups(self):
         return self.optim.param_groups
 
+    @param_groups.setter
+    def param_groups(self, value):
+        self.optim.param_groups = value
+
+    @property
+    def state(self):
+        return self.optim.state
+
+    @state.setter
+    def state(self, value):
+        self.optim.state = value
+
     def state_dict(self):
-        return {
+        state = {
             "optim": self.optim.state_dict(),
+            "lr": [
+                group.get("lr") for group in self.optim.param_groups
+            ],
             "schedules": [
                 [schedule.state_dict() for schedule in group.get("schedules")]
                 for group in self.optim.param_groups
             ]
         }
+        for group in state["optim"]["param_groups"]:
+            del group["schedules"]
+        return state
 
     def load_state_dict(self, state):
+        optim_schedules = [group["schedules"] for group in self.optim.param_groups]
         self.optim.load_state_dict(state["optim"])
-        for group, group_schedules in zip(self.optim.param_groups, state["schedules"]):
-            for schedule, schedule_state in zip(group["schedules"], group_schedules):
+        for group, group_schedule, group_schedules_state, lr in zip(self.optim.param_groups, optim_schedules, state["schedules"], state["lr"]):
+            group["schedules"] = group_schedule
+            for schedule, schedule_state in zip(group["schedules"], group_schedules_state):
                 schedule.load_state_dict(schedule_state)
+            group["lr"] = lr
 
     def step(self, closure=None):
         self.optim.step(closure=closure)
@@ -53,7 +74,7 @@ class ScheduledOptimizer(torch.optim.Optimizer):
 
 
 class LinearSchedule:
-    def __init__(self, total_steps, max_value=None, start_value=0, path="lr", warmup=True, warmup_rate=0.1):
+    def __init__(self, total_steps, max_value=None, start_value=0., path="lr", warmup=True, warmup_rate=0.1):
         self.path = path
         self.start_value = start_value
         self.max_value = max_value
