@@ -800,4 +800,8 @@ def get_cliques(adj, mask, indices=None, must_contain=None):
     return cliques_items_indices
 
 
+def inv_logsigmoid(x, eps=1e-8):
+    return x - log1mexp(dclamp(x, max=-eps))
+
+
 seed_all = set_seed

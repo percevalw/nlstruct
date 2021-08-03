@@ -213,15 +213,29 @@ class LinearChainCRF(torch.nn.Module):
 
     # This is faster
     def marginal(self, emissions, mask):
+        device = emissions.device
+
         transitions = self.transitions.masked_fill(self.forbidden_transitions, -10000)
         start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, -10000)
         end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, -10000)
 
         bi_transitions = torch.stack([transitions, transitions.t()], dim=0)
+
+        # add start transitions (ie cannot start with ...)
+        emissions[:, 0] = emissions[:, 0] + start_transitions
+
+        # add end transitions (ie cannot end with ...): flip the emissions along the token axis, and add the end transitions
+        #emissions = masked_flip(emissions, mask, dim_x=1)
+        emissions[torch.arange(mask.shape[0], device=device), mask.long().sum(1) - 1] = emissions[
+            torch.arange(mask.shape[0], device=device),
+            mask.long().sum(1) - 1,
+        ] + end_transitions
+
+        # stack start -> end emissions (needs to flip the previously flipped emissions), and end -> start emissions
         bi_emissions = torch.stack([emissions, masked_flip(emissions, mask, dim_x=1)], 1)
         bi_emissions = bi_emissions.transpose(0, 2)
-        bi_emissions[:, 0] = bi_emissions[:, 0] + self.start_transitions
-        bi_emissions[:, 1] = bi_emissions[:, 1] + self.end_transitions
+        #bi_emissions[0, 0] = bi_emissions[0, 0] + start_transitions
+        #bi_emissions[0, 1] = bi_emissions[0, 1] + end_transitions
 
         out = [bi_emissions[0]]
         for k in range(1, len(bi_emissions)):
@@ -231,26 +245,35 @@ class LinearChainCRF(torch.nn.Module):
 
         forward = out[:, 0]
         backward = masked_flip(out[:, 1], mask, dim_x=1)
-        z = backward[:, 0].logsumexp(-1)
-        return forward + backward - emissions - z[:, None, None]  # [:, -1].logsumexp(-1)
+        backward_z = backward[:, 0].logsumexp(-1)
+
+        forward_z = masked_flip(out[:, 0], mask, dim_x=1)[:, 0].logsumexp(-1)
+#        print("forward", forward)
+#        print("backward", backward)
+#        print("emissions", emissions)
+
+
+        return forward + backward - emissions - backward_z[:, None, None]  # [:, -1].logsumexp(-1)
 
     def forward(self, emissions, mask, target):
         transitions = self.transitions.masked_fill(self.forbidden_transitions, -10000)
         start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, -10000)
         end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, -10000)
 
-        bi_emissions = torch.cat([emissions.masked_fill(~target, -100000), emissions], 0).transpose(0, 1)
-        bi_emissions = bi_emissions + self.start_transitions
+        bi_emissions = torch.stack([emissions.masked_fill(~target, -100000), emissions], 1).transpose(0, 2)
 
-        out = [bi_emissions[0]]
+        # emissions: n_samples * n_tokens * n_tags
+        # bi_emissions: n_tokens * 2 * n_samples * n_tags
+        out = [bi_emissions[0] + start_transitions]
+
         for k in range(1, len(bi_emissions)):
             res = logdotexp(out[-1], transitions)
             out.append(res + bi_emissions[k])
-        out = torch.stack(out, dim=0).transpose(0, 1)
-        z = masked_flip(out, mask.repeat(2, 1), dim_x=1)[:, 0]
-        supervised_z = z[:len(mask)].logsumexp(-1)
-        unsupervised_z = z[len(mask):].logsumexp(-1)
-
+        out = torch.stack(out, dim=0).transpose(0, 2)
+        # n_samples * 2 * n_tokens * n_tags
+        z = masked_flip(out, mask.unsqueeze(1).repeat(1, 2, 1), dim_x=2)[:, :, 0] + end_transitions
+        supervised_z = z[:, 0].logsumexp(-1)
+        unsupervised_z = z[:, 1].logsumexp(-1)
         return supervised_z - unsupervised_z
 
 
@@ -268,17 +291,23 @@ class BIOULDecoder(LinearChainCRF):
                 forbidden_transitions[L + STRIDE, B + STRIDE_J] = 0  # L-i to B-j
                 forbidden_transitions[L + STRIDE, U + STRIDE_J] = 0  # L-i to U-j
                 forbidden_transitions[U + STRIDE, B + STRIDE_J] = 0  # U-i to B-j
+                forbidden_transitions[U + STRIDE, U + STRIDE_J] = 0  # U-i to U-j
+
             forbidden_transitions[O, B + STRIDE] = 0  # O to B-i
             forbidden_transitions[B + STRIDE, I + STRIDE] = 0  # B-i to I-i
             forbidden_transitions[I + STRIDE, I + STRIDE] = 0  # I-i to I-i
             forbidden_transitions[I + STRIDE, L + STRIDE] = 0  # I-i to L-i
             forbidden_transitions[B + STRIDE, L + STRIDE] = 0  # B-i to L-i
 
+            forbidden_transitions[L + STRIDE, O] = 0  # L-i to O
+            forbidden_transitions[O, U + STRIDE] = 0  # O to U-i
+            forbidden_transitions[U + STRIDE, O] = 0  # U-i to O
+
             if not allow_juxtaposition:
                 forbidden_transitions[L + STRIDE, U + STRIDE] = 1  # L-i to U-i
                 forbidden_transitions[U + STRIDE, B + STRIDE] = 1  # U-i to B-i
-                forbidden_transitions[U + STRIDE, U + STRIDE] = 1  # I-i to U-i
-                forbidden_transitions[L + STRIDE, B + STRIDE] = 1  # I-i to U-i
+                forbidden_transitions[U + STRIDE, U + STRIDE] = 1  # U-i to U-i
+                forbidden_transitions[L + STRIDE, B + STRIDE] = 1  # L-i to B-i
 
             if allow_overlap:
                 forbidden_transitions[L + STRIDE, I + STRIDE] = 0  # L-i to I-i
@@ -292,9 +321,6 @@ class BIOULDecoder(LinearChainCRF):
 
                 forbidden_transitions[U + STRIDE, I + STRIDE] = 0  # U-i to I-i
                 forbidden_transitions[I + STRIDE, U + STRIDE] = 0  # I-i to U-i
-            forbidden_transitions[L + STRIDE, O] = 0  # L-i to O
-            forbidden_transitions[O, U + STRIDE] = 0  # O to U-i
-            forbidden_transitions[U + STRIDE, O] = 0  # U-i to O
 
         start_forbidden_transitions = torch.zeros(num_tags, dtype=torch.bool)
         if with_start_end_transitions:

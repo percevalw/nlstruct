@@ -144,11 +144,19 @@ class NERPreprocessor(torch.nn.Module):
         for sample, tokenized_sample, tokenized_sentences in self.sentencize_and_tokenize(doc, only_text=only_text):
             # Here, we know that the sentence is not too long
             if "char" in self.vocabularies:
-                words_chars = [[self.vocabularies["char"].get(char) for char in word]
-                               for word, word_bert_begin in zip(tokenized_sample["words_text"],
-                                                                tokenized_sample["words_bert_begin"]) if word_bert_begin != -1]
+                char_voc = self.vocabularies["char"]
+                words_chars = [[char_voc.get(char) for char in word] for word, word_bert_begin in zip(
+                    tokenized_sample["words_text"],
+                    tokenized_sample["words_bert_begin"]) if word_bert_begin != -1]
             else:
                 words_chars = None
+            if "word" in self.vocabularies:
+                word_voc = self.vocabularies["word"]
+                words = [word_voc.get(word) for word, word_bert_begin in zip(
+                    tokenized_sample["words_text"],
+                    tokenized_sample["words_bert_begin"]) if word_bert_begin != -1]
+            else:
+                words = None
             fragments_begin = []
             fragments_end = []
             fragments_label = []
@@ -263,10 +271,11 @@ class NERPreprocessor(torch.nn.Module):
             results.append({
                 "tokens": tokenized_sentences["bert_tokens_indice"],
                 **({
-                    "slice_begin": tokenized_sentences["slice_begin"],
-                    "slice_end": tokenized_sentences["slice_end"],
-                } if "slice_begin" in tokenized_sentences else {}),
+                       "slice_begin": tokenized_sentences["slice_begin"],
+                       "slice_end": tokenized_sentences["slice_end"],
+                   } if "slice_begin" in tokenized_sentences else {}),
                 "sentence_mask": [True] * len(tokenized_sentences["bert_tokens_indice"]),
+                "words": words,
                 "words_mask": [True] * len(tokenized_sample["words_text"]),
                 "words_text": tokenized_sample["words_text"],
                 "words_chars_mask": [[True] * len(word_chars) for word_chars in words_chars] if words_chars is not None else None,
@@ -373,7 +382,7 @@ class NERPreprocessor(torch.nn.Module):
             if (
                   (self.min_tokens is not None and len(bert_tokens["text"]) < self.min_tokens) or
                   (self.max_tokens is not None and len(bert_tokens["text"]) < self.max_tokens and (
-                        self.join_small_sentence_rate > 0 and (not self.training or random.random() < self.join_small_sentence_rate)))
+                        self.join_small_sentence_rate > 0.5 and (not self.training or random.random() < self.join_small_sentence_rate)))
             ) and len(sentences_bounds):
                 if len(bert_tokens["text"]) + len(slice_tokenization_output(full_doc_bert_tokens, *sentences_bounds[0])["text"]) + 2 < self.max_tokens:
                     continue
@@ -593,6 +602,7 @@ class ContiguousEntityDecoder(torch.nn.Module):
                  contextualizer=None,
                  span_scorer=dict(),
                  intermediate_loss_slice=slice(None),
+                 do_flat_predictions=False,
                  _classifier=None,
                  _preprocessor=None,
                  _encoder=None,
@@ -614,14 +624,15 @@ class ContiguousEntityDecoder(torch.nn.Module):
             **span_scorer,
         })
         self.intermediate_loss_slice = intermediate_loss_slice
+        self.do_flat_predictions = do_flat_predictions
 
     def on_training_step(self, step_idx, total):
         pass
 
     def fast_params(self):
-        return self.span_scorer.fast_params()
+        return [*self.span_scorer.fast_params(), *(self.contextualizer.fast_params() if self.contextualizer is not None else [])]
 
-    def forward(self, words_embed, batch=None, return_loss=False, return_predictions=False):
+    def forward(self, words_embed, batch=None, return_loss=False, return_predictions=False, do_flat_predictions=None):
         ############################
         # Generate span candidates #
         ############################
@@ -654,7 +665,7 @@ class ContiguousEntityDecoder(torch.nn.Module):
                 for sample_idx, fragment_idx in spans_mask.nonzero(as_tuple=False).tolist():
                     predictions[sample_idx].append({
                         "entity_id": len(predictions[sample_idx]),
-                        "confidence": 1.,  # entities_confidence[sample_idx, entity_idx].item(),
+                        "confidence": spans["flat_spans_logit"][sample_idx, fragment_idx].sigmoid().item(),
                         "label": spans["flat_spans_label"][sample_idx, fragment_idx].item(),
                         "fragments": [
                             {
@@ -664,6 +675,17 @@ class ContiguousEntityDecoder(torch.nn.Module):
                             }
                         ]
                     })
+
+            if (do_flat_predictions is None and self.do_flat_predictions or do_flat_predictions):
+                flat_predictions = []
+                for pred in predictions:
+                    pred_entities = [(e['fragments'][0]["begin"], e['fragments'][0]["end"], e['label'], e["confidence"], e) for e in pred]
+                    new_entities = []
+                    for i, (b1, e1, l1, c, e) in enumerate(pred_entities):
+                        if not any(i != j and (e1 >= b2 and e2 >= b1) and (c, e2 - b2) < (c2, e1 - b1) for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)):
+                            new_entities.append(e)
+                    flat_predictions.append(new_entities)
+                predictions = flat_predictions
 
         return {
             "predictions": predictions,
