@@ -57,7 +57,9 @@ def main(
       use_lr_schedules=True,
       word_pooler_mode="mean",
       bert_size=None,
+      hf_resources="",
       predict_kwargs={},
+      gpus=1,
 ):
     gc.collect()
     torch.cuda.empty_cache()
@@ -90,19 +92,19 @@ def main(
     if bert_name is None:
         if dataset_name.split(":")[0] in ("deft", "ezmammo"):
             if bert_size == "large":
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/camembert-large")
+                bert_name = os.path.join(hf_resources, "camembert/camembert-large")
             else:
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/camembert-base")
+                bert_name = os.path.join(hf_resources, "camembert/camembert-base")
         elif "genia" in dataset_name:
             if bert_size == "large":
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/biobert-large-cased-v1.1")
+                bert_name = os.path.join(hf_resources, "dmis-lab/biobert-large-cased-v1.1")
             else:
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/biobert-base-cased-v1.1")
+                bert_name = os.path.join(hf_resources, "dmis-lab/biobert-base-cased-v1.1")
         else:
             if bert_size == "large":
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/bert-large-cased")
+                bert_name = os.path.join(hf_resources, "bert-large-cased")
             else:
-                bert_name = os.path.join(resources, "huggingface/pretrained_models/bert-base-cased")
+                bert_name = os.path.join(hf_resources, "bert-base-cased")
 
     if fasttext_file is None:
         if dataset_name.split(":")[0] in ("conll", "genia_easy", "genia_hard"):
@@ -112,6 +114,7 @@ def main(
     for name, value in locals().items():
         print(name.ljust(40), value)
     # bert_name = "/export/home/opt/data/camembert/v0/camembert-base/"
+
     filter_predictions = False
     if dataset_name.split(":")[0] == "genia_hard":
         filter_predictions = "no_crossing_same_label"
@@ -137,10 +140,6 @@ def main(
             "half_word": dict(module="dem", binarize_tag_threshold=0.5, binarize_label_threshold=1., word_regex=word_regex),
             "any_word": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., word_regex=word_regex),
         }
-
-    if "filter_predictions" not in predict_kwargs:
-        predict_kwargs["filter_predictions"] = filter_predictions
-
     elif dataset_name.split(":")[0] == "deft":
         dataset = DEFT(
             os.path.join(resources, "deft_2020/"),
@@ -176,6 +175,9 @@ def main(
 
     else:
         raise Exception("Unrecognized dataset {}".format(dataset_name))
+
+    if "filter_predictions" not in predict_kwargs and filter_predictions is not False:
+        predict_kwargs["filter_predictions"] = filter_predictions
 
     if ":dev" not in dataset_name:
         dataset_name = dataset_name.split(":")[0]
@@ -309,7 +311,7 @@ def main(
 
     try:
         trainer = pl.Trainer(
-            gpus=1,
+            gpus=gpus,
             progress_bar_refresh_rate=False,
             checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
             callbacks=[ModelCheckpoint(path='checkpoints/' + dataset_name + '-{hashkey}-{global_step:05d}')],
