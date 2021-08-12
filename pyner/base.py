@@ -180,6 +180,7 @@ class InformationExtractor(PytorchLightningBase):
           optimizer_cls=torch.optim.AdamW,
 
           _size_factor=20,
+          _predict_kwargs={},
     ):
         """
 
@@ -247,6 +248,7 @@ class InformationExtractor(PytorchLightningBase):
         if not any(voc.training for voc in self.preprocessor.vocabularies.values()):
             self.init_modules()
         self._time = time.time()
+        self._predict_kwargs = _predict_kwargs
 
     def init_modules(self):
         # Init modules that depend on the vocabulary
@@ -377,7 +379,7 @@ class InformationExtractor(PytorchLightningBase):
         if self.batch_size == "doc":
             inputs = inputs[0]
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
-            outputs = self(mini_batch, return_loss=False, return_predictions=True)
+            outputs = self(mini_batch, return_loss=False, return_predictions=True, **self._predict_kwargs)
             predictions = outputs['predictions']
             for metric in self.metrics.values():
                 metric(predictions, [s["original_sample"] for s in mini_batch])
@@ -435,7 +437,10 @@ class InformationExtractor(PytorchLightningBase):
         if force_eval:
             self.eval()
         with torch.no_grad():
-            return self(list(self.preprocessor(doc, only_text=False)), **{"return_loss": False, "return_predictions": True, "group_by_document": True, **kwargs})["predictions"][0]
+            return self(
+                list(self.preprocessor(doc, only_text=False)),
+                **{"return_loss": False, "return_predictions": True, "group_by_document": True, **self._predict_kwargs, **kwargs}
+            )["predictions"][0]
 
     save_pretrained = save_pretrained
 

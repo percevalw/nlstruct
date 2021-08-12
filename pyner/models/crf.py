@@ -215,9 +215,9 @@ class LinearChainCRF(torch.nn.Module):
     def marginal(self, emissions, mask):
         device = emissions.device
 
-        transitions = self.transitions.masked_fill(self.forbidden_transitions, -10000)
-        start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, -10000)
-        end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, -10000)
+        transitions = self.transitions.masked_fill(self.forbidden_transitions, IMPOSSIBLE)
+        start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, IMPOSSIBLE)
+        end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, IMPOSSIBLE)
 
         bi_transitions = torch.stack([transitions, transitions.t()], dim=0)
 
@@ -256,11 +256,11 @@ class LinearChainCRF(torch.nn.Module):
         return forward + backward - emissions - backward_z[:, None, None]  # [:, -1].logsumexp(-1)
 
     def forward(self, emissions, mask, target):
-        transitions = self.transitions.masked_fill(self.forbidden_transitions, -10000)
-        start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, -10000)
-        end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, -10000)
+        transitions = self.transitions.masked_fill(self.forbidden_transitions, IMPOSSIBLE)
+        start_transitions = self.start_transitions.masked_fill(self.start_forbidden_transitions, IMPOSSIBLE)
+        end_transitions = self.end_transitions.masked_fill(self.end_forbidden_transitions, IMPOSSIBLE)
 
-        bi_emissions = torch.stack([emissions.masked_fill(~target, -100000), emissions], 1).transpose(0, 2)
+        bi_emissions = torch.stack([emissions.masked_fill(~target, IMPOSSIBLE), emissions], 1).transpose(0, 2)
 
         # emissions: n_samples * n_tokens * n_tags
         # bi_emissions: n_tokens * 2 * n_samples * n_tags
@@ -281,6 +281,7 @@ class BIOULDecoder(LinearChainCRF):
     def __init__(self, num_labels, with_start_end_transitions=True, allow_overlap=False, allow_juxtaposition=True, learnable_transitions=True):
         O, I, B, L, U = 0, 1, 2, 3, 4
 
+        self.allow_overlap = allow_overlap
         num_tags = 1 + num_labels * 4
         forbidden_transitions = torch.ones(num_tags, num_tags, dtype=torch.bool)
         forbidden_transitions[O, O] = 0  # O to O
@@ -359,7 +360,7 @@ class BIOULDecoder(LinearChainCRF):
         return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
     @staticmethod
-    def tags_to_spans(tag, mask=None):
+    def tags_to_spans(tag, mask=None, do_overlap_disambiguation=False):
         I, B, L, U = 0, 1, 2, 3
 
         if mask is not None:

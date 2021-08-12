@@ -179,6 +179,8 @@ def rearrange_and_prune(tensors, mask):
 
 @register("text_encoder")
 class TextEncoder(torch.nn.Module):
+    ENSEMBLE = "ensemble_text_encoder"
+
     @property
     def output_size(self):
         return self._output_size
@@ -524,7 +526,11 @@ class LSTMContextualizer(Contextualizer):
             hidden_size = input_size
             same_size = True
         else:
-            same_size = False
+            if gate_reference == "input":
+                self.initial_linear = torch.nn.Linear(input_size, hidden_size)
+                same_size = True
+            else:
+                same_size = False
 
         self.same_size = same_size
         self.rand_init = rand_init
@@ -539,12 +545,12 @@ class LSTMContextualizer(Contextualizer):
         self.layers = torch.nn.ModuleList([
             torch.nn.ModuleDict({
                 "lstm": torch.nn.LSTM(
-                    input_size=input_size if i == 0 else hidden_size,
+                    input_size=input_size if (gate_reference == "last" and i == 0) else hidden_size,
                     hidden_size=hidden_size // 2,
                     num_layers=1,
                     bidirectional=bidirectional,
                     batch_first=True),
-                "gate": Gate(**{**gate, "input_size": hidden_size}) if gate and i > 0 or not same_size else None,
+                "gate": Gate(**{**gate, "input_size": hidden_size}) if gate and (i > 0 or same_size) else None,
             })
             for i in range(num_layers)
         ])
@@ -579,7 +585,8 @@ class LSTMContextualizer(Contextualizer):
         ]
 
     def forward(self, features, mask, return_all_layers=False, return_global_state=False):
-        initial_features = features
+        if hasattr(self, 'initial_linear'):
+            features = F.gelu(self.initial_linear(features))
         sentence_lengths = mask.long().sum(1)
         sorter = (-sentence_lengths).argsort()
         inv_sorter = sorter.argsort()
@@ -606,8 +613,7 @@ class LSTMContextualizer(Contextualizer):
             lstm, gate = layer["lstm"], layer["gate"]
             out, (_, c_n) = lstm(
                 torch.nn.utils.rnn.pack_padded_sequence(
-                    features if i == 0
-                    else features + updates if self.gate_reference == "input"
+                    features + updates if self.gate_reference == "input"
                     else features,
                     sentence_lengths.cpu(), batch_first=True),
                 (initial_h_n, initial_c_n),
@@ -621,9 +627,7 @@ class LSTMContextualizer(Contextualizer):
             rnn_output = self.dropout(rnn_output)
             if self.gate_reference == "input":
                 updates = rnn_output if gate is None else gate(updates, rnn_output)
-                all_outputs.append(((features + updates) if i > 0 or self.same_size else updates)[inv_sorter])
-                if i == 0:
-                    features = rnn_output
+                all_outputs.append((features + updates)[inv_sorter])
             else:
                 features = rnn_output if gate is None else gate(updates, rnn_output)
                 all_outputs.append(features[inv_sorter])

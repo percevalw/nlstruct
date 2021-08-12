@@ -29,10 +29,24 @@ def slice_tokenization_output(tokens, begin, end, insert_before=None, insert_aft
         "text": ([insert_before] if insert_before is not None else []) + list(tokens["text"][begin_indice:end_indice]) + ([insert_after] if insert_after is not None else []),
     }
 
+def compute_token_slice_indices(tokens, begin, end):
+    index_after_first_token_begin = bisect.bisect_left(tokens["begin"], begin)
+    index_before_first_token_end = bisect.bisect_right(tokens["end"], begin)
+    index_after_last_token_begin = bisect.bisect_left(tokens["begin"], end)
+    index_before_last_token_end = bisect.bisect_right(tokens["end"], end)
+    begin_indice = min(index_after_first_token_begin, index_before_first_token_end)
+    end_indice = max(index_after_last_token_begin, index_before_last_token_end)
+
+    return begin_indice, end_indice
 
 class LargeSentenceException(Exception):
     pass
 
+def is_overlapping(b1, e1, b2, e2):
+    return e1 >= b2 and e2 >= b1
+
+def is_crossing(b0, e0, b1, e1):
+    return (b1 < e0 < e1 and b0 < b1 < e0) or (b0 < e1 < e0 and b1 < b0 < e1)
 
 @register("ner_preprocessor")
 class NERPreprocessor(torch.nn.Module):
@@ -140,6 +154,7 @@ class NERPreprocessor(torch.nn.Module):
 
     @mappable
     def forward(self, doc, only_text=False):
+        self.last_doc = doc
         results = []
         for sample, tokenized_sample, tokenized_sentences in self.sentencize_and_tokenize(doc, only_text=only_text):
             # Here, we know that the sentence is not too long
@@ -309,6 +324,11 @@ class NERPreprocessor(torch.nn.Module):
     def sentencize_and_tokenize(self, doc, only_text=False):
         text = doc["text"]
 
+        if self.sentence_split_regex is not None:
+            sentences_bounds = list(regex_sentencize(text, reg_split=self.sentence_split_regex, balance_chars=self.sentence_balance_chars))
+        else:
+            sentences_bounds = [(0, len(text))]
+
         if self.tokenizer is not None:
             if not self.training or text not in self.bert_tokenizer_cache:
                 full_doc_bert_tokens = huggingface_tokenize(text.lower() if self.bert_lower else text,
@@ -317,6 +337,11 @@ class NERPreprocessor(torch.nn.Module):
                                                             do_unidecode=self.do_unidecode,
                                                             return_offsets_mapping=True,
                                                             add_special_tokens=False)
+                if self.word_regex is None:
+                    full_doc_bert_tokens["sentence_idx"] = [0] * len(full_doc_bert_tokens["begin"])
+                    for sentence_idx, (begin, end) in enumerate(sentences_bounds):
+                        sentence_begin_idx = compute_token_slice_indices(full_doc_bert_tokens, begin, end)[0]
+                        full_doc_bert_tokens["sentence_idx"][sentence_begin_idx:] = [sentence_idx] * (len(full_doc_bert_tokens["sentence_idx"]) - sentence_begin_idx)
                 if self.training:
                     self.bert_tokenizer_cache[text] = full_doc_bert_tokens
             else:
@@ -330,6 +355,10 @@ class NERPreprocessor(torch.nn.Module):
                                                 subs=self.substitutions,
                                                 do_unidecode=self.do_unidecode,
                                                 return_offsets_mapping=True, )
+                full_doc_words["sentence_idx"] = [0] * len(full_doc_words["begin"])
+                for sentence_idx, (begin, end) in enumerate(sentences_bounds):
+                    sentence_begin_idx = compute_token_slice_indices(full_doc_words, begin, end)[0]
+                    full_doc_words["sentence_idx"][sentence_begin_idx:] = [sentence_idx] * (len(full_doc_words["sentence_idx"]) - sentence_begin_idx)
                 if self.training:
                     self.regex_tokenizer_cache[text] = full_doc_words
             else:
@@ -339,10 +368,6 @@ class NERPreprocessor(torch.nn.Module):
         if full_doc_bert_tokens is None:
             full_doc_bert_tokens = full_doc_words
 
-        if self.sentence_split_regex is not None:
-            sentences_bounds = list(regex_sentencize(text, reg_split=self.sentence_split_regex, balance_chars=self.sentence_balance_chars))
-        else:
-            sentences_bounds = [(0, len(text))]
         if self.split_into_multiple_samples:
             results = []
         else:
@@ -352,7 +377,8 @@ class NERPreprocessor(torch.nn.Module):
                     "words_end": np.asarray([], dtype=int),
                     "words_bert_begin": np.asarray([], dtype=int),
                     "words_bert_end": np.asarray([], dtype=int),
-                    "words_text": []
+                    "words_text": [],
+                    "words_sentence_idx": [],
                 }, {
                     "bert_tokens_text": [],
                     "bert_tokens_begin": [],
@@ -439,6 +465,7 @@ class NERPreprocessor(torch.nn.Module):
                         "words_text": words["text"],
                         "words_begin": words["begin"] - begin,
                         "words_end": words["end"] - begin,
+                        "words_sentence_idx": words["sentence_idx"] - min(words["sentence_idx"]),
                     },
                     {
                         "bert_tokens_text": [bert_tokens["text"]],
@@ -454,6 +481,7 @@ class NERPreprocessor(torch.nn.Module):
             else:
                 results[0][1]["words_text"] += words["text"]
                 # numpy arrays
+                results[0][1]["words_sentence_idx"] = np.concatenate([results[0][1]["words_sentence_idx"], words["sentence_idx"]])
                 results[0][1]["words_begin"] = np.concatenate([results[0][1]["words_begin"], words["begin"]])
                 results[0][1]["words_end"] = np.concatenate([results[0][1]["words_end"], words["end"]])
                 results[0][1]["words_bert_begin"] = np.concatenate([results[0][1]["words_bert_begin"], words_bert_begin])
@@ -519,13 +547,17 @@ class NERPreprocessor(torch.nn.Module):
             batch,
             pad={"entities_fragments": -1, "fragments_entities": -1, "entities_label": -100, "tokens": -1},
             dtypes={
+                "tokens": torch.long,
+                "tokens_mask": torch.bool,
+                "sentence_mask": torch.bool,
                 "words_mask": torch.bool,
-                "words_chars": torch.long,
                 "words_chars_mask": torch.bool,
                 "words_bert_begin": torch.long,
                 "words_bert_end": torch.long,
                 "words_begin": torch.long,
                 "words_end": torch.long,
+                "words_sentence_idx": torch.long,
+                "words_chars": torch.long,
                 "fragments_begin": torch.long,
                 "fragments_end": torch.long,
                 "fragments_label": torch.long,
@@ -604,7 +636,7 @@ class ContiguousEntityDecoder(torch.nn.Module):
                  contextualizer=None,
                  span_scorer=dict(),
                  intermediate_loss_slice=slice(None),
-                 do_flat_predictions=False,
+                 filter_predictions=False,
                  _classifier=None,
                  _preprocessor=None,
                  _encoder=None,
@@ -626,7 +658,8 @@ class ContiguousEntityDecoder(torch.nn.Module):
             **span_scorer,
         })
         self.intermediate_loss_slice = intermediate_loss_slice
-        self.do_flat_predictions = do_flat_predictions
+        assert filter_predictions is False or filter_predictions in  ("no_overlapping_same_label", "no_crossing_same_label", "no_overlapping", "no_crossing"), "Filter mode must be 'no_overlapping_same_label' or 'no_crossing_same_label' or 'no_overlapping' or 'no_crossing'"
+        self.filter_predictions = filter_predictions
 
     def on_training_step(self, step_idx, total):
         pass
@@ -634,7 +667,7 @@ class ContiguousEntityDecoder(torch.nn.Module):
     def fast_params(self):
         return [*self.span_scorer.fast_params(), *(self.contextualizer.fast_params() if self.contextualizer is not None else [])]
 
-    def forward(self, words_embed, batch=None, return_loss=False, return_predictions=False, do_flat_predictions=None):
+    def forward(self, words_embed, batch=None, return_loss=False, return_predictions=False, filter_predictions=None, **kwargs):
         ############################
         # Generate span candidates #
         ############################
@@ -648,7 +681,7 @@ class ContiguousEntityDecoder(torch.nn.Module):
             contextualized_words_embed = words_embed.unsqueeze(0)
 
         spans = self.span_scorer(contextualized_words_embed[self.intermediate_loss_slice if return_loss else slice(-1, None)],
-                                 words_mask, batch, force_gold=return_loss)
+                                 words_mask, batch, force_gold=return_loss, **kwargs)
 
         #########################
         # Compute the span loss #
@@ -678,16 +711,26 @@ class ContiguousEntityDecoder(torch.nn.Module):
                         ]
                     })
 
-            if (do_flat_predictions is None and self.do_flat_predictions or do_flat_predictions):
-                flat_predictions = []
+            filter_predictions = filter_predictions if filter_predictions is not None else self.filter_predictions
+            if filter_predictions:
+                check = is_overlapping if "no-overlapping" in filter_predictions else is_crossing
+                if_same_label = "same-label" in filter_predictions
+                new_predictions = []
                 for pred in predictions:
                     pred_entities = [(e['fragments'][0]["begin"], e['fragments'][0]["end"], e['label'], e["confidence"], e) for e in pred]
                     new_entities = []
                     for i, (b1, e1, l1, c, e) in enumerate(pred_entities):
-                        if not any(i != j and (e1 >= b2 and e2 >= b1) and (c, e2 - b2) < (c2, e1 - b1) for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)):
+                        # lookup any conflict where
+                        if not any(
+                            i != j # must not be the same entity
+                            and (l1 == l2 or not if_same_label) # and must have same label if "same-label" mode
+                            and check(b1, e1, b2, e2) # and must be either overlapping or crossing
+                            and (c, e2 - b2) < (c2, e1 - b1) # and the other one is more confident or larger if same confidence
+                            for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)
+                        ):
                             new_entities.append(e)
-                    flat_predictions.append(new_entities)
-                predictions = flat_predictions
+                    new_predictions.append(new_entities)
+                predictions = new_predictions
 
         return {
             "predictions": predictions,
@@ -703,7 +746,7 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
 
         self.contextualizers = torch.nn.ModuleList([get_instance(m.contextualizer) for m in models])
         self.n_labels = models[0].n_labels
-        self.do_flat_predictions = models[0].do_flat_predictions
+        self.filter_predictions = models[0].filter_predictions
         if ensemble_span_scorer_module is None:
             ensemble_span_scorer_module = models[0].span_scorer.ENSEMBLE
         self.span_scorer = get_instance({"module": ensemble_span_scorer_module, "models": [get_instance(m.span_scorer) for m in models]})
@@ -714,7 +757,7 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
     def fast_params(self):
         raise NotImplementedError("This ensemble model is not optimizable")
 
-    def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False, do_flat_predictions=None):
+    def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False, filter_predictions=None, **kwargs):
         ############################
         # Generate span candidates #
         ############################
@@ -726,7 +769,7 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
             if model is not None else words_embed
             for model, words_embed in zip(self.contextualizers, ensemble_words_embed)
         ]
-        spans = self.span_scorer(contextualized_words_embed, words_mask, batch, force_gold=return_loss)
+        spans = self.span_scorer(contextualized_words_embed, words_mask, batch, force_gold=return_loss, **kwargs)
 
         #########################
         # Compute the span loss #
@@ -754,17 +797,26 @@ class EnsembleContiguousEntityDecoder(torch.nn.Module):
                         ]
                     })
 
-
-            if (do_flat_predictions is None and self.do_flat_predictions or do_flat_predictions):
-                flat_predictions = []
+            filter_predictions = filter_predictions if filter_predictions is not None else self.filter_predictions
+            if filter_predictions:
+                check = is_overlapping if "no-overlapping" in filter_predictions else is_crossing
+                if_same_label = "same-label" in filter_predictions
+                new_predictions = []
                 for pred in predictions:
                     pred_entities = [(e['fragments'][0]["begin"], e['fragments'][0]["end"], e['label'], e["confidence"], e) for e in pred]
                     new_entities = []
                     for i, (b1, e1, l1, c, e) in enumerate(pred_entities):
-                        if not any(i != j and (e1 >= b2 and e2 >= b1) and (c, e2 - b2) < (c2, e1 - b1) for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)):
+                        # lookup any conflict where
+                        if not any(
+                            i != j # must not be the same entity
+                            and (l1 == l2 or not if_same_label) # and must have same label if "same-label" mode
+                            and check(b1, e1, b2, e2) # and must be either overlapping or crossing
+                            and (c, e2 - b2) < (c2, e1 - b1) # and the other one is more confident or larger if same confidence
+                            for j, (b2, e2, l2, c2, _) in enumerate(pred_entities)
+                        ):
                             new_entities.append(e)
-                    flat_predictions.append(new_entities)
-                predictions = flat_predictions
+                    new_predictions.append(new_entities)
+                predictions = new_predictions
 
         return {
             "predictions": predictions,
