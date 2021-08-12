@@ -82,6 +82,8 @@ class ModelCheckpoint(pl.callbacks.Callback):
                 if os.path.exists(lock_file_path):
                     raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
                 else:
+                    if lock_file_path.rsplit("/", 1)[0].strip():
+                        os.makedirs(lock_file_path.rsplit("/", 1)[0], exist_ok=True)
                     open(lock_file_path, 'a').close()
 
     def on_fit_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
@@ -152,6 +154,8 @@ class ModelCheckpoint(pl.callbacks.Callback):
             global_step=trainer.global_step,
             epoch=trainer.current_epoch,
             hashkey=self._hashkey)
+        if save_path.rsplit("/", 1)[0].strip():
+            os.makedirs(save_path.rsplit("/", 1)[0], exist_ok=True)
         torch.save(state, save_path + ".tmp")
         os.rename(save_path + ".tmp", save_path)
 
