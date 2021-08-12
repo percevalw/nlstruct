@@ -42,7 +42,7 @@ def register(name, do_not_serialize=()):
             if hasattr(base_cls.__init__, '__doc__'):
                 __init__.__doc__ = base_cls.__init__.__doc__
             functools.update_wrapper(base_cls.__call__, base_cls.forward)
-            __init__.fn = base_cls.__init__
+            __init__.fn = getattr(base_cls.__init__, 'fn', base_cls.__init__)
 
             def __len__(self):
                 return len(get_config(self))
