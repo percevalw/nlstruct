@@ -324,11 +324,6 @@ class NERPreprocessor(torch.nn.Module):
     def sentencize_and_tokenize(self, doc, only_text=False):
         text = doc["text"]
 
-        if self.sentence_split_regex is not None:
-            sentences_bounds = list(regex_sentencize(text, reg_split=self.sentence_split_regex, balance_chars=self.sentence_balance_chars))
-        else:
-            sentences_bounds = [(0, len(text))]
-
         if self.tokenizer is not None:
             if not self.training or text not in self.bert_tokenizer_cache:
                 full_doc_bert_tokens = huggingface_tokenize(text.lower() if self.bert_lower else text,
@@ -337,11 +332,6 @@ class NERPreprocessor(torch.nn.Module):
                                                             do_unidecode=self.do_unidecode,
                                                             return_offsets_mapping=True,
                                                             add_special_tokens=False)
-                if self.word_regex is None:
-                    full_doc_bert_tokens["sentence_idx"] = [0] * len(full_doc_bert_tokens["begin"])
-                    for sentence_idx, (begin, end) in enumerate(sentences_bounds):
-                        sentence_begin_idx = compute_token_slice_indices(full_doc_bert_tokens, begin, end)[0]
-                        full_doc_bert_tokens["sentence_idx"][sentence_begin_idx:] = [sentence_idx] * (len(full_doc_bert_tokens["sentence_idx"]) - sentence_begin_idx)
                 if self.training:
                     self.bert_tokenizer_cache[text] = full_doc_bert_tokens
             else:
@@ -355,10 +345,6 @@ class NERPreprocessor(torch.nn.Module):
                                                 subs=self.substitutions,
                                                 do_unidecode=self.do_unidecode,
                                                 return_offsets_mapping=True, )
-                full_doc_words["sentence_idx"] = [0] * len(full_doc_words["begin"])
-                for sentence_idx, (begin, end) in enumerate(sentences_bounds):
-                    sentence_begin_idx = compute_token_slice_indices(full_doc_words, begin, end)[0]
-                    full_doc_words["sentence_idx"][sentence_begin_idx:] = [sentence_idx] * (len(full_doc_words["sentence_idx"]) - sentence_begin_idx)
                 if self.training:
                     self.regex_tokenizer_cache[text] = full_doc_words
             else:
@@ -368,6 +354,10 @@ class NERPreprocessor(torch.nn.Module):
         if full_doc_bert_tokens is None:
             full_doc_bert_tokens = full_doc_words
 
+        if self.sentence_split_regex is not None:
+            sentences_bounds = list(regex_sentencize(text, reg_split=self.sentence_split_regex, balance_chars=self.sentence_balance_chars))
+        else:
+            sentences_bounds = [(0, len(text))]
         if self.split_into_multiple_samples:
             results = []
         else:
@@ -377,8 +367,7 @@ class NERPreprocessor(torch.nn.Module):
                     "words_end": np.asarray([], dtype=int),
                     "words_bert_begin": np.asarray([], dtype=int),
                     "words_bert_end": np.asarray([], dtype=int),
-                    "words_text": [],
-                    "words_sentence_idx": [],
+                    "words_text": []
                 }, {
                     "bert_tokens_text": [],
                     "bert_tokens_begin": [],
@@ -465,7 +454,6 @@ class NERPreprocessor(torch.nn.Module):
                         "words_text": words["text"],
                         "words_begin": words["begin"] - begin,
                         "words_end": words["end"] - begin,
-                        "words_sentence_idx": words["sentence_idx"] - min(words["sentence_idx"]),
                     },
                     {
                         "bert_tokens_text": [bert_tokens["text"]],
@@ -481,7 +469,6 @@ class NERPreprocessor(torch.nn.Module):
             else:
                 results[0][1]["words_text"] += words["text"]
                 # numpy arrays
-                results[0][1]["words_sentence_idx"] = np.concatenate([results[0][1]["words_sentence_idx"], words["sentence_idx"]])
                 results[0][1]["words_begin"] = np.concatenate([results[0][1]["words_begin"], words["begin"]])
                 results[0][1]["words_end"] = np.concatenate([results[0][1]["words_end"], words["end"]])
                 results[0][1]["words_bert_begin"] = np.concatenate([results[0][1]["words_bert_begin"], words_bert_begin])
@@ -556,7 +543,6 @@ class NERPreprocessor(torch.nn.Module):
                 "words_bert_end": torch.long,
                 "words_begin": torch.long,
                 "words_end": torch.long,
-                "words_sentence_idx": torch.long,
                 "words_chars": torch.long,
                 "fragments_begin": torch.long,
                 "fragments_end": torch.long,
