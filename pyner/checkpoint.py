@@ -35,10 +35,11 @@ class AlreadyRunningException(Exception):
 
 
 class ModelCheckpoint(pl.callbacks.Callback):
-    def __init__(self, path, keep_n=1):
+    def __init__(self, path, keep_n=1, do_lock_experiment=True):
         super().__init__()
         if not (path.endswith('.ckpt') or path.endswith('.pt')):
             path = path + ".ckpt"
+        self.do_lock_experiment = do_lock_experiment
         assert keep_n is False or keep_n > 0
         self.keep_n = keep_n
         self.path = path
@@ -76,14 +77,17 @@ class ModelCheckpoint(pl.callbacks.Callback):
             pl_module._is_resuming_finished_model = True
         else:
             print("Will save checkpoints under path {}".format(self.path.replace("{hashkey}", self._hashkey)))
-            lock_file_path = self.lock_file_path(pl_module)
-            if os.path.exists(lock_file_path):
-                raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
-            else:
-                open(lock_file_path, 'a').close()
+            if self.do_lock_experiment:
+                lock_file_path = self.lock_file_path(pl_module)
+                if os.path.exists(lock_file_path):
+                    raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
+                else:
+                    open(lock_file_path, 'a').close()
 
     def on_fit_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
         pl_module._is_resuming_finished_model = False
+
+    def on_train_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
         lock_file_path = self.lock_file_path(pl_module)
         if os.path.exists(lock_file_path):
             os.remove(lock_file_path)
