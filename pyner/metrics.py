@@ -265,9 +265,10 @@ class DocumentEntityMetric(Metric):
             gold_idx = match_scores[pred_idx].argmax()
 
             #match_score = match_scores[pred_idx, gold_idx].float()
+            match_score = match_scores[pred_idx, gold_idx].float()
             effective_score = effective_scores[pred_idx, gold_idx].float()
             matched_scores[pred_idx, gold_idx] = max(matched_scores[pred_idx, gold_idx], effective_score)
-            if effective_score > 0:
+            if match_score >= 0 and effective_score > 0:
                 score += effective_score
                 match_scores[:, gold_idx] = -1
                 match_scores[pred_idx, :] = -1
