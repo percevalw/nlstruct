@@ -1,6 +1,6 @@
 import os
 
-from pyner.datasets.brat import BRATDataset
+from nlstruct.datasets.brat import BRATDataset
 
 
 class DEFT(BRATDataset):

@@ -9,11 +9,11 @@ import pytorch_lightning as pl
 import transformers
 from importlib import import_module
 
-from pyner.data_utils import loop, mappable, batchify
-from pyner.optimization import ScheduledOptimizer, LinearSchedule
-from pyner.registry import register, get_instance, get_config
-from pyner.torch_utils import fork_rng, identity
-from pyner.metrics import MetricsCollection
+from nlstruct.data_utils import loop, mappable, batchify
+from nlstruct.optimization import ScheduledOptimizer, LinearSchedule
+from nlstruct.registry import register, get_instance, get_config
+from nlstruct.torch_utils import fork_rng, identity
+from nlstruct.metrics import MetricsCollection
 
 import torch
 
@@ -361,9 +361,10 @@ class InformationExtractor(PytorchLightningBase):
         self.decoder.on_training_step(self.global_step, self.trainer.max_steps)
         max_grad = float(max(p.grad.abs().max() for p in self.parameters() if p.grad is not None))
 
-        self.trainer.accelerator.clip_gradients(
-            self.optimizers(), self.trainer.gradient_clip_val, gradient_clip_algorithm=self.trainer.gradient_clip_algorithm
-        )
+        if hasattr(self.trainer, 'accelerator_backend'):
+            self.trainer.accelerator_backend.clip_gradients(self.optimizers(), self.trainer.gradient_clip_val)
+        else:
+            self.trainer.accelerator.clip_gradients(self.optimizers(), self.trainer.gradient_clip_val, gradient_clip_algorithm=self.trainer.gradient_clip_algorithm)
         self.optimizers().step()
         return {**losses, "max_grad": max_grad, "count": len(inputs)}
 
@@ -480,10 +481,13 @@ class InformationExtractor(PytorchLightningBase):
         if "current_epoch" in state:
             if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'current_epoch'):
                 trainer.fit_loop.current_epoch = state["current_epoch"]
+            else:
+                trainer.current_epoch = state["current_epoch"]
         if "global_step" in state:
             if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'global_step'):
-                trainer.fit_loop.current_epoch = state["global_step"]
-            trainer.fit_loop.global_step = state["global_step"]
+                trainer.fit_loop.global_step = state["global_step"]
+            else:
+                trainer.global_step = state["global_step"]
         if "state_dict" in state:
             pl_module.load_state_dict(state["state_dict"], strict=False)
         if "optimizers" in state:

@@ -1,4 +1,4 @@
-from pyner.datasets.base import Terminology
+from nlstruct.datasets.base import Terminology
 
 import pandas as pd
 import os

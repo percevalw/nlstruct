@@ -7,10 +7,10 @@ import numpy as np
 import torch
 import transformers
 
-from pyner.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
-from pyner.models.common import Vocabulary, Contextualizer
-from pyner.registry import register, get_instance
-from pyner.torch_utils import list_factorize, batch_to_tensors
+from nlstruct.data_utils import mappable, huggingface_tokenize, regex_tokenize, slice_document, split_spans, regex_sentencize
+from nlstruct.models.common import Vocabulary, Contextualizer
+from nlstruct.registry import register, get_instance
+from nlstruct.torch_utils import list_factorize, batch_to_tensors
 
 
 def slice_tokenization_output(tokens, begin, end, insert_before=None, insert_after=None):

@@ -5,9 +5,10 @@ import glob
 import pytorch_lightning as pl
 import xxhash
 import re
-from pyner.registry import get_config
+from nlstruct.registry import get_config
 import torch
 import os
+import traceback
 
 
 def flat_config(d):
@@ -43,6 +44,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
         self.keep_n = keep_n
         self.path = path
         self._all_logged_metrics = []
+        self.last_train_metrics = {}
         self._hashkey = None
         self.only_last = only_last
 
@@ -106,10 +108,10 @@ class ModelCheckpoint(pl.callbacks.Callback):
             for log_dict in state["all_logged_metrics"]:
                 trainer.logger.log_metrics(log_dict)
 
-    def on_validation_epoch_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
+    def on_train_epoch_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
         if trainer.global_step == 0:
             return
-        self._all_logged_metrics.append({**trainer.logged_metrics, "step": int(trainer.global_step), "epoch": int(trainer.current_epoch)})
+        self._all_logged_metrics.append({**trainer.logged_metrics, "step": int(trainer.global_step) - 1, "epoch": int(trainer.current_epoch)})
 
         state = pl_module._save_state(increment_step=True)
         state["all_logged_metrics"] = self._all_logged_metrics
@@ -118,10 +120,10 @@ class ModelCheckpoint(pl.callbacks.Callback):
             self._hashkey = get_hashkey(pl_module)
 
         save_path = self.path.format(
-            global_step=trainer.global_step,
+            global_step=trainer.global_step - 1,
             epoch=trainer.current_epoch,
             hashkey=self._hashkey)
-        if not self.only_last or trainer.global_step == pl_module.max_steps - 1:
+        if not self.only_last or trainer.global_step == pl_module.max_steps:
             torch.save(state, save_path + ".tmp")
             os.rename(save_path + ".tmp", save_path)
 

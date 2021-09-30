@@ -1,7 +1,7 @@
-from pyner.models.common import *
-from pyner.models.crf import BIOULDecoder
-from pyner.models.ner import *
-from pyner.torch_utils import multi_dim_triu, repeat, dclamp, multi_dim_topk, gather, nll, bce_with_logits, cross_entropy_with_logits, inv_logsigmoid, fork_rng
+from nlstruct.models.common import *
+from nlstruct.models.crf import BIOULDecoder
+from nlstruct.models.ner import *
+from nlstruct.torch_utils import multi_dim_triu, repeat, dclamp, multi_dim_topk, gather, nll, bce_with_logits, cross_entropy_with_logits, inv_logsigmoid, fork_rng
 
 
 class TagFFN(torch.nn.Module):

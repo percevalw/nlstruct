@@ -4,7 +4,7 @@ import re
 import glob
 from collections import defaultdict
 
-from pyner.datasets.base import NERDataset
+from nlstruct.datasets.base import NERDataset
 
 REGEX_ENTITY = re.compile('^(T\d+)\t([^\s]+)([^\t]+)\t(.*)$')
 REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')

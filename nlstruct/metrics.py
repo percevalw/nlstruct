@@ -1,9 +1,9 @@
 import torch
 from pytorch_lightning.metrics import Metric
 
-from pyner.data_utils import regex_tokenize, split_spans, dedup
-from pyner.registry import register
-from pyner.torch_utils import pad_to_tensor
+from nlstruct.data_utils import regex_tokenize, split_spans, dedup
+from nlstruct.registry import register
+from nlstruct.torch_utils import pad_to_tensor
 from collections import defaultdict
 
 

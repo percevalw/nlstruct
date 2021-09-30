@@ -5,17 +5,17 @@ with open("README.md", "r") as fh:
 
 if __name__ == "__main__":
     setuptools.setup(
-        name="pyner",
-        version="0.0.1",
+        name="nlstruct",
+        version="0.0.3",
         author="Perceval Wajsburt",
         author_email="perceval.wajsburt@sorbonne-universite.fr",
         license='BSD 3-Clause',
-        description="Named entity recognition library",
+        description="Natural language structuring library",
         long_description=long_description,
         long_description_content_type="text/markdown",
-        url="https://github.com/percevalw/pyner",
+        url="https://github.com/percevalw/nlstruct",
         packages=setuptools.find_packages(),
-        package_data={},
+        package_data={'': ['example.env']},
         include_package_data=True,
         classifiers=[
             "Programming Language :: Python :: 3",

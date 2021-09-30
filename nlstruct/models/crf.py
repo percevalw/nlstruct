@@ -1,5 +1,5 @@
 import torch
-from pyner.torch_utils import multi_dim_triu
+from nlstruct.torch_utils import multi_dim_triu
 
 
 def masked_flip(x, mask, dim_x=-2):

@@ -4,8 +4,8 @@ import zipfile
 
 from sklearn.datasets._base import RemoteFileMetadata
 
-from pyner.datasets.brat import load_from_brat
-from pyner.datasets.base import NetworkLoadMode, ensure_files, NormalizationDataset
+from nlstruct.datasets.brat import load_from_brat
+from nlstruct.datasets.base import NetworkLoadMode, ensure_files, NormalizationDataset
 
 
 class QUAERO(NormalizationDataset):

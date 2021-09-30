@@ -5,9 +5,9 @@ import string
 import pandas as pd
 from IPython import get_ipython
 
-from pyner.base import *
-from pyner.checkpoint import *
-from pyner.datasets import *
+from nlstruct.base import *
+from nlstruct.checkpoint import *
+from nlstruct.datasets import *
 from rich_logger import RichTableLogger
 
 
@@ -33,7 +33,7 @@ BASE_WORD_REGEX = r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|
 BASE_SENTENCE_REGEX = r"((?:\s*\n)+\s*|(?:(?<=[\w0-9]{2,}\.|[)]\.)\s+))(?=[[:upper:]]|•|\n)"
 
 
-def main(
+def train_ner(
       dataset,
       seed,
       do_char=True,
@@ -82,8 +82,7 @@ def main(
         sentence_split_regex = BASE_SENTENCE_REGEX
         metrics = {
             "exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., word_regex=word_regex),
-            "half_word": dict(module="dem", binarize_tag_threshold=0.5, binarize_label_threshold=1., word_regex=word_regex),
-            "any_word": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., word_regex=word_regex),
+            "partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., word_regex=word_regex),
         }
     else:
         raise Exception("dataset must be a dict or a str")
@@ -221,7 +220,7 @@ def main(
             gpus=gpus,
             progress_bar_refresh_rate=False,
             checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
-            callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/'+ xp_name + '-{hashkey}-{global_step:05d}')],
+            callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}')],
             logger=[
                 #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
                 RichTableLogger(key="epoch", fields={
@@ -229,8 +228,8 @@ def main(
                     "step": {},
 
                     "(.*)_?loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-                    "(.*)_precision": {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_p"},
-                    "(.*)_recall": {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_r"},
+                    "(.*)_precision": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_p"},
+                    "(.*)_recall": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_r"},
                     "(.*)_tp": False,
                     "(.*)_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_f1"},
 
@@ -245,8 +244,10 @@ def main(
 
         result_output_filename = "checkpoints/{}.json".format(trainer.callbacks[0].hashkey)
         if not os.path.exists(result_output_filename):
-            model.cuda()
-            results = model.metrics(list(model.predict(dataset.val_data)), dataset.val_data)
+            if gpus:
+                model.cuda()
+            eval_data = dataset.test_data if dataset.test_data else dataset.val_data
+            results = model.metrics(list(model.predict()), eval_data)
             display(pd.DataFrame(results).T)
 
             def json_default(o):

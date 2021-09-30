@@ -7,8 +7,8 @@ import transformers
 from transformers.models.roberta.modeling_roberta import RobertaLMHead, gelu
 from transformers.models.bert.modeling_bert import BertLMPredictionHead
 
-from pyner.registry import register, get_instance
-from pyner.torch_utils import fork_rng, shift
+from nlstruct.registry import register, get_instance
+from nlstruct.torch_utils import fork_rng, shift
 
 RandomGeneratorState = namedtuple('RandomGeneratorState',
                                   ['random', 'torch', 'numpy', 'torch_cuda'])

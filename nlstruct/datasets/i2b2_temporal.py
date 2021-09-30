@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 import random
 
-from pyner.datasets.base import NERDataset
+from nlstruct.datasets.base import NERDataset
 
 
 class I2B2Temporal(NERDataset):
