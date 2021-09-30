@@ -21,7 +21,7 @@ from nlstruct.recipes import train_ner
 
 model = train_ner(
     dataset={
-        "train": "path to your train standoff data",
+        "train": "path to your train brat/standoff data",
         "val": 0.05,  # or path to your validation data
         # "test": # and optional path to your test data
     },
