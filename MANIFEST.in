@@ -1,6 +1,5 @@
 recursive-include nlstruct *.py
 recursive-include nlstruct *.env
-recursive-include einmax *.py
 
 include setup.py
 include README.md

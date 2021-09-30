@@ -5,8 +5,8 @@ with open("README.md", "r") as fh:
 
 if __name__ == "__main__":
     setuptools.setup(
-        name="nlstruct",  # Replace with your own username
-        version="0.0.2",
+        name="nlstruct",
+        version="0.0.3",
         author="Perceval Wajsburt",
         author_email="perceval.wajsburt@sorbonne-universite.fr",
         license='BSD 3-Clause',
@@ -24,20 +24,18 @@ if __name__ == "__main__":
         ],
         python_requires='>=3.6',
         install_requires=[
-            'numpy>=1.17.4',
-            'pandas>=0.24.1',
-            'pathos>=0.2.5',
-            'python-dotenv>=0.10.3',
-            'PyYAML>=5.2',
-            'scikit-learn>=0.22',
-            'scipy>=1.4.1',
-            'sh>=1.12.14',
-            'spacy>=2.2.3',
-            'sympy>=1.5',
-            'termcolor>=1.1.0',
-            'torch>=1.3.1',
-            'tqdm>=4.40.2',
-            'xxhash>=1.4.3',
-            'unidecode',
+            "numpy~=1.19.5",
+            "torch~=1.7.1",
+            "unidecode~=1.1.2",
+            "einops~=0.3.0",
+            "transformers~=4.3.0",
+            "optuna~=2.5.0",
+            "tqdm~=4.56.0",
+            "sklearn~=0.0",
+            "scikit-learn~=0.24.1",
+            "pandas~=1.2.1",
+            "pytorch_lightning~=1.1.7",
+            "rich_logger~=0.1.3",
+            "sentencepiece~=0.1.95",
         ]
     )
