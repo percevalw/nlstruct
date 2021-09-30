@@ -35,16 +35,16 @@ class AlreadyRunningException(Exception):
 
 
 class ModelCheckpoint(pl.callbacks.Callback):
-    def __init__(self, path, keep_n=1, do_lock_experiment=True):
+    def __init__(self, path, keep_n=1, only_last=False):
         super().__init__()
         if not (path.endswith('.ckpt') or path.endswith('.pt')):
             path = path + ".ckpt"
-        self.do_lock_experiment = do_lock_experiment
         assert keep_n is False or keep_n > 0
         self.keep_n = keep_n
         self.path = path
         self._all_logged_metrics = []
         self._hashkey = None
+        self.only_last = only_last
 
     @property
     def hashkey(self):
@@ -77,14 +77,11 @@ class ModelCheckpoint(pl.callbacks.Callback):
             pl_module._is_resuming_finished_model = True
         else:
             print("Will save checkpoints under path {}".format(self.path.replace("{hashkey}", self._hashkey)))
-            if self.do_lock_experiment:
-                lock_file_path = self.lock_file_path(pl_module)
-                if os.path.exists(lock_file_path):
-                    raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
-                else:
-                    if lock_file_path.rsplit("/", 1)[0].strip():
-                        os.makedirs(lock_file_path.rsplit("/", 1)[0], exist_ok=True)
-                    open(lock_file_path, 'a').close()
+            lock_file_path = self.lock_file_path(pl_module)
+            if os.path.exists(lock_file_path):
+                raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
+            else:
+                open(lock_file_path, 'a').close()
 
     def on_fit_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
         pl_module._is_resuming_finished_model = False
@@ -103,22 +100,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
         print("Resuming from {}".format(latest_path))
         state = torch.load(latest_path)
 
-        if "current_epoch" in state:
-            trainer.current_epoch = state["current_epoch"]
-        if "global_step" in state:
-            trainer.global_step = state["global_step"]
-        if "state_dict" in state:
-            pl_module.load_state_dict(state["state_dict"], strict=False)
-        if "optimizers" in state:
-            for optim, optim_state in zip(trainer.optimizers, state["optimizers"]):
-                optim.load_state_dict(optim_state)
-        else:
-            warnings.warn("Missing optimizers state in checkpoint")
-        dataset = getattr(trainer.train_dataloader.dataset, 'datasets', trainer.train_dataloader.dataset)
-        if "train_dataset" in state and hasattr(dataset, 'load_state_dict'):
-            dataset.load_state_dict(state["train_dataset"])
-        elif hasattr(trainer.train_dataloader.dataset, 'load_state_dict'):
-            warnings.warn("Missing train dataset state in checkpoint")
+        pl_module._load_state(state)
         if "all_logged_metrics" in state:
             self._all_logged_metrics = state["all_logged_metrics"]
             for log_dict in state["all_logged_metrics"]:
@@ -129,23 +111,8 @@ class ModelCheckpoint(pl.callbacks.Callback):
             return
         self._all_logged_metrics.append({**trainer.logged_metrics, "step": int(trainer.global_step), "epoch": int(trainer.current_epoch)})
 
-        dataset = getattr(trainer.train_dataloader.dataset, 'datasets', trainer.train_dataloader.dataset)
-        train_dataset_state = dataset.state_dict() if hasattr(dataset, 'state_dict') else None
-        optimizers_state = [
-            optim.state_dict()
-            for optim in pl_module.trainer.optimizers
-        ]
-        model_state = pl_module.state_dict()
-
-        state = {
-            "config": get_config(pl_module),
-            "current_epoch": trainer.current_epoch + 1,
-            "global_step": trainer.global_step + 1,
-            "state_dict": model_state,
-            "optimizers": optimizers_state,
-            "train_dataset": train_dataset_state,
-            "all_logged_metrics": self._all_logged_metrics,
-        }
+        state = pl_module._save_state(increment_step=True)
+        state["all_logged_metrics"] = self._all_logged_metrics
 
         if self._hashkey is None:
             self._hashkey = get_hashkey(pl_module)
@@ -154,10 +121,9 @@ class ModelCheckpoint(pl.callbacks.Callback):
             global_step=trainer.global_step,
             epoch=trainer.current_epoch,
             hashkey=self._hashkey)
-        if save_path.rsplit("/", 1)[0].strip():
-            os.makedirs(save_path.rsplit("/", 1)[0], exist_ok=True)
-        torch.save(state, save_path + ".tmp")
-        os.rename(save_path + ".tmp", save_path)
+        if not self.only_last or trainer.global_step == pl_module.max_steps - 1:
+            torch.save(state, save_path + ".tmp")
+            os.rename(save_path + ".tmp", save_path)
 
         parsed_paths = self.list_paths(pl_module)
         if self.keep_n is not False:

@@ -71,6 +71,7 @@ class FlatBatchNorm(torch.nn.BatchNorm1d):
         res[mask] = flat
         return res
 
+
 def get_activation_fn(activation):
     """Return an activation function given a string"""
     if activation == "relu":
@@ -456,8 +457,6 @@ class CharCNNWordEncoder(TextEncoder):
         return res  # embeds[batch["@words_id"]]
 
 
-
-
 @register("word_embeddings")
 class WordEmbeddings(TextEncoder):
     def __init__(self, filename, _preprocessor=None):
@@ -472,7 +471,7 @@ class WordEmbeddings(TextEncoder):
             line = line.rstrip().split(" ")
             words.append(line[0])
             weight.append(list(map(float, line[1:])))
-        weight = torch.tensor([[0.]*len(weight[0])] + weight)
+        weight = torch.tensor([[0.] * len(weight[0])] + weight)
         self.embedding = torch.nn.Embedding(weight.shape[0], weight.shape[1])
         self.embedding.weight.data = weight
         self.embedding.weight.requires_grad = False
@@ -578,10 +577,9 @@ class LSTMContextualizer(Contextualizer):
         return self.layers[-1]["gate"] if len(self.layers) else False
 
     def fast_params(self):
-        print("fast params lstm")
         return [
-           # *((self.main_gate.linear.parameters() if self.main_gate.linear is not None else [self.main_gate.weight]) if self.main_gate is not None else []),
-           # *(param for layer in self.layers for param in ((layer.gate.linear.parameters() if layer.gate.linear is not None else [layer.gate.weight]) if layer.gate is not None else [])),
+            # *((self.main_gate.linear.parameters() if self.main_gate.linear is not None else [self.main_gate.weight]) if self.main_gate is not None else []),
+            # *(param for layer in self.layers for param in ((layer.gate.linear.parameters() if layer.gate.linear is not None else [layer.gate.weight]) if layer.gate is not None else [])),
         ]
 
     def forward(self, features, mask, return_all_layers=False, return_global_state=False):
@@ -593,7 +591,7 @@ class LSTMContextualizer(Contextualizer):
         sentence_lengths = sentence_lengths[sorter]
         max_length = (sentence_lengths.max() if 0 not in sentence_lengths.shape else None)
         features = features[sorter, :max_length]
-        #mask = mask[sorter, :max_length]
+        # mask = mask[sorter, :max_length]
         # if self.initial_linear is not None:
         #    features = self.initial_linear(features)  # sample * token * hidden_size
         updates = torch.zeros(*features.shape[:-1], self.output_size, device=features.device)

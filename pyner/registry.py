@@ -20,6 +20,11 @@ class RegistryMetaclass(abc.ABCMeta):
         return super().__call__(*args, **kwargs)
 
 
+def save_pretrained(self, filename):
+    config = get_config(self)
+    torch.save({"config": config, "state_dict": self.state_dict()}, filename)
+
+
 def register(name, do_not_serialize=()):
     def fn(base_cls):
         class new_cls(base_cls, Mapping, metaclass=RegistryMetaclass):
@@ -56,6 +61,8 @@ def register(name, do_not_serialize=()):
             def __getitem__(self, item):
                 return get_config(self)[item]
 
+            save_pretrained = save_pretrained
+
         new_cls.__name__ = base_cls.__name__
         registry[name] = new_cls
         return new_cls
@@ -64,7 +71,10 @@ def register(name, do_not_serialize=()):
 
 
 def get_module(name):
-    return registry[name]
+    if isinstance(name, str):
+        return registry[name]
+    else:
+        return name
 
 
 def get_instance(kwargs):
@@ -77,7 +87,7 @@ def get_instance(kwargs):
     return get_module(module)(**kwargs)
 
 
-def get_config(self, path=(), drop_unserialized_keys=False):
+def get_config(self, path=(), drop_unserialized_keys=True):
     config = {"module": getattr(self.__class__, "registry_name", self.__class__.__name__)}
     for key in inspect.getfullargspec(getattr(self.__init__, 'fn', self.__init__)).args[1:]:
         if key.startswith('_') or (drop_unserialized_keys and key in self.__class__._do_not_serialize_):

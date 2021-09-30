@@ -181,6 +181,7 @@ class InformationExtractor(PytorchLightningBase):
 
           _size_factor=20,
           _predict_kwargs={},
+          additional_hparams={},
     ):
         """
 
@@ -233,6 +234,7 @@ class InformationExtractor(PytorchLightningBase):
 
         self.dynamic_preprocessing = dynamic_preprocessing
         self.preprocessor = get_instance(preprocessor)
+        self.additional_hparams = additional_hparams
 
         if metrics is None:
             metrics = {
@@ -268,7 +270,10 @@ class InformationExtractor(PytorchLightningBase):
                 self.init_modules()
 
             if self.trainer.max_steps is not None and self.trainer.val_check_interval is not None:
-                self.trainer.max_epochs = math.ceil(self.trainer.max_steps / self.trainer.val_check_interval)
+                if hasattr(self.trainer, 'fit_loop') and hasattr(self.trainer.fit_loop, 'max_epochs'):
+                    self.trainer.fit_loop.max_epochs = math.ceil(self.trainer.max_steps / self.trainer.val_check_interval)
+                else:
+                    self.trainer.max_epochs = math.ceil(self.trainer.max_steps / self.trainer.val_check_interval)
             self.trainer.gradient_clip_val = self.gradient_clip_val
 
             config = get_config(self, drop_unserialized_keys=True)
@@ -334,15 +339,16 @@ class InformationExtractor(PytorchLightningBase):
             results['predictions'] = self.preprocessor.decode(results['predictions'], inputs, group_by_document=group_by_document)
         return results
 
-    def transfer_batch_to_device(self, inputs, device):
+    def transfer_batch_to_device(self, inputs, device, dataloader_idx=None):
         return inputs
 
     def training_step(self, inputs, batch_idx):
         if self.batch_size == "doc":
             inputs = inputs[0]
         self.zero_grad()
-        losses = defaultdict(lambda: 0)
+        losses = defaultdict(lambda: torch.zeros(()))
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
+            outputs = key = value = None
             outputs = self(mini_batch, return_loss=True, return_predictions=False)
             for key, value in outputs.items():
                 if key.endswith("loss"):
@@ -350,11 +356,14 @@ class InformationExtractor(PytorchLightningBase):
             (outputs['loss'] / len(inputs)).backward()
             if any(p.grad.isnan().any() for p in self.parameters() if p.grad is not None):
                 raise Exception()
-            del outputs, key, value
+        outputs = key = value = None
 
-        self.decoder.on_training_step(self.global_step, self.max_steps)
+        self.decoder.on_training_step(self.global_step, self.trainer.max_steps)
         max_grad = float(max(p.grad.abs().max() for p in self.parameters() if p.grad is not None))
-        self.trainer.train_loop.track_and_norm_grad(self.optimizers())
+
+        self.trainer.accelerator.clip_gradients(
+            self.optimizers(), self.trainer.gradient_clip_val, gradient_clip_algorithm=self.trainer.gradient_clip_algorithm
+        )
         self.optimizers().step()
         return {**losses, "max_grad": max_grad, "count": len(inputs)}
 
@@ -366,7 +375,7 @@ class InformationExtractor(PytorchLightningBase):
         max_grad = max(output["max_grad"] for output in outputs)
         for key in outputs[0].keys():
             if key.endswith("loss"):
-                self.log(key, sum(output[key] * output["count"] for output in outputs) / total)
+                self.log(key, sum(float(output[key]) * output["count"] for output in outputs) / total)
         self.log("main_lr", self.optimizers().param_groups[0]["lr"])
         self.log("fast_lr", self.optimizers().param_groups[1]["lr"])
         self.log("bert_lr", self.optimizers().param_groups[2]["lr"])
@@ -442,9 +451,53 @@ class InformationExtractor(PytorchLightningBase):
                 **{"return_loss": False, "return_predictions": True, "group_by_document": True, **self._predict_kwargs, **kwargs}
             )["predictions"][0]
 
-    save_pretrained = save_pretrained
+    def _save_state(self, increment_step=False):
+        trainer = self.trainer
+        pl_module = self
 
-    def ensemble_with(self, others, ensemble_encoder_config=None, ensemble_decoder_config=None):
+        dataset = getattr(trainer.train_dataloader.dataset, 'datasets', trainer.train_dataloader.dataset)
+        train_dataset_state = dataset.state_dict() if hasattr(dataset, 'state_dict') else None
+        optimizers_state = [
+            optim.state_dict()
+            for optim in pl_module.trainer.optimizers
+        ]
+        model_state = pl_module.state_dict()
+
+        state = {
+            "config": get_config(pl_module),
+            "current_epoch": trainer.current_epoch + (1 if increment_step else 0),
+            "global_step": trainer.global_step + (1 if increment_step else 0),
+            "state_dict": model_state,
+            "optimizers": optimizers_state,
+            "train_dataset": train_dataset_state,
+        }
+        return state
+
+    def _load_state(self, state):
+        trainer = self.trainer
+        pl_module = self
+
+        if "current_epoch" in state:
+            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'current_epoch'):
+                trainer.fit_loop.current_epoch = state["current_epoch"]
+        if "global_step" in state:
+            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'global_step'):
+                trainer.fit_loop.current_epoch = state["global_step"]
+            trainer.fit_loop.global_step = state["global_step"]
+        if "state_dict" in state:
+            pl_module.load_state_dict(state["state_dict"], strict=False)
+        if "optimizers" in state:
+            for optim, optim_state in zip(trainer.optimizers, state["optimizers"]):
+                optim.load_state_dict(optim_state)
+        else:
+            warnings.warn("Missing optimizers state in checkpoint")
+        dataset = getattr(trainer.train_dataloader.dataset, 'datasets', trainer.train_dataloader.dataset)
+        if "train_dataset" in state and hasattr(dataset, 'load_state_dict'):
+            dataset.load_state_dict(state["train_dataset"])
+        elif hasattr(trainer.train_dataloader.dataset, 'load_state_dict'):
+            warnings.warn("Missing train dataset state in checkpoint")
+
+    def ensemble_with(self, others, ensemble_encoder_config=None, ensemble_decoder_config=None, decoder_kwargs={}, encoder_kwargs={}):
         config = get_config(self)
         if ensemble_decoder_config is None:
             ensemble_decoder_config = {"module": self.decoder.ENSEMBLE}
@@ -457,6 +510,6 @@ class InformationExtractor(PytorchLightningBase):
             ensemble_encoder_config = {"module": ensemble_encoder_config}
 
         config['preprocessor'] = self.preprocessor
-        config['encoder'] = get_instance({**ensemble_encoder_config, "models": ([self.encoder, *(other.encoder for other in others)])}) if ensemble_encoder_config is not False else self.encoder
-        config['decoder'] = get_instance({**ensemble_decoder_config, "models": ([self.decoder, *(other.decoder for other in others)])})
+        config['encoder'] = get_instance({**ensemble_encoder_config, "models": ([self.encoder, *(other.encoder for other in others)]), **encoder_kwargs}) if ensemble_encoder_config is not False else self.encoder
+        config['decoder'] = get_instance({**ensemble_decoder_config, "models": ([self.decoder, *(other.decoder for other in others)]), **decoder_kwargs})
         return get_instance(config)

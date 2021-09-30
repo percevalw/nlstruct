@@ -359,8 +359,7 @@ class BIOULDecoder(LinearChainCRF):
         )
         return torch.zeros((n_samples, n_tokens), dtype=torch.long, device=begins.device).index_add_(0, sample_ids, mention_tags)
 
-    @staticmethod
-    def tags_to_spans(tag, mask=None, do_overlap_disambiguation=False):
+    def tags_to_spans(self, tag, mask=None, do_overlap_disambiguation=False):
         I, B, L, U = 0, 1, 2, 3
 
         if mask is not None:
@@ -369,10 +368,20 @@ class BIOULDecoder(LinearChainCRF):
         is_B_or_U = (unstrided_tags == B) | (unstrided_tags == U)
         is_L_or_U = (unstrided_tags == L) | (unstrided_tags == U)
 
-        cs_I = (tag == 0).long().cumsum(1)
-        has_no_hole = (cs_I.unsqueeze(-1) - cs_I.unsqueeze(-2)) == 0
+        # If allow overlapping, only prevent O tag between two bounds
+        cs_no_hole = (tag == 0).long().cumsum(1)
+        has_no_hole = (cs_no_hole.unsqueeze(-1) - cs_no_hole.unsqueeze(-2)) == 0
 
         prediction = multi_dim_triu((is_B_or_U).unsqueeze(-1) & (is_L_or_U).unsqueeze(-2) & has_no_hole)
+
+        # If no overlapping, prevent anything other than I between two bounds
+        if not self.allow_overlap:
+            begin_cs = ((is_B_or_U)).cumsum(1)
+            end_cs = ((is_L_or_U)).cumsum(1)
+            begin_count = (begin_cs.unsqueeze(-1) - begin_cs.unsqueeze(-2))
+            end_count = (end_cs.unsqueeze(-1) - end_cs.unsqueeze(-2))
+            prediction &= ((begin_count + end_count) == 0) | ((begin_count + end_count == -1))
+
         if mask is not None:
             prediction = prediction & mask.unsqueeze(-1) & mask.unsqueeze(-2)
         return prediction

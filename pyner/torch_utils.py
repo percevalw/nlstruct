@@ -495,19 +495,24 @@ def wrap_masked_fill():
     torch.Tensor.masked_fill = masked_fill
 
 
-def smart_gather(tensor, index, dim):
+def smart_gather(expr, tensor, index,):
     def arange_at_dim(n, dim, ndim):
         view = [1] * ndim
         view[dim] = -1
         return torch.arange(n, device=tensor.device).view(view)
 
-    common = [name for name in tensor.names if name in index.names]
-    missing_tensor = [name for name in tensor.names if name not in common and name != dim]
-    missing_index = [name for name in index.names if name not in common]
-    tensor = tensor.align_to(*common, dim, *missing_tensor)
-    index = index.align_to(*common, *missing_index)
-    return tensor[tuple([arange_at_dim(dim, i, index.ndim) for i, dim in enumerate(tensor.shape[:len(common)])]) + (index,)].rename(*common, *missing_index, *missing_tensor)
-
+    tensor_names = expr.split("->")[0].split(",")[0].split()
+    index_names = expr.split("->")[0].split(",")[1].split()
+    common = [name for name in tensor_names if name in index_names]
+    result_names = expr.split("->")[1].split()
+    dim = next(n for n in index_names if n.startswith("@"))[1:]
+    missing_tensor = [name for name in tensor_names if name not in common and name != dim]
+    missing_index = [name for name in index_names if name not in common]
+    tensor = tensor.permute([tensor_names.index(n) for n in (*common, dim, *missing_tensor)])
+    index = index.permute([index_names.index(n) for n in (*common, *missing_index)])
+    res = tensor[tuple([arange_at_dim(dim, i, index.ndim) for i, dim in enumerate(tensor.shape[:len(common)])]) + (index,)]
+    res.permute([result_names.index(n) for n in (*common, *missing_index, *missing_tensor)])
+    return res
 
 def gather(tensor, index, dim):
     def arange_at_dim(n, dim, ndim):
