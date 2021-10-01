@@ -45,6 +45,10 @@ ner = load_pretrained("ner.pt")
 export_to_brat(ner.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
 ```
 
-### Status
+## Install
 
 This project is still under development and subject to changes.
+
+```bash
+pip install nlstruct
+```
