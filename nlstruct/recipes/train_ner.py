@@ -247,7 +247,7 @@ def train_ner(
             if gpus:
                 model.cuda()
             eval_data = dataset.test_data if dataset.test_data else dataset.val_data
-            results = model.metrics(list(model.predict()), eval_data)
+            results = model.metrics(list(model.predict(eval_data)), eval_data)
             display(pd.DataFrame(results).T)
 
             def json_default(o):
