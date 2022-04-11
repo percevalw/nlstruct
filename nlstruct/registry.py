@@ -51,6 +51,9 @@ def register(name, do_not_serialize=()):
 
             def __len__(self):
                 return len(get_config(self))
+            
+            def __bool__(self):
+                return True
 
             def __iter__(self):
                 return iter(get_config(self))
@@ -77,12 +80,14 @@ def get_module(name):
         return name
 
 
-def get_instance(kwargs):
+def get_instance(kwargs, *rest):
     if isinstance(kwargs, torch.nn.Module):
         return deepcopy(kwargs)
     if not isinstance(kwargs, dict):
         return kwargs
     kwargs = dict(kwargs)
+    for r in rest:
+        kwargs.update(r)
     module = kwargs["module"]
     return get_module(module)(**kwargs)
 

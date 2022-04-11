@@ -33,8 +33,9 @@ def has_len(x):
 
 @register("vocabulary")
 class Vocabulary(torch.nn.Module):
-    def __init__(self, values=(), with_pad=True, with_unk=False):
+    def __init__(self, values=(), with_pad=False, with_unk=False):
         super().__init__()
+
         self.with_pad = with_pad
         if with_unk is True:
             with_unk = '__unk__'
@@ -42,21 +43,16 @@ class Vocabulary(torch.nn.Module):
         values = (["__pad__"] if with_pad and "__pad__" not in values else []) + ([with_unk] if with_unk and with_unk not in values else []) + list(values)
         self.inversed = {v: i for i, v in enumerate(values)}
         self.eval()
+        if with_unk is not None and with_unk is not False:
+            self._unk_value = self.inversed[with_unk]
+            self._inversed_get = self.inversed.get
+            self.get = self._get_with_unk
+        else:
+            self.get = self.inversed.__getitem__
+        self.values = list(self.inversed.keys())
 
-    @property
-    def values(self):
-        return list(self.inversed.keys())
-
-    def get(self, obj):
-        if self.training:
-            return self.inversed.setdefault(obj, len(self.inversed))
-        res = self.inversed.get(obj, None)
-        if res is None:
-            try:
-                return self.inversed[self.with_unk]
-            except KeyError:
-                raise KeyError(f"Could not find indice in vocabulary for {repr(obj)}")
-        return res
+    def _get_with_unk(self, obj):
+        return self._inversed_get(obj, self._unk_value)
 
     def __repr__(self):
         return f"Vocabulary(count={len(self.inversed)}, with_pad={self.with_pad}, with_unk={self.with_unk})"
