@@ -1,5 +1,5 @@
 import torch
-from pytorch_lightning.metrics import Metric
+from torchmetrics import Metric
 
 from nlstruct.data_utils import regex_tokenize, split_spans, dedup
 from nlstruct.registry import register

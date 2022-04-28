@@ -1,3 +1,5 @@
+import os
+
 import gc
 import json
 import string
@@ -42,7 +44,9 @@ def train_ner(
       doc_context=True,
       finetune_bert=False,
       bert_lower=False,
+      max_tokens=256,
       n_bert_layers=4,
+      n_lstm_layers=3,
       biaffine_size=150,
       bert_proj_size=None,
       biaffine_loss_weight=1.,
@@ -61,6 +65,7 @@ def train_ner(
       predict_kwargs={},
       gpus=1,
       xp_name=None,
+      check_lock=False,
 ):
     gc.collect()
     torch.cuda.empty_cache()
@@ -115,7 +120,7 @@ def train_ner(
             min_tokens=0,
             doc_context=doc_context,
             join_small_sentence_rate=0.,
-            max_tokens=256,  # split when sentences contain more than 512 tokens
+            max_tokens=max_tokens,  # split when sentences contain more than 512 tokens
             large_sentences="equal-split",  # for these large sentences, split them in equal sub sentences < 512 tokens
             empty_entities="raise",  # when an entity cannot be mapped to any word, raise
             vocabularies={
@@ -167,7 +172,7 @@ def train_ner(
             module="contiguous_entity_decoder",
             contextualizer=dict(
                 module="lstm",
-                num_layers=3,
+                num_layers=n_lstm_layers,
                 gate=dict(module="sigmoid_gate", init_value=0., proj=True),
                 bidirectional=True,
                 hidden_size=hidden_size,
@@ -214,13 +219,14 @@ def train_ner(
     ).train()
 
     model.encoder.encoders[0].cache = shared_cache
+    os.makedirs("checkpoints", exist_ok=True)
 
     try:
         trainer = pl.Trainer(
             gpus=gpus,
             progress_bar_refresh_rate=False,
             checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
-            callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}')],
+            callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}', check_lock=check_lock)],
             logger=[
                 #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
                 RichTableLogger(key="epoch", fields={

@@ -1,14 +1,11 @@
-import warnings
-
-import parse
 import glob
-import pytorch_lightning as pl
-import xxhash
-import re
-from nlstruct.registry import get_config
-import torch
+
 import os
-import traceback
+import parse
+import pytorch_lightning as pl
+import re
+import torch
+import xxhash
 
 
 def flat_config(d):
@@ -36,7 +33,7 @@ class AlreadyRunningException(Exception):
 
 
 class ModelCheckpoint(pl.callbacks.Callback):
-    def __init__(self, path, keep_n=1, only_last=False):
+    def __init__(self, path, keep_n=1, only_last=False, check_lock=False):
         super().__init__()
         if not (path.endswith('.ckpt') or path.endswith('.pt')):
             path = path + ".ckpt"
@@ -47,6 +44,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
         self.last_train_metrics = {}
         self._hashkey = None
         self.only_last = only_last
+        self.check_lock = check_lock
 
     @property
     def hashkey(self):
@@ -80,7 +78,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
         else:
             print("Will save checkpoints under path {}".format(self.path.replace("{hashkey}", self._hashkey)))
             lock_file_path = self.lock_file_path(pl_module)
-            if os.path.exists(lock_file_path):
+            if self.check_lock and os.path.exists(lock_file_path):
                 raise AlreadyRunningException("Found a lock file {} indicating that the experiment is already running.".format(lock_file_path))
             else:
                 open(lock_file_path, 'a').close()
@@ -100,7 +98,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
             return
         latest_path = max(parsed_paths, key=lambda r: r[1].named.get('global_step', 0))[0]
         print("Resuming from {}".format(latest_path))
-        state = torch.load(latest_path)
+        state = torch.load(latest_path, map_location=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
 
         pl_module._load_state(state)
         if "all_logged_metrics" in state:
