@@ -1,7 +1,27 @@
 # NLStruct
 
 Natural language struturing library.
-Currently, it implements only a NER model, but other algorithms will follow.
+Currently, it implements only a nested NER model, but other algorithms might follow.
+
+### Cite
+
+If you find this library useful in your research, please consider citing:
+
+```
+@phdthesis{wajsburt:tel-03624928,
+  TITLE = {{Extraction and normalization of simple and structured entities in medical documents}},
+  AUTHOR = {Wajsb{\"u}rt, Perceval},
+  URL = {https://hal.archives-ouvertes.fr/tel-03624928},
+  SCHOOL = {{Sorbonne Universit{\'e}}},
+  YEAR = {2021},
+  MONTH = Dec,
+  KEYWORDS = {nlp ; structure ; extraction ; normalization ; clinical ; multilingual},
+  TYPE = {Theses},
+  PDF = {https://hal.archives-ouvertes.fr/tel-03624928/file/updated_phd_thesis_PW.pdf},
+  HAL_ID = {tel-03624928},
+  HAL_VERSION = {v1},
+}
+```
 
 ### Features
 
