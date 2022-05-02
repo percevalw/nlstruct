@@ -555,7 +555,7 @@ class LSTMContextualizer(Contextualizer):
             })
             for i in range(num_layers)
         ])
-        self.output_size = hidden_size
+        self.output_size = input_size if len(self.layers) == 0 else hidden_size
         if do_better_init:
             self._better_init_weights()
 
@@ -587,6 +587,8 @@ class LSTMContextualizer(Contextualizer):
     def forward(self, features, mask, return_all_layers=False, return_global_state=False):
         if hasattr(self, 'initial_linear'):
             features = F.gelu(self.initial_linear(features))
+        if len(self.layers) == 0:
+            return features if not return_all_layers else features.unsqueeze(0)
         sentence_lengths = mask.long().sum(1)
         sorter = (-sentence_lengths).argsort()
         inv_sorter = sorter.argsort()
