@@ -366,6 +366,14 @@ class BiTagSpanScorer(SpanScorer):
         }
 
 
+class BufferModule(torch.nn.Module):
+    def __init__(self, weight):
+        super().__init__()
+        self.register_buffer('weight', weight)
+
+    def forward(self, x):
+        return x @ self.weight
+
 @register("ensemble_bitag")
 class EnsembleBiTagSpanScorer(SpanScorer):
     def __init__(self, models):
@@ -392,12 +400,14 @@ class EnsembleBiTagSpanScorer(SpanScorer):
         self.mode = main.mode
 
         self.crf = main.crf
-        self.register_buffer('ensemble_tag_combinator', torch.stack([getattr(m, 'tag_combinator', None) for m in models], dim=0))
+        self.ensemble_tag_combinator = torch.nn.ModuleList([BufferModule(getattr(m, 'tag_combinator', None)) for m in models])
         self.ensemble_tag_proj = torch.nn.ModuleList([getattr(m, 'tag_proj', None) for m in models])
         self.ensemble_label_proj = torch.nn.ModuleList([getattr(m, 'length_proj', None) for m in models])
         self.ensemble_begin_proj = torch.nn.ModuleList([getattr(m, 'begin_proj', None) for m in models])
+        self.ensemble_length_proj = torch.nn.ModuleList([getattr(m, 'length_proj', None) for m in models])
         self.ensemble_end_proj = torch.nn.ModuleList([getattr(m, 'end_proj', None) for m in models])
-        self.register_buffer('biaffine_bias', torch.stack([m.biaffine_bias for m in models], dim=0).mean(0))
+        if getattr(main, 'biaffine_bias', None) is not None:
+            self.register_buffer('biaffine_bias', torch.stack([m.biaffine_bias for m in models], dim=0).mean(0))
 
     def fast_params(self):
         raise NotImplementedError()
@@ -431,11 +441,10 @@ class EnsembleBiTagSpanScorer(SpanScorer):
 
         if do_tagging:
             crf_tag_logits = torch.stack([(
-                                              tag_proj(words_embed)  # n_samples * n_words * (n_labels * ...)
-                                                  .view(n_samples, n_words, (self.n_labels + (0 if self.multi_label else 1)), tag_combinator.shape[0])
-                                                  .permute(0, 2, 1, 3)  # n_samples * n_labels * n_words * (...)
-                                          ) @ tag_combinator for words_embed, tag_proj, tag_combinator in zip(ensemble_words_embed, self.ensemble_tag_proj, self.tag_combinator.unbind(0))],
-                                         dim=0).mean(0)
+                  tag_proj(words_embed)  # n_samples * n_words * (n_labels * ...)
+                      .view(n_samples, n_words, (self.n_labels + (0 if self.multi_label else 1)), tag_combinator.weight.shape[0])
+                      .permute(0, 2, 1, 3)  # n_samples * n_labels * n_words * (...)
+              ) @ tag_combinator.weight for words_embed, tag_proj, tag_combinator in zip(ensemble_words_embed, self.ensemble_tag_proj, self.ensemble_tag_combinator)], dim=0).mean(0)
             crf_tag_logprobs = self.crf.marginal(
                 crf_tag_logits.reshape(-1, *crf_tag_logits.shape[2:]),
                 words_mask.repeat_interleave((self.n_labels + (0 if self.multi_label else 1)), dim=0)
@@ -467,7 +476,7 @@ class EnsembleBiTagSpanScorer(SpanScorer):
 
         if do_biaffine:
             ensemble_biaffine_logits = []
-            for words_embed, norm, begin_proj, end_proj, length_proj in zip(
+            for words_embed, begin_proj, end_proj, length_proj in zip(
                   ensemble_words_embed,
                   self.ensemble_begin_proj,
                   self.ensemble_end_proj,
@@ -486,7 +495,7 @@ class EnsembleBiTagSpanScorer(SpanScorer):
                     )
 
                 ensemble_biaffine_logits.append(biaffine_logits)
-            biaffine_logits = torch.stack(ensemble_biaffine_logits, dim=0).mean(0) + self.compat_bias
+            biaffine_logits = torch.stack(ensemble_biaffine_logits, dim=0).mean(0) + self.biaffine_bias
 
         if not do_biaffine:
             spans_logits = tagger_logits

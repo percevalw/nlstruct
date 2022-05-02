@@ -487,6 +487,8 @@ class WordEmbeddings(TextEncoder):
 
 @register("concat")
 class Concat(torch.nn.Module):
+    ENSEMBLE = "ensemble_text_encoder"
+
     def __init__(self, encoders, dropout_p=0., **kwargs):
         super().__init__()
         self.encoders = torch.nn.ModuleList([TextEncoder(**{**e, **kwargs}) for e in (encoders.values() if isinstance(encoders, dict) else encoders)])
