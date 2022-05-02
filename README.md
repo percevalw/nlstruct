@@ -3,8 +3,6 @@
 Natural language struturing library.
 Currently, it implements only a nested NER model, but other algorithms might follow.
 
-### Cite
-
 If you find this library useful in your research, please consider citing:
 
 ```
