@@ -189,13 +189,6 @@ class NERPreprocessor(torch.nn.Module):
                     if not self.filter_entities or len(set(entity["label"]) & set(self.filter_entities)) > 0
                 ]
 
-                tags = [
-                    [
-                        [False] * len(self.vocabularies["fragment_label"].values)
-                        for _ in range(len(tokenized_sample["words_begin"]))
-                    ] for _ in range(max(1, len(entities)))
-                ]  # n_entities * n_token_labels * n_tokens
-
                 new_sample = {**sample, "entities": []}
                 for entity in entities:
                     entity_idx = len(entities_label)
@@ -259,14 +252,6 @@ class NERPreprocessor(torch.nn.Module):
                 fragments_label = [self.vocabularies["fragment_label"].get(label) for label in fragments_label]
                 fragments_begin, fragments_end = fragments_begin.tolist(), fragments_end.tolist()
 
-                for entity_idx, (entity_fragments, entity) in enumerate(zip(entities_fragments, entities)):
-                    for fragment_idx, fragment in zip(entity_fragments, entity["fragments"]):
-                        begin = fragments_begin[fragment_idx]
-                        end = fragments_end[fragment_idx]
-                        fragment_label = fragments_label[fragment_idx]
-                        for i in range(begin, end + 1):
-                            tags[entity_idx][i][fragment_label] = True
-
             if len(entities_label) == 0:
                 entities_label = [[False] * len(self.vocabularies["entity_label"].values)] if self.multi_label else [0]
                 entities_fragments = [[]]
@@ -283,7 +268,7 @@ class NERPreprocessor(torch.nn.Module):
             else:
                 fragments_mask = [True] * len(fragments_label)
             # if len(tokens_indice) > self.max_tokens:
-            results.append({
+            prep_result = {
                 "tokens": tokenized_sentences["bert_tokens_indice"],
                 **({
                        "slice_begin": tokenized_sentences["slice_begin"],
@@ -292,14 +277,12 @@ class NERPreprocessor(torch.nn.Module):
                 "sentence_mask": [True] * len(tokenized_sentences["bert_tokens_indice"]),
                 "words": words,
                 "words_mask": [True] * len(tokenized_sample["words_text"]),
-                "words_text": tokenized_sample["words_text"],
                 "words_chars_mask": [[True] * len(word_chars) for word_chars in words_chars] if words_chars is not None else None,
                 "words_bert_begin": tokenized_sample["words_bert_begin"].tolist(),
                 "words_bert_end": tokenized_sample["words_bert_end"].tolist(),
                 "words_begin": tokenized_sample["words_begin"].tolist(),
                 "words_end": tokenized_sample["words_end"].tolist(),
                 "words_chars": words_chars,
-                "entities_token_tags": tags,
                 "entities_label": entities_label,
                 "entities_fragments": entities_fragments,
                 "fragments_begin": fragments_begin,
@@ -309,9 +292,14 @@ class NERPreprocessor(torch.nn.Module):
                 "fragments_mask": fragments_mask,
                 "entities_mask": entities_mask,
                 "doc_id": sample["doc_id"],
-                "original_sample": sample,
-                "original_doc": doc,
-            })
+            }
+            if not self.training:
+                prep_result.update({
+                    "words_text": tokenized_sample["words_text"],
+                    "original_sample": sample,
+                    "original_doc": doc,
+                })
+            results.append(prep_result)
         return results
 
     def train(self, mode=True):
