@@ -252,8 +252,26 @@ def train_ner(
         if not os.path.exists(result_output_filename):
             if gpus:
                 model.cuda()
+            if dataset.test_data:
+                print("TEST RESULTS:")
+            else:
+                print("VALIDATION RESULTS (NO TEST SET):")
             eval_data = dataset.test_data if dataset.test_data else dataset.val_data
-            results = model.metrics(list(model.predict(eval_data)), eval_data)
+
+            final_metrics = MetricsCollection({
+                **{metric_name: get_instance(metric_config) for metric_name, metric_config in metrics.items()},
+                **{
+                    metric_name: get_instance(metric_config)
+                    for label in model.preprocessor.vocabularies['entity_label'].values
+                    for metric_name, metric_config in
+                    {
+                        f"{label}_exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
+                        f"{label}_partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
+                    }.items()
+                }
+            })
+
+            results = final_metrics(list(model.predict(eval_data)), eval_data)
             display(pd.DataFrame(results).T)
 
             def json_default(o):
@@ -266,6 +284,10 @@ def train_ner(
                     "config": {**get_config(model), "max_steps": max_steps},
                     "results": results,
                 }, json_file, default=json_default)
+        else:
+            with open(result_output_filename, 'r') as json_file:
+                results = json.load(json_file)["results"]
+                display(pd.DataFrame(results).T)
     except AlreadyRunningException as e:
         model = None
         print("Experiment was already running")
