@@ -63,6 +63,17 @@ ner = load_pretrained("ner.pt")
 export_to_brat(ner.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
 ```
 
+### Ensembling
+
+Easily ensemble multiple models (same architecture, different seeds):
+```python
+model1 = load_pretrained("ner-1.pt")
+model2 = load_pretrained("ner-2.pt")
+model3 = load_pretrained("ner-3.pt")
+ensemble = model1.ensemble_with([model2, model3]).cuda()
+export_to_brat(ensemble.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
+```
+
 ### Install
 
 This project is still under development and subject to changes.
