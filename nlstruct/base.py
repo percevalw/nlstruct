@@ -16,6 +16,7 @@ from nlstruct.torch_utils import fork_rng, identity
 from nlstruct.metrics import MetricsCollection
 
 import torch
+import torch.utils.data
 
 
 class DummyIterableDataset(torch.utils.data.IterableDataset):

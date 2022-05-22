@@ -1,16 +1,18 @@
-import os
-
 import gc
 import json
+import os
 import string
+from typing import Dict
 
+import fire
 import pandas as pd
+import pytorch_lightning as pl
+import torch
 from IPython import get_ipython
-
-from nlstruct.base import *
-from nlstruct.checkpoint import *
-from nlstruct.datasets import *
 from rich_logger import RichTableLogger
+
+from nlstruct import BRATDataset, MetricsCollection, get_instance, get_config, InformationExtractor
+from nlstruct.checkpoint import ModelCheckpoint, AlreadyRunningException
 
 
 def isnotebook():
@@ -36,37 +38,115 @@ BASE_SENTENCE_REGEX = r"((?:\s*\n)+\s*|(?:(?<=[\w0-9]{2,}\.|[)]\.)\s+))(?=[[:upp
 
 
 def train_ner(
-      dataset,
-      seed,
-      do_char=True,
-      do_biaffine=True,
-      do_tagging="full",
-      doc_context=True,
-      finetune_bert=False,
-      bert_lower=False,
-      max_tokens=256,
-      n_bert_layers=4,
-      n_lstm_layers=3,
-      biaffine_size=150,
-      bert_proj_size=None,
-      biaffine_loss_weight=1.,
-      hidden_size=400,
-      max_steps=4000,
-      val_check_interval=None,
-      bert_name="camembert/camembert-large",
-      fasttext_file="",  # set to "" to disable
-      unique_label=False,
-      norm_bert=False,
-      dropout_p=0.1,
-      batch_size=32,
-      lr=1e-3,
-      use_lr_schedules=True,
-      word_pooler_mode="mean",
-      predict_kwargs={},
-      gpus=1,
-      xp_name=None,
-      check_lock=False,
+      dataset: Dict[str, str],
+      seed: int,
+      do_char: bool = True,
+      do_biaffine: bool = True,
+      do_tagging: str = "full",
+      doc_context: bool = True,
+      finetune_bert: bool = False,
+      bert_lower: bool = False,
+      max_tokens: int = 256,
+      n_bert_layers: int = 4,
+      n_lstm_layers: int = 3,
+      biaffine_size: int = 150,
+      bert_proj_size: int = None,
+      biaffine_loss_weight: float = 1.,
+      hidden_size: int = 400,
+      max_steps: int = 4000,
+      val_check_interval: int = None,
+      bert_name: str = "camembert/camembert-large",
+      fasttext_file: str = "",  # set to "" to disable
+      unique_label: int = False,
+      norm_bert: bool = False,
+      dropout_p: float = 0.1,
+      batch_size: int = 32,
+      lr: float = 1e-3,
+      use_lr_schedules: bool = True,
+      word_pooler_mode: str = "mean",
+      predict_kwargs: Dict[str, any] = {},
+      gpus: int = 1,
+      xp_name: string = None,
+      check_lock: bool = False,
+      return_model: bool = False,
 ):
+    """
+    Trains and evaluate a nested NER model on a given dataset.
+    If no test set is provided (`dataset["test"]`), the final evaluation
+    will be on the dev set.
+
+    Every experiment is hashed, checkpointed such that it is never run
+    twice. Trainings can be interrrupted and restored automatically.
+
+    Parameters
+    ----------
+    dataset: Dict[str, str]
+        The {"train": ..., "dev": ..., "test": ...} paths to train and evaluate the data
+    seed: int
+        Seed int to initialize the weights
+    do_char: bool
+        Concat char CNN embeddings
+    do_biaffine: bool
+        Score entities using a biaffine network
+    do_tagging: str
+        Score entities using standard BILUO tags
+    doc_context: bool
+        Add left and right sentences context before running BERT embeddings
+    finetune_bert: bool
+        Finetune BERT weights
+    bert_lower: bool
+        Convert each text to lower case before applying BERT tokenization
+    max_tokens: int
+        Maximum wordpieces count in each BERT sample
+    n_bert_layers: int
+        Number of last BERT layers embeddings to linearly combine
+    n_lstm_layers: int
+        Number of BiLSTM layers
+    biaffine_size: int
+        Dimension of the embeddings used in biaffine NER op
+    bert_proj_size: int
+        Dimension of the projected BERT embeddings
+    biaffine_loss_weight: float
+        Loss weight of the biaffine NER
+    hidden_size: int
+        LSTM hidden size
+    max_steps: int
+        Number of training steps
+    val_check_interval: int
+        Evaluate every `val_check_interval`
+    bert_name: str
+        BERT name or path
+    fasttext_file: str
+        Fasttext embeddinngs path, "" to disable
+    unique_label: int
+        Convert every label of the dataset to a new same label (for research purpose)
+    norm_bert: bool
+        Normalize BERT output
+    dropout_p: float
+        Global dropout probability
+    batch_size: int
+        Batch size
+    lr: float
+        Learning rate
+    use_lr_schedules: bool
+        Use linear decaying learning rate
+    word_pooler_mode: str
+        How to pool BERT wordpiece embeddings to obtain word embeddings
+    predict_kwargs: Dict[str, any]
+        Parameters of the model.predict fn
+    gpus: int
+        Number of gpus to use (only 0 or 1 supported)
+    xp_name: string
+        Name of the experiment (will be used to create the checkpoint files)
+    check_lock: bool
+        Check that a given experiment is not running before starting it and skips in that case
+    return_model: bool
+        Returns the final model
+
+    Returns
+    -------
+    InformationExtractor
+    """
     gc.collect()
     torch.cuda.empty_cache()
     gc.collect()
@@ -293,4 +373,9 @@ def train_ner(
         print("Experiment was already running")
         print(e)
 
-    return model
+    if return_model:
+        return model
+
+
+if __name__ == "__main__":
+    fire.Fire(train_ner)

@@ -24,6 +24,7 @@ if __name__ == "__main__":
         ],
         python_requires='>=3.6',
         install_requires=[
+            "fire",
             "numpy==1.22.3",
             "torch==1.11.0",
             "unidecode==1.3.4",
