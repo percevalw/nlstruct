@@ -6,12 +6,13 @@ from collections import defaultdict
 
 from nlstruct.datasets.base import NERDataset
 
-REGEX_ENTITY = re.compile('^(T\d+)\t([^\s]+)([^\t]+)\t(.*)$')
-REGEX_NOTE = re.compile('^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')
-REGEX_RELATION = re.compile('^(R\d+)\t([^\s]+) Arg1:([^\s]+) Arg2:([^\s]+)')
-REGEX_ATTRIBUTE = re.compile('^([AM]\d+)\t(.+)$')
-REGEX_EVENT = re.compile('^(E\d+)\t(.+)$')
-REGEX_EVENT_PART = re.compile('([^\s]+):([TE]\d+)')
+REGEX_ENTITY = re.compile(r'^(T\d+)\t([^\s]+)([^\t]+)\t(.*)$')
+REGEX_NOTE = re.compile(r'^(#\d+)\tAnnotatorNotes ([^\t]+)\t(.*)$')
+REGEX_STATUS = re.compile(r'^(#\d+)\tStatus ([^\t]+)\t(.*)$')
+REGEX_RELATION = re.compile(r'^(R\d+)\t([^\s]+) Arg1:([^\s]+) Arg2:([^\s]+)')
+REGEX_ATTRIBUTE = re.compile(r'^([AM]\d+)\t(.+)$')
+REGEX_EVENT = re.compile(r'^(E\d+)\t(.+)$')
+REGEX_EVENT_PART = re.compile(r'([^\s]+):([TE]\d+)')
 
 
 def load_from_brat(path, merge_spaced_fragments=True):
@@ -101,7 +102,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                             if match is None:
                                 raise ValueError(f'File {ann_file}, unrecognized Brat line {line}')
                             ann_id = match.group(1)
-                            parts = match.group(2).split(" ")
+                            parts = match.group(2).split(" ", 2)
                             if len(parts) >= 3:
                                 entity, entity_id, value = parts
                             elif len(parts) == 2:
@@ -143,6 +144,10 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                 "arguments": arguments,
                             }
                         elif line.startswith('#'):
+                            match = REGEX_STATUS.match(line)
+                            if match:
+                                continue
+
                             match = REGEX_NOTE.match(line)
                             if match is None:
                                 raise ValueError(f'File {ann_file}, unrecognized Brat line {line}')
