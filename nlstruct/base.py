@@ -100,7 +100,7 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.val_data, split="val")
-                batch_size = self.batch_size if self.batch_size != "doc" else 1
+                batch_size = self.val_batch_size if self.val_batch_size != "doc" else 1
                 if hasattr(prep, '__getitem__'):
                     return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
                 else:
@@ -117,7 +117,7 @@ class PytorchLightningBase(pl.LightningModule):
                 return None
             with fork_rng(self.data_seed):
                 prep = self.preprocess(self.test_data, split="test")
-                batch_size = self.batch_size if self.batch_size != "doc" else 1
+                batch_size = self.val_batch_size if self.val_batch_size != "doc" else 1
                 if hasattr(prep, '__getitem__'):
                     return torch.utils.data.DataLoader(prep, shuffle=False, batch_size=batch_size, collate_fn=identity)
                 else:
@@ -170,10 +170,12 @@ class InformationExtractor(PytorchLightningBase):
           data_seed=None,
 
           batch_size=24,
+          val_batch_size=None,
           fast_lr=1.5e-3,
           main_lr=1.5e-3,
           bert_lr=4e-5,
           gradient_clip_val=5.,
+        
           metrics=None,
           warmup_rate=0.1,
           use_lr_schedules=True,
@@ -231,6 +233,7 @@ class InformationExtractor(PytorchLightningBase):
         self.use_lr_schedules = use_lr_schedules
         self.warmup_rate = warmup_rate
         self.batch_size = batch_size
+        self.val_batch_size = val_batch_size if val_batch_size is not None else batch_size
         self.optimizer_cls = getattr(import_module(optimizer_cls.rsplit(".", 1)[0]), optimizer_cls.rsplit(".", 1)[1]) if isinstance(optimizer_cls, str) else optimizer_cls
 
         self.dynamic_preprocessing = dynamic_preprocessing
