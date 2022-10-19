@@ -157,6 +157,10 @@ class NERPreprocessor(torch.nn.Module):
         self.last_doc = doc
         results = []
         for sample, tokenized_sample, tokenized_sentences in self.sentencize_and_tokenize(doc, only_text=only_text):
+            if len(tokenized_sample["words_text"]) == 0:
+                print("skipped empty", doc["doc_id"])
+                continue
+            
             # Here, we know that the sentence is not too long
             if "char" in self.vocabularies:
                 char_voc = self.vocabularies["char"]
