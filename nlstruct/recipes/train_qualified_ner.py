@@ -2,6 +2,7 @@ import gc
 import json
 import os
 import string
+from copy import deepcopy
 from typing import Dict
 
 import fire
@@ -13,6 +14,7 @@ from rich_logger import RichTableLogger
 
 from nlstruct import BRATDataset, MetricsCollection, get_instance, get_config, InformationExtractor
 from nlstruct.checkpoint import ModelCheckpoint, AlreadyRunningException
+from nlstruct.data_utils import mappable
 
 
 def isnotebook():
@@ -37,8 +39,6 @@ BASE_WORD_REGEX = r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|
 BASE_SENTENCE_REGEX = r"((?:\s*\n)+\s*|(?:(?<=[\w0-9]{2,}\.|[)]\.)\s+))(?=[[:upper:]]|•|\n)"
 
 
-from copy import deepcopy
-from nlstruct.data_utils import mappable
 
 @mappable
 def prepare_data(doc):
@@ -52,6 +52,7 @@ def prepare_data(doc):
             attribute_labels.append("{}:{}".format(a['label'], a['value']))
         e['label'] = attribute_labels
     return doc
+
 
 def train_qualified_ner(
       dataset: Dict[str, str],
@@ -209,6 +210,10 @@ def train_qualified_ner(
                     
     entity_labels = sorted(set([label for doc in (*dataset.train_data, *dataset.val_data) for e in doc['entities'] for label in (e['label'] if isinstance(e['label'], (tuple, list)) else (e['label'],))]))
     fragments_labels = sorted(set([f['label'] for doc in (*dataset.train_data, *dataset.val_data) for e in doc['entities'] for f in e['fragments']]))
+    ner_label_to_qualifiers = {
+        label: [label, *(other for other in entity_labels if ':' in other)]
+        for label in fragments_labels
+    }
 
     display(dataset.describe())
 
@@ -308,7 +313,7 @@ def train_qualified_ner(
             qualifier=dict(
                 n_qualifiers=len(entity_labels),
             ),
-            #ner_label_to_qualifiers=ner_label_to_qualifiers,
+            ner_label_to_qualifiers=ner_label_to_qualifiers,
             intermediate_loss_slice=slice(-1, None),
         ),
 
