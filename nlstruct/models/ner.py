@@ -291,14 +291,11 @@ class NERPreprocessor(torch.nn.Module):
                 "fragments_entities": fragments_entities,
                 "fragments_mask": fragments_mask,
                 "entities_mask": entities_mask,
-                "doc_id": sample["doc_id"],
+                "doc_id": sample["doc_id"],                
+                "words_text": tokenized_sample["words_text"],
+                "original_sample": sample,
+                "original_doc": doc,
             }
-            if not self.training:
-                prep_result.update({
-                    "words_text": tokenized_sample["words_text"],
-                    "original_sample": sample,
-                    "original_doc": doc,
-                })
             results.append(prep_result)
         return results
 
@@ -541,6 +538,7 @@ class NERPreprocessor(torch.nn.Module):
             }, device=device)
         tensors["tokens_mask"] = tensors["tokens"] != -1
         tensors["tokens"].clamp_min_(0)
+        tensors["original_sample"] = [x["original_sample"] for x in batch]
         return tensors
 
     def decode(self, predictions, prep, group_by_document=True):
