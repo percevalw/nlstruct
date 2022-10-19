@@ -354,66 +354,68 @@ def train_qualified_ner(
             ".*_lr|max_grad": {"format": "{:.2e}"},
             "duration": {"format": "{:.0f}", "name": "dur(s)"},
         })
-        with logger.printer:
-            try:
-                trainer = pl.Trainer(
-                    gpus=gpus,
-                    progress_bar_refresh_rate=1.0,
-                    checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
-                    callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}', check_lock=check_lock)],
-                    logger=[
-                        #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
-                        logger,
-                    ],
-                    val_check_interval=max_steps // 10,
-                    max_steps=max_steps)
-                trainer.fit(model, dataset)
-                trainer.logger[0].finalize(True)
 
-                result_output_filename = "checkpoints/{}.json".format(trainer.callbacks[0].hashkey)
-                if not os.path.exists(result_output_filename):
-                    if gpus:
-                        model.cuda()
-                    if dataset.test_data:
-                        print("TEST RESULTS:")
-                    else:
-                        print("VALIDATION RESULTS (NO TEST SET):")
-                    eval_data = dataset.test_data if dataset.test_data else dataset.val_data
+        try:
+            trainer = pl.Trainer(
+                gpus=gpus,
+                progress_bar_refresh_rate=1.0,
+                checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
+                callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}', check_lock=check_lock)],
+                logger=[
+                    #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
+                    logger,
+                ],
+                val_check_interval=max_steps // 10,
+                max_steps=max_steps)
+            trainer.fit(model, dataset)
+            logger.finalize(True)
 
-                    final_metrics = MetricsCollection({
-                        **{metric_name: get_instance(metric_config) for metric_name, metric_config in metrics.items()},
-                        **{
-                            metric_name: get_instance(metric_config)
-                            for label in model.preprocessor.vocabularies['entity_label'].values
-                            for metric_name, metric_config in
-                            {
-                                f"{label}_exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
-                                f"{label}_partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
-                            }.items()
-                        }
-                    })
-
-                    results = final_metrics(list(model.predict(eval_data)), eval_data)
-                    display(pd.DataFrame(results).T)
-
-                    def json_default(o):
-                        if isinstance(o, slice):
-                            return str(o)
-                        raise
-
-                    with open(result_output_filename, 'w') as json_file:
-                        json.dump({
-                            "config": {**get_config(model), "max_steps": max_steps},
-                            "results": results,
-                        }, json_file, default=json_default)
+            result_output_filename = "checkpoints/{}.json".format(trainer.callbacks[0].hashkey)
+            if not os.path.exists(result_output_filename):
+                if gpus:
+                    model.cuda()
+                if dataset.test_data:
+                    print("TEST RESULTS:")
                 else:
-                    with open(result_output_filename, 'r') as json_file:
-                        results = json.load(json_file)["results"]
-                        display(pd.DataFrame(results).T)
-            except AlreadyRunningException as e:
-                model = None
-                print("Experiment was already running")
-                print(e)
+                    print("VALIDATION RESULTS (NO TEST SET):")
+                eval_data = dataset.test_data if dataset.test_data else dataset.val_data
+
+                final_metrics = MetricsCollection({
+                    **{metric_name: get_instance(metric_config) for metric_name, metric_config in metrics.items()},
+                    **{
+                        metric_name: get_instance(metric_config)
+                        for label in model.preprocessor.vocabularies['entity_label'].values
+                        for metric_name, metric_config in
+                        {
+                            f"{label}_exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
+                            f"{label}_partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
+                        }.items()
+                    }
+                })
+
+                results = final_metrics(list(model.predict(eval_data)), eval_data)
+                display(pd.DataFrame(results).T)
+
+                def json_default(o):
+                    if isinstance(o, slice):
+                        return str(o)
+                    raise
+
+                with open(result_output_filename, 'w') as json_file:
+                    json.dump({
+                        "config": {**get_config(model), "max_steps": max_steps},
+                        "results": results,
+                    }, json_file, default=json_default)
+            else:
+                with open(result_output_filename, 'r') as json_file:
+                    results = json.load(json_file)["results"]
+                    display(pd.DataFrame(results).T)
+        except AlreadyRunningException as e:
+            model = None
+            print("Experiment was already running")
+            print(e)
+        finally:
+            logger.finalize(True)
 
     if return_model:
         return model
