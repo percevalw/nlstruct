@@ -104,8 +104,8 @@ class QualifiedNERPreprocessor(torch.nn.Module):
             Characters to "balance" when splitting sentence, ex: parenthesis, brackets, etc.
             Will make sure that we always have (number of '[')  <= (number of ']')
         :param sentence_entity_overlap: str
-            What to do when a entity overlaps multiple sentences ?
-            Choices: "raise" to raise an error or "split" to split the entity
+            What to do when an entity overlaps multiple sentences ?
+            Choices: "raise" to raise an error, "split" to split the entity or "join" to join the sentences
         :param max_tokens: int
             Maximum number of bert tokens in a sample
         :param large_sentences: str
@@ -441,34 +441,39 @@ class QualifiedNERPreprocessor(torch.nn.Module):
                 words_bert_end += bert_offset
             bert_offset += len(bert_tokens["text"])
             if self.split_into_multiple_samples:
-                results.append((
-                    slice_document(
-                        doc,
-                        begin,
-                        end,
-                        entity_overlap=self.sentence_entity_overlap,
-                        only_text=only_text,
-                        main_fragment_label="main",
-                        offset_spans=True,
-                    ),
-                    {
-                        "words_bert_begin": words_bert_begin,
-                        "words_bert_end": words_bert_end,
-                        "words_text": words["text"],
-                        "words_begin": words["begin"] - begin,
-                        "words_end": words["end"] - begin,
-                    },
-                    {
-                        "bert_tokens_text": [bert_tokens["text"]],
-                        "bert_tokens_begin": [bert_tokens["begin"]],
-                        "bert_tokens_end": [bert_tokens["end"]],
-                        "bert_tokens_indice": [tokens_indice],
-                        **({
-                               "slice_begin": [0],
-                               "slice_end": [len(tokens_indice)],
-                           } if self.doc_context else {})
-                    }
-                ))
+                try:
+                    results.append((
+                        slice_document(
+                            doc,
+                            begin,
+                            end,
+                            entity_overlap="raise" if self.sentence_entity_overlap == "join" else self.sentence_entity_overlap,
+                            only_text=only_text,
+                            main_fragment_label="main",
+                            offset_spans=True,
+                        ),
+                        {
+                            "words_bert_begin": words_bert_begin,
+                            "words_bert_end": words_bert_end,
+                            "words_text": words["text"],
+                            "words_begin": words["begin"] - begin,
+                            "words_end": words["end"] - begin,
+                        },
+                        {
+                            "bert_tokens_text": [bert_tokens["text"]],
+                            "bert_tokens_begin": [bert_tokens["begin"]],
+                            "bert_tokens_end": [bert_tokens["end"]],
+                            "bert_tokens_indice": [tokens_indice],
+                            **({
+                                   "slice_begin": [0],
+                                   "slice_end": [len(tokens_indice)],
+                               } if self.doc_context else {})
+                        }
+                    ))
+                except OverlappingEntityException:
+                    if self.sentence_entity_overlap == "raise":
+                        raise
+
             else:
                 results[0][1]["words_text"] += words["text"]
                 # numpy arrays
@@ -686,6 +691,10 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
         return [*self.span_scorer.fast_params(), *(self.contextualizer.fast_params() if self.contextualizer is not None else [])]
 
     def forward(self, words_embed, batch=None, return_loss=False, return_predictions=False, filter_predictions=None, **kwargs):
+        if return_loss is True:
+            return_loss = {"ner", "qualifier"}
+        elif return_loss is False:
+            return_loss = set()
         ############################
         # Generate span candidates #
         ############################
@@ -699,7 +708,7 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             contextualized_words_embed = words_embed.unsqueeze(0)
 
         spans = self.span_scorer(contextualized_words_embed[self.intermediate_loss_slice if return_loss else slice(-1, None)],
-                                 words_mask, batch, force_gold=return_loss, **kwargs)
+                                 words_mask, batch, force_gold="ner" in return_loss, **kwargs)
         spans_mask, spans_begin, spans_end, spans_ner_label = (
             spans["flat_spans_mask"],
             spans["flat_spans_begin"],
@@ -713,16 +722,20 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             spans_ner_label,
             spans_mask,
             batch=batch,
-            return_loss=return_loss,
+            return_loss="qualifier" in return_loss,
         )
         entity_labels = qualification_result["prediction"]
 
         #########################
         # Compute the span loss #
         #########################
-        loss_dict = {}
-        if return_loss:
-            loss_dict = self.span_scorer.loss(spans, batch)
+        loss_dict = {"loss": 0}
+        if "ner" in return_loss:
+            ner_loss_dict = self.span_scorer.loss(spans, batch)
+            loss_dict["loss"] = loss_dict["loss"] + ner_loss_dict.pop("loss")
+            loss_dict.update(ner_loss_dict)
+
+        if "qualifier" in return_loss:
             loss_dict["qual_loss"] = qualification_result.pop("loss")
             loss_dict["loss"] = loss_dict["loss"] + loss_dict["qual_loss"]
 
