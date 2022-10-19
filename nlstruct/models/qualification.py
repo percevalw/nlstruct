@@ -41,7 +41,6 @@ class SpanEmbedding(torch.nn.Module):
         return pooled
 
 
-
 @register("qualification", do_not_serialize=["ner_label_to_qualifiers"])
 class Qualification(torch.nn.Module):
     def __init__(
@@ -98,7 +97,7 @@ class Qualification(torch.nn.Module):
                 loss = mention_err[spans_mask].sum()
             else:
                 mention_err = F.binary_cross_entropy_with_logits(
-                    scores.log_softmax(-1),
+                    scores,
                     gold_labels.float(),
                     reduction='none',
                 ).sum(-1)  # [b]atch * [e]nts

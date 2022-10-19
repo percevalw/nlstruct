@@ -266,6 +266,10 @@ class QualifiedNERPreprocessor(torch.nn.Module):
                 fragments_label = [self.vocabularies["fragment_label"].get(label) for label in fragments_label]
                 fragments_begin, fragments_end = fragments_begin.tolist(), fragments_end.tolist()
 
+                sorter = sorted(range(len(entities_fragments)), key=lambda i: min(entities_fragments[i]))
+                entities_label = [entities_label[i] for i in sorter]
+                entities_fragments = [entities_fragments[i] for i in sorter]
+
             if len(entities_label) == 0:
                 entities_label = [[False] * len(self.vocabularies["entity_label"].values)] if self.multi_label else [0]
                 entities_fragments = [[]]
@@ -719,7 +723,8 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
         loss_dict = {}
         if return_loss:
             loss_dict = self.span_scorer.loss(spans, batch)
-            loss_dict["qual_loss"] = qualification_result["loss"]
+            loss_dict["qual_loss"] = qualification_result.pop("loss")
+            loss_dict["loss"] = loss_dict["loss"] + loss_dict["qual_loss"]
 
         predictions = None
         if return_predictions:
@@ -768,6 +773,7 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             "predictions": predictions,
             **loss_dict,
             **spans,
+            **qualification_result,
         }
 
 
