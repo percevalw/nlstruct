@@ -695,6 +695,7 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             return_loss = {"ner", "qualifier"}
         elif return_loss is False:
             return_loss = set()
+
         ############################
         # Generate span candidates #
         ############################
@@ -715,6 +716,9 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             spans["flat_spans_end"],
             spans["flat_spans_label"])
 
+        ############################################
+        # Qualify span candidates with more labels #
+        ############################################
         qualification_result = self.qualification(
             contextualized_words_embed[-1],
             spans_begin,
@@ -792,7 +796,12 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
 
 @register("ensemble_contiguous_entity_decoder")
 class EnsembleContiguousQualifiedEntityDecoder(torch.nn.Module):
-    def __init__(self, models, ensemble_span_scorer_module=None):
+    def __init__(
+          self,
+          models,
+          ensemble_span_scorer_module=None,
+          ensemble_qualification_module=None,
+    ):
         super().__init__()
 
         self.contextualizers = torch.nn.ModuleList([get_instance(m.contextualizer) for m in models])
@@ -800,7 +809,16 @@ class EnsembleContiguousQualifiedEntityDecoder(torch.nn.Module):
         self.filter_predictions = models[0].filter_predictions
         if ensemble_span_scorer_module is None:
             ensemble_span_scorer_module = models[0].span_scorer.ENSEMBLE
-        self.span_scorer = get_instance({"module": ensemble_span_scorer_module, "models": [get_instance(m.span_scorer) for m in models]})
+        if ensemble_qualification_module is None:
+            ensemble_qualification_module = models[0].qualification.ENSEMBLE
+        self.span_scorer = get_instance({
+            "module": ensemble_span_scorer_module,
+            "models": [get_instance(m.span_scorer) for m in models]
+        })
+        self.qualification = get_instance({
+            "module": ensemble_qualification_module,
+            "models": [get_instance(m.qualification) for m in models]
+        })
 
     def on_training_step(self, step_idx, total):
         pass
@@ -809,6 +827,11 @@ class EnsembleContiguousQualifiedEntityDecoder(torch.nn.Module):
         raise NotImplementedError("This ensemble model is not optimizable")
 
     def forward(self, ensemble_words_embed, batch=None, return_loss=False, return_predictions=False, filter_predictions=None, **kwargs):
+        if return_loss is True:
+            return_loss = {"ner", "qualifier"}
+        elif return_loss is False:
+            return_loss = set()
+
         ############################
         # Generate span candidates #
         ############################
@@ -816,41 +839,52 @@ class EnsembleContiguousQualifiedEntityDecoder(torch.nn.Module):
             ensemble_words_embed, ensemble_lm_embeds = zip(*ensemble_words_embed)
         words_mask = batch['words_mask']
         contextualized_words_embed = [
-            model(words_embed, words_mask, return_all_layers=True)[self.intermediate_loss_slice if return_loss else slice(-1, None)]
+            model(words_embed, words_mask, return_all_layers=True)[slice(-1, None)]
             if model is not None else words_embed
             for model, words_embed in zip(self.contextualizers, ensemble_words_embed)
         ]
-        spans = self.span_scorer(contextualized_words_embed, words_mask, batch, force_gold=return_loss, **kwargs)
+        spans = self.span_scorer(contextualized_words_embed, words_mask, batch, force_gold="ner" in return_loss, **kwargs)
         spans_mask, spans_begin, spans_end, spans_ner_label = (
             spans["flat_spans_mask"],
             spans["flat_spans_begin"],
             spans["flat_spans_end"],
             spans["flat_spans_label"])
 
-        qualifier_result = self.qualifier(contextualized_words_embed[-1], spans_begin, spans_end, spans_ner_label, spans_mask, batch=batch, return_loss=return_loss)
-        spans_label = qualifier_result["prediction"]
+        ############################################
+        # Qualify span candidates with more labels #
+        ############################################
+        qualification_result = self.qualification(
+            [c[-1] for c in contextualized_words_embed], # last layer of contextualizer embeddings
+            spans_begin,
+            spans_end,
+            spans_ner_label,
+            spans_mask,
+            batch=batch,
+            return_loss="qualifier" in return_loss,
+        )
+        entity_labels = qualification_result["prediction"]
 
         #########################
         # Compute the span loss #
         #########################
-        loss_dict = {}
-        if return_loss:
-            raise NotImplementedError("This ensemble model does not return a loss")
+        loss_dict = {'loss': None}
 
         predictions = None
         if return_predictions:
+            spans_mask = spans["flat_spans_mask"]
             predictions = [[] for _ in batch["original_sample"]]
             if 0 not in spans_mask.shape:
                 for sample_idx, fragment_idx in spans_mask.nonzero(as_tuple=False).tolist():
+                    quals = entity_labels[sample_idx, fragment_idx]
                     predictions[sample_idx].append({
                         "entity_id": len(predictions[sample_idx]),
-                        "confidence": 1.,  # entities_confidence[sample_idx, entity_idx].item(),
-                        "label": spans_ner_label[sample_idx, fragment_idx].item(),
+                        "confidence": 1.,  # spans["flat_spans_logit"][sample_idx, fragment_idx].sigmoid().item(),
+                        "label": entity_labels[sample_idx, fragment_idx].tolist(),
                         "fragments": [
                             {
-                                "begin": spans_begin[sample_idx, fragment_idx].item(),
-                                "end": spans_end[sample_idx, fragment_idx].item(),
-                                "label": spans_label[sample_idx, fragment_idx].item(),
+                                "begin": spans["flat_spans_begin"][sample_idx, fragment_idx].item(),
+                                "end": spans["flat_spans_end"][sample_idx, fragment_idx].item(),
+                                "label": spans["flat_spans_label"][sample_idx, fragment_idx].item(),
                             }
                         ]
                     })
