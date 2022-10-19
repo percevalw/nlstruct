@@ -808,8 +808,8 @@ class EnsembleContiguousQualifiedEntityDecoder(torch.nn.Module):
             spans["flat_spans_end"],
             spans["flat_spans_label"])
 
-        normalizer_result = self.normalizer(contextualized_words_embed[-1], spans_begin, spans_end, spans_ner_label, spans_mask, batch=batch, return_loss=return_loss)
-        spans_label = normalizer_result["prediction"]
+        qualifier_result = self.qualifier(contextualized_words_embed[-1], spans_begin, spans_end, spans_ner_label, spans_mask, batch=batch, return_loss=return_loss)
+        spans_label = qualifier_result["prediction"]
 
         #########################
         # Compute the span loss #
