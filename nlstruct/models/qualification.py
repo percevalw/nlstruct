@@ -43,6 +43,8 @@ class SpanEmbedding(torch.nn.Module):
 
 @register("qualification", do_not_serialize=["ner_label_to_qualifiers"])
 class Qualification(torch.nn.Module):
+    ENSEMBLE = "ensemble_qualification"
+
     def __init__(
           self,
           input_size: int,
@@ -102,6 +104,52 @@ class Qualification(torch.nn.Module):
                     reduction='none',
                 ).sum(-1)  # [b]atch * [e]nts
                 loss = mention_err[spans_mask].sum()
+            pred = batch['entities_label']
+        else:
+            loss = mention_err = gold_outputs = None
+            if combination_scores is not None:
+                pred = self.qualifiers_combinations[combination_scores.argmax(-1)]
+            else:
+                pred = scores > 0
+
+        return {
+            "prediction": pred,
+            "loss": loss,
+        }
+
+
+@register("ensemble_qualification", do_not_serialize=["ner_label_to_qualifiers"])
+class EnsembleQualification(torch.nn.Module):
+    def __init__(
+          self,
+          models,
+    ):
+        super().__init__()
+
+        self.register_buffer('ner_label_to_qualifiers', models[0].ner_label_to_qualifiers)
+        self.register_buffer('qualifiers_combinations', models[0].qualifiers_combinations)
+        self.poolers = torch.nn.ModuleList([m.pooler for m in models])
+        self.classifiers = torch.nn.ModuleList([m.classifier for m in models])
+
+    def forward(self, ensemble_words_embed, spans_begin, spans_end, spans_label, spans_mask, batch=None, return_loss=True):
+
+        ensemble_scores = []
+        for pooler, classifier, words_embed in zip(self.poolers, self.classifiers, ensemble_words_embed):
+            pooled = pooler(words_embed, (spans_begin, spans_end + 1))
+            scores = classifier(pooled)
+            ensemble_scores.append(scores)
+        scores = torch.stack(ensemble_scores, 0).mean(0)
+
+        if self.ner_label_to_qualifiers is not None:
+            span_allowed_qualifiers = self.ner_label_to_qualifiers[spans_label]  # [b]atch_size * [e]ntities * [q]ualifiers
+            scores = scores.masked_fill(~span_allowed_qualifiers, IMPOSSIBLE)  # [b]atch_size * [e]ntities * [q]ualifiers
+        if self.qualifiers_combinations is not None:
+            combination_scores = torch.einsum('beq,qc->bec')
+        else:
+            combination_scores = None
+
+        if return_loss:
+            loss = None
             pred = batch['entities_label']
         else:
             loss = mention_err = gold_outputs = None
