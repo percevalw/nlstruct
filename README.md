@@ -1,7 +1,7 @@
 # NLStruct
 
 Natural language struturing library.
-Currently, it implements only a nested NER model, but other algorithms might follow.
+Currently, it implements a nested NER model and a span classification model, but other algorithms might follow.
 
 If you find this library useful in your research, please consider citing:
 
@@ -21,16 +21,20 @@ If you find this library useful in your research, please consider citing:
 }
 ```
 
-### Features
+## Features
 
 - processes large documents seamlessly: it automatically handles tokenization and sentence splitting.
 - do not train twice: an automatic caching mechanism detects when an experiment has already been run
 - stop & resume with checkpoints
 - easy import and export of data
 - handles nested or overlapping entities
-- pretty logging with [rich_logger](https://github.com/percevalw/rich_logger)
+- multi-label classification of recognized entities
+- strict or relaxed multi label end to end retrieval metrcis
+- pretty logging with [rich-logger](https://github.com/percevalw/rich_logger)
 - heavily customizable, without config files (see [train_ner.py](https://github.com/percevalw/nlstruct/blob/nlstruct/recipes/train_ner.py))
 - built on top of [transformers](https://github.com/huggingface/transformers) and [pytorch_lightning](https://github.com/PyTorchLightning/pytorch-lightning)
+
+## Training models
 
 ### How to train a NER model
 
@@ -50,7 +54,7 @@ model = train_ner(
     gpus=0,
     xp_name="my-xp",
 )
-model.save_pretrained("ner.pt")
+model.save_pretrained("model.pt")
 ```
 
 ### How to use it
@@ -59,20 +63,47 @@ model.save_pretrained("ner.pt")
 from nlstruct import load_pretrained
 from nlstruct.datasets import load_from_brat, export_to_brat
 
-ner = load_pretrained("ner.pt")
+ner = load_pretrained("model.pt")
 export_to_brat(ner.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
 ```
 
-### Ensembling
+### How to train a NER model followed by a span classification model
+
+```python
+from nlstruct.recipes import train_qualified_ner
+
+model = train_qualified_ner(
+    dataset={
+        "train": "path to your train brat/standoff data",
+        "val": 0.05,  # or path to your validation data
+        # "test": # and optional path to your test data
+    },
+    finetune_bert=False,
+    seed=42,
+    bert_name="camembert/camembert-base",
+    fasttext_file="",
+    gpus=0,
+    xp_name="my-xp",
+)
+model.save_pretrained("model.pt")
+```
+
+## Ensembling
 
 Easily ensemble multiple models (same architecture, different seeds):
 ```python
-model1 = load_pretrained("ner-1.pt")
-model2 = load_pretrained("ner-2.pt")
-model3 = load_pretrained("ner-3.pt")
+model1 = load_pretrained("model-1.pt")
+model2 = load_pretrained("model-2.pt")
+model3 = load_pretrained("model-3.pt")
 ensemble = model1.ensemble_with([model2, model3]).cuda()
 export_to_brat(ensemble.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
 ```
+
+## Advanced use
+
+Should you need to further configure the training of a model, please modify directly one 
+of the recipes located in the [recipes](nlstruct/recipes/) folder.
+
 
 ### Install
 
