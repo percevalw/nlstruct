@@ -315,7 +315,7 @@ class BERTEncoder(TextEncoder):
     def bert_config(self):
         return self.bert.config
 
-    def exec_bert(self, tokens, mask, slices_begin=None, slices_end=None):
+    def exec_bert(self, tokens, mask, slices_begin, slices_end):
         res = self.bert.forward(tokens, mask, output_hidden_states=True)
         if self.output_lm_embeds:
             lm_embeds = list(res.logits)
@@ -329,8 +329,7 @@ class BERTEncoder(TextEncoder):
             token_features = torch.stack(token_features[-self.n_layers:], dim=2)
 
         results = (token_features, *lm_embeds)
-        if slices_begin is not None:
-            results = multi_dim_slice(results, slices_begin, slices_end)
+        results = multi_dim_slice(results, slices_begin, slices_end)
         return results
 
     def forward(self, batch):
@@ -350,12 +349,18 @@ class BERTEncoder(TextEncoder):
             flat_mask = mask[mask.any(-1)]
             flat_slices_begin = batch['slice_begin'][mask.any(-1)] if 'slice_begin' in batch else torch.zeros(len(flat_mask), device=device, dtype=torch.long)
             flat_slices_end = batch['slice_end'][mask.any(-1)] if 'slice_end' in batch else flat_mask.long().sum(1)
+            
+            if 'slice_end' in batch:
+                slices_lengths = (batch['slice_end'] - batch['slice_begin'])[..., None]
+                mask = torch.arange(slices_lengths.max() if 0 not in slices_lengths.shape else 0, device=device) < slices_lengths
         else:
             needs_concat = False
             flat_tokens = tokens
             flat_mask = mask
             flat_slices_begin = batch['slice_begin'] if 'slice_begin' in batch else torch.zeros(len(flat_mask), device=device, dtype=torch.long)
             flat_slices_end = batch['slice_end'] if 'slice_end' in batch else flat_mask.long().sum(1)
+        
+        
         if self.do_cache:
             keys = [hash((tuple(row[:length]), begin, end)) for row, length, begin, end in zip(flat_tokens.tolist(), flat_mask.sum(1).tolist(), flat_slices_begin.tolist(), flat_slices_end.tolist())]
 
