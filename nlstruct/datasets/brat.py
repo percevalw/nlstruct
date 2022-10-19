@@ -90,6 +90,7 @@ def load_from_brat(path, merge_spaced_fragments=True):
                                 # multiple fragments for a entity that spans over more than one line)
                                 if merge_spaced_fragments and last_end is not None and len(text[last_end:begin].strip()) == 0:
                                     entities[ann_id]["fragments"][-1]["end"] = end
+                                    last_end = end
                                     continue
                                 entities[ann_id]["fragments"].append({
                                     "begin": begin,
