@@ -716,6 +716,10 @@ class ContiguousQualifiedEntityDecoder(torch.nn.Module):
             spans["flat_spans_end"],
             spans["flat_spans_label"])
 
+        if "ner" not in return_loss:
+            batch["entities_mask"] = spans["flat_spans_mask"]
+            batch["entities_fragments"] = torch.arange(batch["entities_mask"].shape[1])[None, :, None].repeat(batch["entities_mask"].shape[0], 1, 1)
+
         ############################################
         # Qualify span candidates with more labels #
         ############################################
