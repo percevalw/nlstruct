@@ -60,6 +60,7 @@ class Qualification(torch.nn.Module):
             self.classifier = torch.nn.Linear(input_size, n_qualifiers)
         else:
             raise Exception("Only scalar product is supported for qualifier classification.")
+
         self.pooler = Pooler(mode=pooler_mode)
 
         if ner_label_to_qualifiers is not None:
@@ -72,11 +73,30 @@ class Qualification(torch.nn.Module):
             self.qualifiers_combinations = None
 
     def forward(self, words_embed, spans_begin, spans_end, spans_label, spans_mask, batch=None, return_loss=True):
+        n_samples = len(words_embed)
+
+        entities_mask = batch["entities_mask"]
+
+        # max pool per fragment: [b]atch_size * [f]ragments * [e]mbedding
         pooled = self.pooler(words_embed, (spans_begin, spans_end + 1))
+        # max pool per entity: [b]atch_size * [e]ntities * [f]ragments * [e]mbedding
+        pooled = pooled[torch.arange(n_samples)[:, None, None], batch["entities_fragments"]]
+        # masking padded fragments
+        pooled = pooled.masked_fill(~entities_mask[:, :, None, None], -10000)
+        # pooling fragments embeddings
+        pooled = pooled.max(-2)[0] if 0 not in pooled.shape else pooled.sum(-2)
 
         scores = self.classifier(pooled)
         if self.ner_label_to_qualifiers is not None:
-            span_allowed_qualifiers = self.ner_label_to_qualifiers[spans_label]  # [b]atch_size * [e]ntities * [q]ualifiers
+            span_allowed_qualifiers = self.ner_label_to_qualifiers[spans_label]  # [b]atch_size * [f]ntities * [q]ualifiers
+            span_allowed_qualifiers = (
+                span_allowed_qualifiers[
+                    torch.arange(n_samples)[:, None, None],
+                    batch["entities_fragments"]
+                ]  # [b]atch_size * [e]ntities * [f]ragments * [q]ualifiers
+                .masked_fill(~entities_mask[:, :, None, None], False)
+                .any(-2)  # -> [b]atch_size * [e]ntities * [q]ualifiers
+            )
             scores = scores.masked_fill(~span_allowed_qualifiers, IMPOSSIBLE)  # [b]atch_size * [e]ntities * [q]ualifiers
         if self.qualifiers_combinations is not None:
             combination_scores = torch.einsum('beq,qc->bec')
@@ -90,20 +110,20 @@ class Qualification(torch.nn.Module):
                     gold_labels[..., None, :] ==  # [b]atch * [e]nts * 1 * [q]ualifiers
                     self.qualifiers_combinations  # [c]ombinations * [q]ualifiers
                 ).all(-1)  # [b]atch * [e]nts * [c]ombinations
-                assert gold_combinations.any(-1)[spans_mask].all()
-                mention_err = torch.einsum(
+                assert gold_combinations.any(-1)[entities_mask].all()
+                entities_loss = torch.einsum(
                     'bec,bec->be',  # [b]atch * [e]nts * [c]ombinations
                     -combination_scores.log_softmax(-1),
                     gold_combinations.float()  # [b]atch * [e]nts * [c]ombinations
                 )  # [b]atch * [e]nts * [c]ombinations
-                loss = mention_err[spans_mask].sum()
+                loss = entities_loss[entities_mask].sum()
             else:
-                mention_err = F.binary_cross_entropy_with_logits(
+                entities_loss = F.binary_cross_entropy_with_logits(
                     scores,
                     gold_labels.float(),
                     reduction='none',
                 ).sum(-1)  # [b]atch * [e]nts
-                loss = mention_err[spans_mask].sum()
+                loss = entities_loss[entities_mask].sum()
             pred = batch['entities_label']
         else:
             loss = mention_err = gold_outputs = None
