@@ -1,7 +1,10 @@
 import inspect
 import functools
 import torch
-from collections import Mapping
+try:
+    from collections.abc import Mapping
+except ImportError:
+    from collections import Mapping
 from copy import deepcopy
 import abc
 
