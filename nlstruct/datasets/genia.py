@@ -66,7 +66,26 @@ class GENIA(NERDataset):
         remote = self.REMOTE_FILES[version]
         [file] = ensure_files(path, [remote], mode=NetworkLoadMode.AUTO)
         with tarfile.open(file, "r:gz") as tar:
-            tar.extractall(path)
+            def is_within_directory(directory, target):
+                
+                abs_directory = os.path.abspath(directory)
+                abs_target = os.path.abspath(target)
+            
+                prefix = os.path.commonprefix([abs_directory, abs_target])
+                
+                return prefix == abs_directory
+            
+            def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+            
+                for member in tar.getmembers():
+                    member_path = os.path.join(path, member.name)
+                    if not is_within_directory(path, member_path):
+                        raise Exception("Attempted Path Traversal in Tar File")
+            
+                tar.extractall(path, members, numeric_owner=numeric_owner) 
+                
+            
+            safe_extract(tar, path)
 
         filename = os.path.join(path, {"3.02": "GENIA_term_3.02/GENIAcorpus3.02.xml", "3.02p": "GENIAcorpus3.02.merged.xml"}[version])
 
