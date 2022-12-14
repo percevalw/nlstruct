@@ -2,7 +2,11 @@ import functools
 import random
 import re
 import math
-from collections import defaultdict, Sequence
+try:
+    from collections.abc import Sequence
+except ImportError:
+    from collections import Sequence
+from collections import defaultdict
 from collections import namedtuple
 from contextlib import contextmanager
 from itertools import zip_longest
