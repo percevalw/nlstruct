@@ -79,5 +79,5 @@ export_to_brat(ensemble.predict(load_from_brat("path/to/brat/test")), filename_p
 This project is still under development and subject to changes.
 
 ```bash
-pip install nlstruct
+pip install git+https://github.com/percevalw/nlstruct.git
 ```
