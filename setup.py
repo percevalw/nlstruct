@@ -29,7 +29,7 @@ if __name__ == "__main__":
             "torch==1.11.0",
             "unidecode==1.3.4",
             "einops==0.4.1",
-            "transformers==4.11.2",
+            "transformers==4.30.0",
             "tqdm==4.64.0",
             "scikit-learn==1.1.0rc1",
             "pandas==1.4.2",
