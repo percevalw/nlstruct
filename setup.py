@@ -26,7 +26,7 @@ if __name__ == "__main__":
         install_requires=[
             "fire",
             "numpy==1.22.3",
-            "torch==1.11.0",
+            "torch==1.13.1",
             "unidecode==1.3.4",
             "einops==0.4.1",
             "transformers==4.11.2",
