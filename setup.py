@@ -33,7 +33,7 @@ if __name__ == "__main__":
             "tqdm==4.64.0",
             "scikit-learn==1.1.0rc1",
             "pandas==1.4.2",
-            "pytorch_lightning==1.4.9",
+            "pytorch_lightning==1.6.0",
             "torchmetrics==0.7.3",
             "rich_logger==0.1.4",
             "sentencepiece==0.1.96",
