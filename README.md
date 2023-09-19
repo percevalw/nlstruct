@@ -53,6 +53,7 @@ model = train_ner(
     fasttext_file="",
     gpus=0,
     xp_name="my-xp",
+    return_model=True,
 )
 model.save_pretrained("model.pt")
 ```
@@ -64,6 +65,19 @@ from nlstruct import load_pretrained
 from nlstruct.datasets import load_from_brat, export_to_brat
 
 ner = load_pretrained("model.pt")
+ner.eval()
+ner.predict({"doc_id": "doc-0", "text": "Je lui prescris du lorazepam."})
+# Out: 
+# {'doc_id': 'doc-0',
+#  'text': 'Je lui prescris du lorazepam.',
+#  'entities': [{'entity_id': 0,
+#    'label': ['substance'],
+#    'attributes': [],
+#    'fragments': [{'begin': 19,
+#      'end': 28,
+#      'label': 'substance',
+#      'text': 'lorazepam'}],
+#    'confidence': 0.9998705969553088}]}
 export_to_brat(ner.predict(load_from_brat("path/to/brat/test")), filename_prefix="path/to/exported_brat")
 ```
 
@@ -84,6 +98,7 @@ model = train_qualified_ner(
     fasttext_file="",
     gpus=0,
     xp_name="my-xp",
+    return_model=True,
 )
 model.save_pretrained("model.pt")
 ```
