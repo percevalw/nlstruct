@@ -110,5 +110,5 @@ of the recipes located in the [recipes](nlstruct/recipes/) folder.
 This project is still under development and subject to changes.
 
 ```bash
-pip install git+https://github.com/percevalw/nlstruct.git
+pip install nlstruct==0.1.0
 ```
