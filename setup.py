@@ -30,7 +30,7 @@ if __name__ == "__main__":
             "unidecode>=1.1.2",
             "einops>=0.6.0",
             "transformers>=4.3.0",
-            "tqdm~=4.56.0",
+            "tqdm>=4.56.0",
             "scikit-learn",
             "pandas",
             "pytorch_lightning>=1.1.7,<=1.4.9",
