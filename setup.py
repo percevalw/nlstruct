@@ -28,7 +28,7 @@ if __name__ == "__main__":
             "torch>=1.0.0",
             "numpy",
             "unidecode>=1.1.2",
-            "einops~=0.3.0",
+            "einops>=0.6.0",
             "transformers>=4.3.0",
             "tqdm~=4.56.0",
             "scikit-learn",
