@@ -22,7 +22,7 @@ if __name__ == "__main__":
             "License :: OSI Approved :: MIT License",
             "Operating System :: OS Independent",
         ],
-        python_requires=">=3.6",
+        python_requires=">=3.8",
         install_requires=[
             "fire",
             "torch>=1.0.0",
