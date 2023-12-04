@@ -27,13 +27,14 @@ class PrecisionRecallF1Metric(Metric):
           dist_sync_fn=None,
           prefix="",
     ):
+        # `compute_on_step` was removed from torchmetrics v0.9
+        # keep the argument in signature for compatibility
         super().__init__(
-            compute_on_step=compute_on_step,
             dist_sync_on_step=dist_sync_on_step,
             process_group=process_group,
             dist_sync_fn=dist_sync_fn,
         )
-
+        self._compute_on_step = compute_on_step
         self.prefix = prefix
         self.add_state("true_positive", default=torch.tensor(0), dist_reduce_fx="sum")
         self.add_state("pred_count", default=torch.tensor(0), dist_reduce_fx="sum")
@@ -103,13 +104,14 @@ class DocumentEntityMetric(Metric):
           explode_fragments=False,
           prefix="",
     ):
+        # `compute_on_step` was removed from torchmetrics v0.9
+        # keep the argument in signature for compatibility
         super().__init__(
-            compute_on_step=compute_on_step,
             dist_sync_on_step=dist_sync_on_step,
             process_group=process_group,
             dist_sync_fn=dist_sync_fn,
         )
-
+        self._compute_on_step = compute_on_step
         self.joint_matching = joint_matching
         self.filter_entities = filter_entities
         self.prefix = prefix
