@@ -1,4 +1,5 @@
 import gc
+import inspect
 import json
 import os
 import string
@@ -13,7 +14,6 @@ from rich_logger import RichTableLogger
 
 from nlstruct import BRATDataset, MetricsCollection, get_instance, get_config, InformationExtractor
 from nlstruct.checkpoint import ModelCheckpoint, AlreadyRunningException
-
 
 def isnotebook():
     try:
@@ -65,7 +65,8 @@ def train_ner(
       use_lr_schedules: bool = True,
       word_pooler_mode: str = "mean",
       predict_kwargs: Dict[str, any] = {},
-      gpus: int = 1,
+      gpus: int = None,
+      accelerator: str = "auto",
       xp_name: string = None,
       check_lock: bool = False,
       return_model: bool = False,
@@ -137,6 +138,8 @@ def train_ner(
         Parameters of the model.predict fn
     gpus: int
         Number of gpus to use (only 0 or 1 supported)
+    accelerator: str
+        Pytorch-lightning accelerator (cpu, gpu, ...)
     xp_name: string
         Name of the experiment (will be used to create the checkpoint files)
     check_lock: bool
@@ -301,9 +304,8 @@ def train_ner(
 
     model.encoder.encoders[0].cache = shared_cache
     os.makedirs("checkpoints", exist_ok=True)
-    
+
     if fit:
-        
         logger = RichTableLogger(key="epoch", fields={
             "epoch": {},
             "step": {},
@@ -319,19 +321,35 @@ def train_ner(
         })
         with logger.printer:
             try:
-                trainer = pl.Trainer(
-                    gpus=gpus,
-                    progress_bar_refresh_rate=False,
-                    checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
+                trainer_kwargs = dict(
                     callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}', check_lock=check_lock)],
                     logger=[
                         #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
                         logger,
                     ],
                     val_check_interval=max_steps // 10,
-                    max_steps=max_steps)
-                trainer.fit(model, dataset)
-                trainer.logger[0].finalize(True)
+                    max_steps=max_steps,
+                    enable_progress_bar=False,
+                    enable_checkpointing=False,  # do not make checkpoints since it slows down the training a lot
+                    progress_bar_refresh_rate=True,
+                    checkpoint_callback=False,
+                    accelerator=accelerator,
+                )
+                if gpus is not None:
+                    assert accelerator == "auto" or accelerator == "gpu"
+                    trainer_kwargs["devices"] = gpus
+                    if gpus == 0:
+                        trainer_kwargs["accelerator"] = "cpu"
+                if pl.__version__ <= "2":
+                    del trainer_kwargs["accelerator"]
+
+                pl_trainer_kw = inspect.signature(pl.Trainer).parameters
+                trainer_kwargs = {k: v for k, v in trainer_kwargs.items() if k in pl_trainer_kw}
+                trainer = pl.Trainer(**trainer_kwargs)
+                model.train_data = dataset.train_data
+                model.val_data = dataset.val_data
+                model.test_data = dataset.test_data
+                trainer.fit(model)
 
                 result_output_filename = "checkpoints/{}.json".format(trainer.callbacks[0].hashkey)
                 if not os.path.exists(result_output_filename):
@@ -377,6 +395,8 @@ def train_ner(
                 model = None
                 print("Experiment was already running")
                 print(e)
+            finally:
+                logger.finalize(True)
 
     if return_model:
         return model

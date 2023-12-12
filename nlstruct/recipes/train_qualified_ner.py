@@ -1,4 +1,5 @@
 import gc
+import inspect
 import json
 import os
 import string
@@ -10,19 +11,24 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 from IPython import get_ipython
-from rich_logger import RichTableLogger
-
-from nlstruct import BRATDataset, MetricsCollection, get_instance, get_config, InformationExtractor
-from nlstruct.checkpoint import ModelCheckpoint, AlreadyRunningException
+from nlstruct import (
+    BRATDataset,
+    InformationExtractor,
+    MetricsCollection,
+    get_config,
+    get_instance,
+)
+from nlstruct.checkpoint import AlreadyRunningException, ModelCheckpoint
 from nlstruct.data_utils import mappable
+from rich_logger import RichTableLogger
 
 
 def isnotebook():
     try:
         shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
+        if shell == "ZMQInteractiveShell":
             return True  # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
+        elif shell == "TerminalInteractiveShell":
             return False  # Terminal running IPython
         else:
             return False  # Other type (?)
@@ -36,57 +42,59 @@ if not isnotebook():
 shared_cache = {}
 
 BASE_WORD_REGEX = r'(?:[\w]+(?:[’\'])?)|[!"#$%&\'’\(\)*+,-./:;<=>?@\[\]^_`{|}~]'
-BASE_SENTENCE_REGEX = r"((?:\s*\n)+\s*|(?:(?<=[\w0-9]{2,}\.|[)]\.)\s+))(?=[[:upper:]]|•|\n)"
-
+BASE_SENTENCE_REGEX = (
+    r"((?:\s*\n)+\s*|(?:(?<=[\w0-9]{2,}\.|[)]\.)\s+))(?=[[:upper:]]|•|\n)"
+)
 
 
 @mappable
 def prepare_data(doc):
     doc = deepcopy(doc)
-    for e in doc['entities']:
+    for e in doc["entities"]:
         attribute_labels = []
-        for f in e['fragments']:
-            f['label'] = e['label']
-        attribute_labels.append(e['label'])
-        for a in e['attributes']:
-            attribute_labels.append("{}:{}".format(a['label'], a['value']))
-        e['label'] = attribute_labels
+        for f in e["fragments"]:
+            f["label"] = e["label"]
+        attribute_labels.append(e["label"])
+        for a in e["attributes"]:
+            attribute_labels.append("{}:{}".format(a["label"], a["value"]))
+        e["label"] = attribute_labels
     return doc
 
 
 def train_qualified_ner(
-      dataset: Dict[str, str],
-      seed: int,
-      do_char: bool = True,
-      do_biaffine: bool = True,
-      do_tagging: str = "full",
-      doc_context: bool = True,
-      finetune_bert: bool = False,
-      bert_lower: bool = False,
-      max_tokens: int = 256,
-      n_bert_layers: int = 4,
-      n_lstm_layers: int = 3,
-      biaffine_size: int = 150,
-      bert_proj_size: int = None,
-      biaffine_loss_weight: float = 1.,
-      hidden_size: int = 400,
-      max_steps: int = 4000,
-      val_check_interval: int = None,
-      bert_name: str = "camembert/camembert-large",
-      fasttext_file: str = "",  # set to "" to disable
-      unique_label: int = False,
-      norm_bert: bool = False,
-      dropout_p: float = 0.1,
-      batch_size: int = 32,
-      lr: float = 1e-3,
-      use_lr_schedules: bool = True,
-      word_pooler_mode: str = "mean",
-      predict_kwargs: Dict[str, any] = {},
-      gpus: int = 1,
-      xp_name: string = None,
-      check_lock: bool = False,
-      return_model: bool = False,
-      fit: bool = True,
+    dataset: Dict[str, str],
+    seed: int,
+    do_char: bool = True,
+    do_biaffine: bool = True,
+    do_tagging: str = "full",
+    doc_context: bool = True,
+    finetune_bert: bool = False,
+    bert_lower: bool = False,
+    max_tokens: int = 256,
+    n_bert_layers: int = 4,
+    n_lstm_layers: int = 3,
+    biaffine_size: int = 150,
+    bert_proj_size: int = None,
+    biaffine_loss_weight: float = 1.0,
+    hidden_size: int = 400,
+    max_steps: int = 4000,
+    val_check_interval: int = None,
+    bert_name: str = "camembert/camembert-large",
+    fasttext_file: str = "",  # set to "" to disable
+    unique_label: int = False,
+    norm_bert: bool = False,
+    dropout_p: float = 0.1,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+    use_lr_schedules: bool = True,
+    word_pooler_mode: str = "mean",
+    predict_kwargs: Dict[str, any] = {},
+    gpus: int = None,
+    accelerator: str = "auto",
+    xp_name: string = None,
+    check_lock: bool = False,
+    return_model: bool = False,
+    fit: bool = True,
 ):
     """
     Trains and evaluate a nested NER model on a given dataset.
@@ -154,6 +162,8 @@ def train_qualified_ner(
         Parameters of the model.predict fn
     gpus: int
         Number of gpus to use (only 0 or 1 supported)
+    accelerator: str
+        Pytorch-lightning accelerator (cpu, gpu, ...)
     xp_name: string
         Name of the experiment (will be used to create the checkpoint files)
     check_lock: bool
@@ -185,8 +195,18 @@ def train_qualified_ner(
         word_regex = BASE_WORD_REGEX
         sentence_split_regex = BASE_SENTENCE_REGEX
         metrics = {
-            "exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., word_regex=word_regex),
-            "partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., word_regex=word_regex),
+            "exact": dict(
+                module="dem",
+                binarize_tag_threshold=1.0,
+                binarize_label_threshold=1.0,
+                word_regex=word_regex,
+            ),
+            "partial": dict(
+                module="dem",
+                binarize_tag_threshold=1e-5,
+                binarize_label_threshold=1.0,
+                word_regex=word_regex,
+            ),
         }
     else:
         raise Exception("dataset must be a dict or a str")
@@ -200,18 +220,39 @@ def train_qualified_ner(
                 for doc in split:
                     for e in doc["entities"]:
                         e["label"] = "main"
-                        
-    
+
     for split in (dataset.train_data, dataset.val_data, dataset.test_data):
         if split:
             for doc in split:
                 for e in doc["entities"]:
                     e["label"] = "main"
-                    
-    entity_labels = sorted(set([label for doc in (*dataset.train_data, *dataset.val_data) for e in doc['entities'] for label in (e['label'] if isinstance(e['label'], (tuple, list)) else (e['label'],))]))
-    fragments_labels = sorted(set([f['label'] for doc in (*dataset.train_data, *dataset.val_data) for e in doc['entities'] for f in e['fragments']]))
+
+    entity_labels = sorted(
+        set(
+            [
+                label
+                for doc in (*dataset.train_data, *dataset.val_data)
+                for e in doc["entities"]
+                for label in (
+                    e["label"]
+                    if isinstance(e["label"], (tuple, list))
+                    else (e["label"],)
+                )
+            ]
+        )
+    )
+    fragments_labels = sorted(
+        set(
+            [
+                f["label"]
+                for doc in (*dataset.train_data, *dataset.val_data)
+                for e in doc["entities"]
+                for f in e["fragments"]
+            ]
+        )
+    )
     ner_label_to_qualifiers = {
-        label: [label, *(other for other in entity_labels if ':' in other)]
+        label: [label, *(other for other in entity_labels if ":" in other)]
         for label in fragments_labels
     }
 
@@ -232,25 +273,45 @@ def train_qualified_ner(
             keep_bert_special_tokens=False,
             min_tokens=0,
             doc_context=doc_context,
-            join_small_sentence_rate=0.,
+            join_small_sentence_rate=0.0,
             max_tokens=max_tokens,  # split when sentences contain more than 512 tokens
             large_sentences="equal-split",  # for these large sentences, split them in equal sub sentences < 512 tokens
             empty_entities="raise",  # when an entity cannot be mapped to any word, raise
             vocabularies={
                 **{  # vocabularies to use, call .train() before initializing to fill/complete them automatically from training data
-                    "entity_label": dict(module="vocabulary", values=sorted(entity_labels), with_unk=False, with_pad=False),
-                    "fragment_label": dict(module="vocabulary", values=sorted(fragments_labels), with_unk=False, with_pad=False),
+                    "entity_label": dict(
+                        module="vocabulary",
+                        values=sorted(entity_labels),
+                        with_unk=False,
+                        with_pad=False,
+                    ),
+                    "fragment_label": dict(
+                        module="vocabulary",
+                        values=sorted(fragments_labels),
+                        with_unk=False,
+                        with_pad=False,
+                    ),
                 },
-                **({
-                       "char": dict(module="vocabulary", values=string.ascii_letters + string.digits + string.punctuation, with_unk=True, with_pad=False),
-                   } if do_char else {})
+                **(
+                    {
+                        "char": dict(
+                            module="vocabulary",
+                            values=string.ascii_letters
+                            + string.digits
+                            + string.punctuation,
+                            with_unk=True,
+                            with_pad=False,
+                        ),
+                    }
+                    if do_char
+                    else {}
+                ),
             },
             fragment_label_is_entity_label=False,
             multi_label=True,
             filter_entities=None,  # "entity_type_score_density", "entity_type_score_lesion"),
         ),
         dynamic_preprocessing=False,
-
         # Text encoders
         encoder=dict(
             module="concat",
@@ -260,9 +321,11 @@ def train_qualified_ner(
                     module="bert",
                     path=bert_name,
                     n_layers=n_bert_layers,
-                    freeze_n_layers=0 if finetune_bert is not False else -1,  # freeze 0 layer (including the first embedding layer)
-                    bert_dropout_p=None if finetune_bert else 0.,
-                    token_dropout_p=0.,
+                    freeze_n_layers=0
+                    if finetune_bert is not False
+                    else -1,  # freeze 0 layer (including the first embedding layer)
+                    bert_dropout_p=None if finetune_bert else 0.0,
+                    token_dropout_p=0.0,
                     proj_size=bert_proj_size,
                     output_lm_embeds=False,
                     combine_mode="scaled_softmax" if not norm_bert else "softmax",
@@ -270,16 +333,28 @@ def train_qualified_ner(
                     do_cache=not finetune_bert,
                     word_pooler=dict(module="pooler", mode=word_pooler_mode),
                 ),
-                *([dict(
-                    module="char_cnn",
-                    in_channels=8,
-                    out_channels=50,
-                    kernel_sizes=(3, 4, 5),
-                )] if do_char else []),
-                *([dict(
-                    module="word_embeddings",
-                    filename=fasttext_file,
-                )] if fasttext_file else [])
+                *(
+                    [
+                        dict(
+                            module="char_cnn",
+                            in_channels=8,
+                            out_channels=50,
+                            kernel_sizes=(3, 4, 5),
+                        )
+                    ]
+                    if do_char
+                    else []
+                ),
+                *(
+                    [
+                        dict(
+                            module="word_embeddings",
+                            filename=fasttext_file,
+                        )
+                    ]
+                    if fasttext_file
+                    else []
+                ),
             ],
         ),
         decoder=dict(
@@ -287,7 +362,7 @@ def train_qualified_ner(
             contextualizer=dict(
                 module="lstm",
                 num_layers=n_lstm_layers,
-                gate=dict(module="sigmoid_gate", init_value=0., proj=True),
+                gate=dict(module="sigmoid_gate", init_value=0.0, proj=True),
                 bidirectional=True,
                 hidden_size=hidden_size,
                 dropout_p=0.4,
@@ -298,14 +373,13 @@ def train_qualified_ner(
                 do_biaffine=do_biaffine,
                 do_tagging=do_tagging,
                 do_length=False,
-
                 threshold=0.5,
                 max_fragments_count=200,
                 max_length=40,
                 hidden_size=biaffine_size,
                 allow_overlap=True,
                 dropout_p=dropout_p,
-                tag_loss_weight=1.,
+                tag_loss_weight=1.0,
                 biaffine_loss_weight=biaffine_loss_weight,
                 eps=1e-14,
             ),
@@ -316,22 +390,17 @@ def train_qualified_ner(
             ner_label_to_qualifiers=ner_label_to_qualifiers,
             intermediate_loss_slice=slice(-1, None),
         ),
-
         _predict_kwargs=predict_kwargs,
         batch_size=batch_size,
-
         # Use learning rate schedules (linearly decay with warmup)
         use_lr_schedules=use_lr_schedules,
         warmup_rate=0.1,
-
-        gradient_clip_val=10.,
+        gradient_clip_val=10.0,
         _size_factor=5,
-
         # Learning rates
         main_lr=lr,
         fast_lr=lr,
         bert_lr=5e-5,
-
         # Optimizer, can be class or str
         optimizer_cls="transformers.AdamW",
         metrics=metrics,
@@ -339,83 +408,139 @@ def train_qualified_ner(
 
     model.encoder.encoders[0].cache = shared_cache
     os.makedirs("checkpoints", exist_ok=True)
-    
+
     if fit:
-        logger = RichTableLogger(key="epoch", fields={
-            "epoch": {},
-            "step": {},
+        logger = RichTableLogger(
+            key="epoch",
+            fields={
+                "epoch": {},
+                "step": {},
+                "(.*)_?loss": {"goal": "lower_is_better", "format": "{:.4f}"},
+                "(.*)_precision": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_p"},
+                "(.*)_recall": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_r"},
+                "(.*)_tp": False,
+                "(.*)_f1": {
+                    "goal": "higher_is_better",
+                    "format": "{:.4f}",
+                    "name": r"\1_f1",
+                },
+                ".*_lr|max_grad": {"format": "{:.2e}"},
+                "duration": {"format": "{:.0f}", "name": "dur(s)"},
+            },
+        )
+        with logger.printer:
+            try:
+                trainer_kwargs = dict(
+                    callbacks=[
+                        ModelCheckpoint(
+                            path="checkpoints/{hashkey}-{global_step:05d}"
+                            if not xp_name
+                            else "checkpoints/"
+                            + xp_name
+                            + "-{hashkey}-{global_step:05d}",
+                            check_lock=check_lock,
+                        )
+                    ],
+                    logger=[
+                        #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
+                        logger,
+                    ],
+                    val_check_interval=max_steps // 10,
+                    max_steps=max_steps,
+                    enable_progress_bar=False,
+                    enable_checkpointing=False,  # do not make checkpoints since it slows down the training a lot
+                    progress_bar_refresh_rate=True,
+                    checkpoint_callback=False,
+                    accelerator=accelerator,
+                )
+                if gpus is not None:
+                    assert accelerator == "auto" or accelerator == "gpu"
+                    trainer_kwargs["devices"] = gpus
+                    if gpus == 0:
+                        trainer_kwargs["accelerator"] = "cpu"
 
-            "(.*)_?loss": {"goal": "lower_is_better", "format": "{:.4f}"},
-            "(.*)_precision": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_p"},
-            "(.*)_recall": False,  # {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_r"},
-            "(.*)_tp": False,
-            "(.*)_f1": {"goal": "higher_is_better", "format": "{:.4f}", "name": r"\1_f1"},
+                pl_trainer_kw = inspect.signature(pl.Trainer).parameters
+                trainer_kwargs = {
+                    k: v for k, v in trainer_kwargs.items() if k in pl_trainer_kw
+                }
+                trainer = pl.Trainer(**trainer_kwargs)
+                model.train_data = dataset.train_data
+                model.val_data = dataset.val_data
+                model.test_data = dataset.test_data
+                trainer.fit(model)
 
-            ".*_lr|max_grad": {"format": "{:.2e}"},
-            "duration": {"format": "{:.0f}", "name": "dur(s)"},
-        })
+                result_output_filename = "checkpoints/{}.json".format(
+                    trainer.callbacks[0].hashkey
+                )
+                if not os.path.exists(result_output_filename):
+                    if gpus:
+                        model.cuda()
+                    if dataset.test_data:
+                        print("TEST RESULTS:")
+                    else:
+                        print("VALIDATION RESULTS (NO TEST SET):")
+                    eval_data = (
+                        dataset.test_data if dataset.test_data else dataset.val_data
+                    )
 
-        try:
-            trainer = pl.Trainer(
-                gpus=gpus,
-                progress_bar_refresh_rate=1.0,
-                checkpoint_callback=False,  # do not make checkpoints since it slows down the training a lot
-                callbacks=[ModelCheckpoint(path='checkpoints/{hashkey}-{global_step:05d}' if not xp_name else 'checkpoints/' + xp_name + '-{hashkey}-{global_step:05d}', check_lock=check_lock)],
-                logger=[
-                    #        pl.loggers.TestTubeLogger("path/to/logs", name="my_experiment"),
-                    logger,
-                ],
-                val_check_interval=max_steps // 10,
-                max_steps=max_steps)
-            trainer.fit(model, dataset)
-            logger.finalize(True)
-
-            result_output_filename = "checkpoints/{}.json".format(trainer.callbacks[0].hashkey)
-            if not os.path.exists(result_output_filename):
-                if gpus:
-                    model.cuda()
-                if dataset.test_data:
-                    print("TEST RESULTS:")
-                else:
-                    print("VALIDATION RESULTS (NO TEST SET):")
-                eval_data = dataset.test_data if dataset.test_data else dataset.val_data
-
-                final_metrics = MetricsCollection({
-                    **{metric_name: get_instance(metric_config) for metric_name, metric_config in metrics.items()},
-                    **{
-                        metric_name: get_instance(metric_config)
-                        for label in model.preprocessor.vocabularies['entity_label'].values
-                        for metric_name, metric_config in
+                    final_metrics = MetricsCollection(
                         {
-                            f"{label}_exact": dict(module="dem", binarize_tag_threshold=1., binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
-                            f"{label}_partial": dict(module="dem", binarize_tag_threshold=1e-5, binarize_label_threshold=1., filter_entities=[label], word_regex=word_regex),
-                        }.items()
-                    }
-                })
+                            **{
+                                metric_name: get_instance(metric_config)
+                                for metric_name, metric_config in metrics.items()
+                            },
+                            **{
+                                metric_name: get_instance(metric_config)
+                                for label in model.preprocessor.vocabularies[
+                                    "entity_label"
+                                ].values
+                                for metric_name, metric_config in {
+                                    f"{label}_exact": dict(
+                                        module="dem",
+                                        binarize_tag_threshold=1.0,
+                                        binarize_label_threshold=1.0,
+                                        filter_entities=[label],
+                                        word_regex=word_regex,
+                                    ),
+                                    f"{label}_partial": dict(
+                                        module="dem",
+                                        binarize_tag_threshold=1e-5,
+                                        binarize_label_threshold=1.0,
+                                        filter_entities=[label],
+                                        word_regex=word_regex,
+                                    ),
+                                }.items()
+                            },
+                        }
+                    )
 
-                results = final_metrics(list(model.predict(eval_data)), eval_data)
-                display(pd.DataFrame(results).T)
-
-                def json_default(o):
-                    if isinstance(o, slice):
-                        return str(o)
-                    raise
-
-                with open(result_output_filename, 'w') as json_file:
-                    json.dump({
-                        "config": {**get_config(model), "max_steps": max_steps},
-                        "results": results,
-                    }, json_file, default=json_default)
-            else:
-                with open(result_output_filename, 'r') as json_file:
-                    results = json.load(json_file)["results"]
+                    results = final_metrics(list(model.predict(eval_data)), eval_data)
                     display(pd.DataFrame(results).T)
-        except AlreadyRunningException as e:
-            model = None
-            print("Experiment was already running")
-            print(e)
-        finally:
-            logger.finalize(True)
+
+                    def json_default(o):
+                        if isinstance(o, slice):
+                            return str(o)
+                        raise
+
+                    with open(result_output_filename, "w") as json_file:
+                        json.dump(
+                            {
+                                "config": {**get_config(model), "max_steps": max_steps},
+                                "results": results,
+                            },
+                            json_file,
+                            default=json_default,
+                        )
+                else:
+                    with open(result_output_filename, "r") as json_file:
+                        results = json.load(json_file)["results"]
+                        display(pd.DataFrame(results).T)
+            except AlreadyRunningException as e:
+                model = None
+                print("Experiment was already running")
+                print(e)
+            finally:
+                logger.finalize(True)
 
     if return_model:
         return model

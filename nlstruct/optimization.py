@@ -41,6 +41,10 @@ class ScheduledOptimizer(torch.optim.Optimizer):
     def state(self, value):
         self.optim.state = value
 
+    @property
+    def defaults(self):
+        return self.optim.defaults
+
     def state_dict(self):
         state = {
             "optim": self.optim.state_dict(),

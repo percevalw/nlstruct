@@ -104,7 +104,7 @@ class ModelCheckpoint(pl.callbacks.Callback):
         if "all_logged_metrics" in state:
             self._all_logged_metrics = state["all_logged_metrics"]
             for log_dict in state["all_logged_metrics"]:
-                trainer.logger.log_metrics(log_dict)
+                trainer.logger.log_metrics(log_dict, step=log_dict["step"])
 
     def on_train_epoch_end(self, trainer: 'pl.Trainer', pl_module: 'pl.LightningModule', unused: 'Optional' = None):
         if trainer.global_step == 0:

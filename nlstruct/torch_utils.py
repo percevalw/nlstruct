@@ -2,8 +2,8 @@ import functools
 import random
 import re
 import math
-from collections import defaultdict, Sequence
-from collections import namedtuple
+from collections import defaultdict, namedtuple
+from collections.abc import Sequence
 from contextlib import contextmanager
 from itertools import zip_longest
 from string import ascii_letters
