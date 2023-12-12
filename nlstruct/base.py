@@ -255,6 +255,9 @@ class InformationExtractor(PytorchLightningBase):
             self.init_modules()
         self._time = time.time()
         self._predict_kwargs = _predict_kwargs
+        self.train_outputs = []
+        self.val_outputs = []
+
 
     def init_modules(self):
         # Init modules that depend on the vocabulary
@@ -365,17 +368,20 @@ class InformationExtractor(PytorchLightningBase):
         self.decoder.on_training_step(self.global_step, self.trainer.max_steps)
         max_grad = float(max(p.grad.abs().max() for p in self.parameters() if p.grad is not None))
 
-        if hasattr(self.trainer, 'accelerator_backend'):
+        if hasattr(self, 'clip_gradients'):
+            self.clip_gradients(self.optimizers(), self.trainer.gradient_clip_val)
+        elif hasattr(self.trainer, 'accelerator_backend'):
             self.trainer.accelerator_backend.clip_gradients(self.optimizers(), self.trainer.gradient_clip_val)
         else:
             self.trainer.accelerator.clip_gradients(self.optimizers(), self.trainer.gradient_clip_val, gradient_clip_algorithm=self.trainer.gradient_clip_algorithm)
         self.optimizers().step()
-        return {**losses, "max_grad": max_grad, "count": len(inputs)}
+        self.train_outputs.append({**losses, "max_grad": max_grad, "count": len(inputs)})
 
     def on_train_epoch_start(self):
         self._time = time.time()
 
-    def training_epoch_end(self, outputs):
+    def training_epoch_end(self, outputs=None):
+        outputs = self.train_outputs
         total = sum(output["count"] for output in outputs)
         max_grad = max(output["max_grad"] for output in outputs)
         for key in outputs[0].keys():
@@ -385,11 +391,15 @@ class InformationExtractor(PytorchLightningBase):
         self.log("fast_lr", self.optimizers().param_groups[1]["lr"])
         self.log("bert_lr", self.optimizers().param_groups[2]["lr"])
         self.log("max_grad", max_grad)
+        self.train_outputs = []
 
-    def on_epoch_end(self):
-        self.log("duration", time.time() - self._time)
+    if hasattr(pl.LightningModule, 'on_train_epoch_end'):
+        on_train_epoch_end = training_epoch_end
+        del training_epoch_end
 
     def validation_step(self, inputs, batch_idx):
+        if not isinstance(inputs, list):
+            inputs = [inputs]
         if self.batch_size == "doc":
             inputs = inputs[0]
         for mini_batch in self.split_into_mini_batches_to_fit_memory(inputs):
@@ -397,28 +407,38 @@ class InformationExtractor(PytorchLightningBase):
             predictions = outputs['predictions']
             for metric in self.metrics.values():
                 metric(predictions, [s["original_sample"] for s in mini_batch])
-        return {"count": len(inputs)}
+        self.val_outputs.append({"count": len(inputs)})
 
     def on_validation_epoch_start(self):
         for metric in self.metrics.values():
             metric.reset()
+        self.val_outputs = []
 
-    def validation_epoch_end(self, outputs):
+    def validation_epoch_end(self, outputs=None):
+        outputs = self.val_outputs
         self.log_dict({
             ("val_{}_{}".format(name, field) if field else "val_{}".format(name, )): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
+        self.log("duration", time.time() - self._time)
+        self.val_outputs = []
+
+    if hasattr(pl.LightningModule, 'on_validation_epoch_end'):
+        on_validation_epoch_end = validation_epoch_end
+        del validation_epoch_end
 
     test_step = validation_step
     on_test_epoch_start = on_validation_epoch_start
 
-    def test_epoch_end(self, outputs):
+    def test_epoch_end(self, outputs=None):
+        outputs = self.val_outputs
         self.log_dict({
             ("test_{}_{}".format(name, field) if field else "test_{}".format(name, )): value
             for name, metric in self.metrics.items()
             for field, value in metric.compute().items()
         })
+        self.val_outputs = []
 
     def configure_optimizers(self):
         bert_params = list(chain.from_iterable([m.parameters() for m in self.modules() if isinstance(m, transformers.PreTrainedModel)]))
@@ -483,12 +503,16 @@ class InformationExtractor(PytorchLightningBase):
         pl_module = self
 
         if "current_epoch" in state:
-            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'current_epoch'):
+            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'epoch_progress'):
+                trainer.fit_loop.epoch_progress.current.completed = state["current_epoch"]
+            elif hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'current_epoch'):
                 trainer.fit_loop.current_epoch = state["current_epoch"]
             else:
                 trainer.current_epoch = state["current_epoch"]
         if "global_step" in state:
-            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'global_step'):
+            if hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'epoch_progress'):
+                trainer.fit_loop.epoch_progress.current.global_step = state["global_step"]
+            elif hasattr(trainer, 'fit_loop') and hasattr(trainer.fit_loop, 'global_step'):
                 trainer.fit_loop.global_step = state["global_step"]
             else:
                 trainer.global_step = state["global_step"]
