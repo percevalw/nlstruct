@@ -12,7 +12,7 @@ import pytorch_lightning as pl
 import torch
 from sklearn.datasets._base import _sha256
 from tqdm import tqdm
-from unidecode import unidecode
+from anyascii import anyascii
 import warnings
 
 from ..data_utils import mix, loop
@@ -101,7 +101,7 @@ class Terminology:
                     if synonym_preprocess_fn is not None:
                         synonym = synonym_preprocess_fn(synonym)
                     if do_unidecode:
-                        synonym = unidecode(synonym)
+                        synonym = anyascii(synonym)
                     if subs:
                         for pattern, replacement in subs:
                             synonym = re.sub(pattern, replacement, synonym)
