@@ -4,7 +4,7 @@ from copy import copy
 
 import numpy as np
 import regex
-from unidecode import unidecode
+from anyascii import anyascii
 
 import functools
 import textwrap
@@ -369,10 +369,10 @@ def regex_multisub_with_spans(patterns, replacements, text, deltas=None, return_
 
 def run_unidecode(text, return_deltas=False):
     if not return_deltas:
-        return unidecode(text), None
+        return anyascii(text), None
     begins, ends, deltas = [], [], []
     new_text = ""
-    for i, (old_char, new_char) in enumerate((char, unidecode(char)) for char in text):
+    for i, (old_char, new_char) in enumerate((char, anyascii(char)) for char in text):
         if len(old_char) != len(new_char):
             begins.append(i)
             ends.append(i + 1)
