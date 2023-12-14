@@ -125,5 +125,5 @@ of the recipes located in the [recipes](nlstruct/recipes/) folder.
 This project is still under development and subject to changes.
 
 ```bash
-pip install nlstruct==0.1.0
+pip install nlstruct==0.2.0
 ```
