@@ -21,6 +21,8 @@ If you find this library useful in your research, please consider citing:
 }
 ```
 
+This work was performed at [LIMICS](http://www.limics.fr/), in collaboration with [AP-HP's Clinical Data Warehouse](https://eds.aphp.fr/) and funded by the [Institute of Computing and Data Science](https://iscd.sorbonne-universite.fr/).
+
 ## Features
 
 - processes large documents seamlessly: it automatically handles tokenization and sentence splitting.
